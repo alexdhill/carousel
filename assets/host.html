@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>carousel</title>
+    <style>__HOST_CSS__</style>
+</head>
+<body>
+    <aside id="object-panel" class="panel panel--objects">
+        <header class="objects__header">
+            <h2 class="objects__title">Objects</h2>
+        </header>
+        <div class="objects__scroll" id="objects-tree" role="tree"></div>
+        <div class="objects__toolbar">
+            <button type="button" class="objects__add" data-element-type="text"
+                    title="Add Text">
+                <span class="objects__add-glyph" aria-hidden="true">T</span>
+                <span>Text</span>
+            </button>
+            <button type="button" class="objects__add" data-element-type="shape"
+                    title="Add Shape">
+                <span class="objects__add-glyph" aria-hidden="true">▭</span>
+                <span>Shape</span>
+            </button>
+            <button type="button" class="objects__add" data-element-type="group"
+                    title="Add Group">
+                <span class="objects__add-glyph" aria-hidden="true">⌷</span>
+                <span>Group</span>
+            </button>
+        </div>
+    </aside>
+    <div id="viewport-container" class="panel panel--viewport">
+        <div id="viewport"></div>
+        <div id="selection-overlay"></div>
+    </div>
+    <aside id="inspector-panel" class="panel panel--inspector">
+        <header class="inspector__header">
+            <h2 class="inspector__title">Inspector</h2>
+            <p class="inspector__subtitle" id="inspector-target">No selection</p>
+        </header>
+        <div class="inspector__scroll" id="inspector-scroll"></div>
+        <form class="inspector__custom" id="inspector-custom" autocomplete="off">
+            <label class="inspector__custom-label" for="inspector-custom-key">Custom CSS</label>
+            <div class="inspector__custom-row">
+                <input id="inspector-custom-key" class="inspector__input inspector__input--key"
+                       placeholder="property" spellcheck="false">
+                <input id="inspector-custom-value" class="inspector__input inspector__input--value"
+                       placeholder="value" spellcheck="false">
+                <button type="submit" class="inspector__apply">Apply</button>
+            </div>
+        </form>
+    </aside>
+    <nav id="thumbnail-row" class="panel panel--thumbs" aria-label="Slides"></nav>
+    <script>__HOST_JS__</script>
+</body>
+</html>
