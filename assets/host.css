@@ -153,6 +153,25 @@ body {
     outline: none;
 }
 
+/* floatingEdit() overlay input — positioned over a label that may sit
+   inside a <button> (thumbnail) or a flex row (object panel). */
+.floating-edit {
+    position: fixed;
+    z-index: 1000;
+    box-sizing: border-box;
+    background: #1a1a1a;
+    border: 1px solid #0066ff;
+    border-radius: 2px;
+    color: #e0e0e0;
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 11px;
+    padding: 1px 4px;
+}
+
+.floating-edit:focus {
+    outline: none;
+}
+
 .objects__children {
     margin-left: 18px;
 }
@@ -530,6 +549,33 @@ body {
     padding: 0 14px;
 }
 
+/* The trailing "+" tile. Sized to match a thumbnail's preview footprint
+   (160x90 + the label row) so it sits flush at the end of the row. */
+.thumb--add {
+    justify-content: flex-start;
+}
+
+.thumb--add .thumb__add-glyph {
+    width: 160px;
+    height: 90px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 32px;
+    font-weight: 300;
+    line-height: 1;
+    color: #888;
+    background: #2a2a2a;
+    border: 2px dashed #444;
+    border-radius: 4px;
+}
+
+.thumb--add:hover .thumb__add-glyph {
+    color: #0066ff;
+    border-color: #0066ff;
+    background: #2f2f2f;
+}
+
 #viewport {
     position: relative;
     transform-origin: center center;
@@ -566,4 +612,167 @@ body {
 
 .slide-host {
     display: block;
+}
+
+/* ---------- Stage 11: layout editor ---------- */
+
+/* Mode toggle lives in the objects header; lay the header out as a row so
+   the title and the toggle sit on opposite ends. */
+.objects__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.mode-toggle {
+    display: inline-flex;
+    border: 1px solid #3a3a3a;
+    border-radius: 4px;
+    overflow: hidden;
+    background: #1e1e1e;
+    cursor: pointer;
+    padding: 0;
+    font: inherit;
+}
+
+.mode-toggle__label {
+    padding: 3px 8px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: #9a9a9a;
+}
+
+/* Highlight the active mode's segment. */
+body[data-mode="slide"] .mode-toggle__label--slide,
+body[data-mode="layout"] .mode-toggle__label--layout {
+    background: #0066ff;
+    color: #fff;
+}
+
+/* Present (Play) button — sits beside the mode toggle in the object header. */
+.present-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-left: 8px;
+    border: 1px solid #3a3a3a;
+    border-radius: 4px;
+    background: #1e1e1e;
+    color: #cfcfcf;
+    cursor: pointer;
+    padding: 3px 9px;
+    font: inherit;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.present-btn:hover {
+    background: #0066ff;
+    color: #fff;
+    border-color: #0066ff;
+}
+
+.present-btn__glyph {
+    font-size: 9px;
+}
+
+/* Globals editor: only meaningful in layout mode. */
+.globals {
+    display: none;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px 12px 12px;
+    border-top: 1px solid #3a3a3a;
+    background: #242424;
+}
+
+body[data-mode="layout"] .globals {
+    display: flex;
+}
+
+.globals__label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: #b0b0b0;
+}
+
+.globals__textarea {
+    width: 100%;
+    min-height: 120px;
+    resize: vertical;
+    background: #1b1b1b;
+    color: #e0e0e0;
+    border: 1px solid #3a3a3a;
+    border-radius: 4px;
+    padding: 8px;
+    font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.4;
+    spellcheck: false;
+}
+
+.globals__textarea:focus {
+    outline: none;
+    border-color: #0066ff;
+}
+
+/* ---------- Stage: animations (minimal toggle UI) ---------- */
+
+.animations {
+    display: none;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px 12px;
+    border-top: 1px solid #3a3a3a;
+}
+
+/* Shown only when exactly one element is selected (JS toggles the body class). */
+body.has-single-selection .animations {
+    display: flex;
+}
+
+.animations__title {
+    margin: 0 0 4px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: #b0b0b0;
+}
+
+.animations__row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #d0d0d0;
+    cursor: pointer;
+}
+
+#notice-banner {
+    position: fixed;
+    bottom: 150px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #3a2a00;
+    color: #ffd479;
+    border: 1px solid #6a5200;
+    border-radius: 4px;
+    padding: 6px 12px;
+    font-size: 12px;
+    opacity: 0;
+    transition: opacity 0.2s;
+    pointer-events: none;
+    z-index: 50;
+}
+
+#notice-banner.show {
+    opacity: 1;
 }

@@ -8,13 +8,13 @@
 // on the inverse for debuggability — it documents what the inverse will
 // restore to without having to consult the deck.
 
-use crate::commands::{Command, CommandError, CommandOutput};
-use crate::deck::{ElementId, SlideId};
+use crate::commands::{Command, CommandError, CommandOutput, resolve_canvas_mut};
+use crate::deck::{Canvas, CanvasTarget, ElementId, SlideId};
 use crate::ipc::{Patch, Point};
 
 #[derive(Debug, Clone)]
 pub struct MoveElement {
-    pub slide_id: SlideId,
+    pub target: CanvasTarget,
     pub element_id: ElementId,
     pub new_position: Point,
     pub previous_position: Option<Point>,
@@ -24,18 +24,15 @@ impl Command for MoveElement {
     // apply
     // Inputs: &self, &mut Deck.
     // Output: CommandOutput with two SetStyle patches (left, top), an
-    // inverse MoveElement, and the slide_id as dirty.
-    // Errors: SlideNotFound, ElementNotFound.
-    // Dataflow: locate slide -> locate element -> snapshot prior (x,y)
+    // inverse MoveElement, and the target canvas as dirty.
+    // Errors: SlideNotFound / LayoutNotFound, ElementNotFound.
+    // Dataflow: resolve canvas -> locate element -> snapshot prior (x,y)
     // -> write new geometry -> invalidate index -> build patches/inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
-        assert!(!self.slide_id.is_empty(), "MoveElement: slide_id is empty");
+        assert!(!self.target.id().is_empty(), "MoveElement: target id is empty");
         assert!(!self.element_id.is_empty(), "MoveElement: element_id is empty");
-        let slide = deck
-            .slides
-            .get_mut(&self.slide_id)
-            .ok_or_else(|| CommandError::SlideNotFound(self.slide_id.clone()))?;
-        let element = slide
+        let canvas = resolve_canvas_mut(deck, &self.target)?;
+        let element = canvas
             .find_element_mut(&self.element_id)
             .ok_or_else(|| CommandError::ElementNotFound(self.element_id.clone()))?;
 
@@ -45,11 +42,11 @@ impl Command for MoveElement {
         };
         element.geometry.x = self.new_position.x;
         element.geometry.y = self.new_position.y;
-        slide.dirty = true;
-        slide.invalidate_index();
+        canvas.mark_dirty();
+        canvas.invalidate_index();
 
         let inverse: MoveElement = MoveElement {
-            slide_id: self.slide_id.clone(),
+            target: self.target.clone(),
             element_id: self.element_id.clone(),
             new_position: prev_position,
             previous_position: Some(self.new_position),
@@ -71,8 +68,9 @@ impl Command for MoveElement {
         Ok(CommandOutput {
             patches,
             inverse: Box::new(inverse),
-            dirty_slides: vec![self.slide_id.clone()],
+            dirty_targets: vec![self.target.clone()],
             manifest_dirty: false,
+            warnings: Vec::new(),
         })
     }
 
@@ -99,7 +97,7 @@ mod tests {
         let (mut deck, sid, eid) = fresh_deck_first_child();
         let before = deck.slides[&sid].find_element(&eid).unwrap().geometry.clone();
         let cmd = MoveElement {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             new_position: Point { x: 500.0, y: 300.0 },
             previous_position: None,
@@ -115,7 +113,7 @@ mod tests {
         assert_eq!(after.rotation, before.rotation);
         assert_eq!(after.z_order, before.z_order);
         assert_eq!(out.patches.len(), 2);
-        assert_eq!(out.dirty_slides, vec![sid]);
+        assert_eq!(out.dirty_targets, vec![CanvasTarget::Slide(sid)]);
         assert!(!out.manifest_dirty);
     }
 
@@ -123,7 +121,7 @@ mod tests {
     fn move_emits_left_and_top_set_style_patches() {
         let (mut deck, sid, eid) = fresh_deck_first_child();
         let cmd = MoveElement {
-            slide_id: sid,
+            target: CanvasTarget::Slide(sid),
             element_id: eid.clone(),
             new_position: Point { x: 12.5, y: -7.0 },
             previous_position: None,
@@ -153,7 +151,7 @@ mod tests {
         let original = deck.slides[&sid].find_element(&eid).unwrap().geometry.clone();
 
         let cmd = MoveElement {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             new_position: Point { x: 999.0, y: -123.0 },
             previous_position: None,
@@ -169,7 +167,7 @@ mod tests {
     fn move_inverse_records_previous_position_for_debug() {
         let (mut deck, sid, eid) = fresh_deck_first_child();
         let cmd = MoveElement {
-            slide_id: sid,
+            target: CanvasTarget::Slide(sid),
             element_id: eid,
             new_position: Point { x: 1.0, y: 2.0 },
             previous_position: None,
@@ -185,7 +183,7 @@ mod tests {
     fn move_apply_then_inverse_twice_returns_to_new_position() {
         let (mut deck, sid, eid) = fresh_deck_first_child();
         let cmd = MoveElement {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             new_position: Point { x: 50.0, y: 60.0 },
             previous_position: None,
@@ -204,7 +202,7 @@ mod tests {
     fn move_errors_on_missing_slide() {
         let mut deck = Deck::sample();
         let cmd = MoveElement {
-            slide_id: "ghost".into(),
+            target: CanvasTarget::Slide("ghost".into()),
             element_id: "x".into(),
             new_position: Point { x: 0.0, y: 0.0 },
             previous_position: None,
@@ -217,7 +215,7 @@ mod tests {
     fn move_errors_on_missing_element() {
         let (mut deck, sid, _) = fresh_deck_first_child();
         let cmd = MoveElement {
-            slide_id: sid,
+            target: CanvasTarget::Slide(sid),
             element_id: "no_such".into(),
             new_position: Point { x: 0.0, y: 0.0 },
             previous_position: None,
@@ -230,7 +228,7 @@ mod tests {
     fn move_marks_slide_dirty_flag() {
         let (mut deck, sid, eid) = fresh_deck_first_child();
         let cmd = MoveElement {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid,
             new_position: Point { x: 0.0, y: 0.0 },
             previous_position: None,
@@ -242,7 +240,7 @@ mod tests {
     #[test]
     fn move_command_label_is_stable() {
         let cmd = MoveElement {
-            slide_id: "x".into(),
+            target: CanvasTarget::Slide("x".into()),
             element_id: "y".into(),
             new_position: Point { x: 0.0, y: 0.0 },
             previous_position: None,
@@ -252,15 +250,40 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "slide_id is empty")]
-    fn move_with_empty_slide_id_panics_via_assert() {
+    #[should_panic(expected = "target id is empty")]
+    fn move_with_empty_target_id_panics_via_assert() {
         let mut deck = Deck::sample();
         let cmd = MoveElement {
-            slide_id: String::new(),
+            target: CanvasTarget::Slide(String::new()),
             element_id: "x".into(),
             new_position: Point { x: 0.0, y: 0.0 },
             previous_position: None,
         };
         let _ = cmd.apply(&mut deck);
+    }
+
+    #[test]
+    fn move_targets_a_layout_canvas() {
+        // The default theme seeds a "blank" layout with an empty root; add a
+        // child so there is an element to move, then move it via a Layout
+        // target and confirm the layout (not any slide) was mutated.
+        let mut deck = Deck::sample();
+        let layout = deck.theme.layouts.get_mut("blank").unwrap();
+        layout
+            .root
+            .children
+            .push(crate::deck::builders::text_element("el_lt", "hi"));
+        let cmd = MoveElement {
+            target: CanvasTarget::Layout("blank".into()),
+            element_id: "el_lt".into(),
+            new_position: Point { x: 7.0, y: 8.0 },
+            previous_position: None,
+        };
+        let out = cmd.apply(&mut deck).unwrap();
+        assert_eq!(out.dirty_targets, vec![CanvasTarget::Layout("blank".into())]);
+        let moved = deck.theme.layouts["blank"].find_element("el_lt").unwrap();
+        assert_eq!(moved.geometry.x, 7.0);
+        assert_eq!(moved.geometry.y, 8.0);
+        assert!(deck.theme.layouts["blank"].dirty);
     }
 }

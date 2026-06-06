@@ -15,7 +15,7 @@ use crate::bundle::{
     AssetRegistry, BundleError, BundleResult, BundleReader, BundleWriter, ManifestData,
     manifest::{slide_path_for, validate_format_version},
 };
-use crate::deck::{Deck, SlideId, SlideNode, ThemeData};
+use crate::deck::{Deck, LayoutNode, SlideId, SlideNode, ThemeData};
 use crate::html::parse::parse_slide_fragment;
 use crate::html::serialize::serialize_slide;
 use serde::{Deserialize, Serialize};
@@ -24,17 +24,39 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 pub const PATH_MANIFEST: &str = "manifest.json";
 pub const PATH_THEME_CSS: &str = "theme/theme.css";
 pub const PATH_THEME_JSON: &str = "theme/theme.json";
+pub const PATH_GLOBALS_CSS: &str = "theme/globals.css";
 pub const PATH_ASSETS_INDEX: &str = "assets/index.json";
 
+// layout_path_for
+// Inputs: a layout id.
+// Output: the canonical bundle path for that layout's serialized HTML root,
+// `theme/layouts/<id>.html`.
+fn layout_path_for(id: &str) -> String {
+    format!("theme/layouts/{id}.html")
+}
+
+// LayoutMeta
+// On-disk record for one layout in theme.json's `layouts` array: the stable
+// id and display name, listed in canonical display order. The element tree
+// lives in the per-layout HTML file (theme/layouts/<id>.html).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+struct LayoutMeta {
+    id: String,
+    name: String,
+}
+
 // ThemeJson
-// On-disk schema for theme/theme.json. Stage 7 only needs the theme_id
-// (and a placeholder name) so loaded decks rehydrate ThemeData fully. The
-// fuller theme schema per SPEC §6.2 will land alongside theme-editor work.
+// On-disk schema for theme/theme.json. Carries the theme id plus the layout
+// list (Stage 11) in display order; `layouts` defaults to empty so older
+// bundles (which predate the layout editor) still parse and fall back to
+// the Default seed on load.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct ThemeJson {
     theme_id: String,
     #[serde(default)]
     name: String,
+    #[serde(default)]
+    layouts: Vec<LayoutMeta>,
 }
 
 // SerializedDeck
@@ -46,7 +68,12 @@ pub struct SerializedDeck {
     pub manifest_json: String,
     pub theme_json: String,
     pub theme_css: String,
+    // Deck-wide globals CSS blob (theme/globals.css). Empty for older
+    // bundles that predate the layout editor.
+    pub globals_css: String,
     pub slide_files: BTreeMap<String, String>,
+    // Per-layout serialized HTML, keyed by `theme/layouts/<id>.html`.
+    pub layout_files: BTreeMap<String, String>,
     pub asset_files: BTreeMap<String, Vec<u8>>,
     pub assets_index_json: String,
 }
@@ -69,12 +96,39 @@ pub fn serialize_deck(deck: &Deck) -> BundleResult<SerializedDeck> {
         deck.slide_order.len() == deck.slides.len(),
         "serialize_deck: slide_order/slides length mismatch"
     );
-    let manifest_json: String = serde_json::to_string_pretty(&deck.manifest)?;
+    // Layout list in display order; each layout's element tree is written to
+    // its own HTML file below.
+    let mut layout_metas: Vec<LayoutMeta> = Vec::with_capacity(deck.theme.layout_order.len());
+    let mut layout_files: BTreeMap<String, String> = BTreeMap::new();
+    for lid in &deck.theme.layout_order {
+        let layout: &LayoutNode = deck
+            .theme
+            .layouts
+            .get(lid)
+            .ok_or_else(|| BundleError::MalformedManifest(format!("layout {lid} missing")))?;
+        layout_metas.push(LayoutMeta { id: lid.clone(), name: layout.name.clone() });
+        // Serialize the layout root through a transient SlideNode so it
+        // reuses the slide serializer (a layout root is a Group).
+        let transient: SlideNode =
+            SlideNode::new(layout.id.clone(), layout.id.clone(), layout.root.clone());
+        layout_files.insert(layout_path_for(lid), serialize_slide(&transient));
+    }
+    // Sync each slide's animation timeline (the in-memory source of truth on
+    // SlideNode) into a manifest clone before serializing the manifest JSON.
+    let mut manifest = deck.manifest.clone();
+    for entry in &mut manifest.slides {
+        if let Some(slide) = deck.slides.get(&entry.id) {
+            entry.animations = slide.animations.clone();
+        }
+    }
+    let manifest_json: String = serde_json::to_string_pretty(&manifest)?;
     let theme_json: String = serde_json::to_string_pretty(&ThemeJson {
         theme_id: deck.theme.theme_id.clone(),
         name: deck.theme.theme_id.clone(),
+        layouts: layout_metas,
     })?;
     let theme_css: String = deck.theme.theme_css.clone();
+    let globals_css: String = deck.theme.globals_css.clone();
 
     let mut slide_files: BTreeMap<String, String> = BTreeMap::new();
     let mut i: usize = 0;
@@ -103,7 +157,9 @@ pub fn serialize_deck(deck: &Deck) -> BundleResult<SerializedDeck> {
         manifest_json,
         theme_json,
         theme_css,
+        globals_css,
         slide_files,
+        layout_files,
         asset_files,
         assets_index_json,
     })
@@ -121,6 +177,10 @@ pub fn write_serialized(writer: &mut BundleWriter, src: &SerializedDeck) -> Bund
     writer.write_string(PATH_MANIFEST, &src.manifest_json)?;
     writer.write_string(PATH_THEME_JSON, &src.theme_json)?;
     writer.write_string(PATH_THEME_CSS, &src.theme_css)?;
+    writer.write_string(PATH_GLOBALS_CSS, &src.globals_css)?;
+    for (path, html) in &src.layout_files {
+        writer.write_string(path, html)?;
+    }
     for (path, html) in &src.slide_files {
         writer.write_string(path, html)?;
     }
@@ -149,13 +209,35 @@ pub fn read_serialized(reader: &mut BundleReader) -> BundleResult<SerializedDeck
     let theme_json: String = if reader.has_entry(PATH_THEME_JSON)? {
         reader.read_string(PATH_THEME_JSON)?
     } else {
-        serde_json::to_string(&ThemeJson { theme_id: "default".into(), name: "default".into() })?
+        serde_json::to_string(&ThemeJson {
+            theme_id: "default".into(),
+            name: "default".into(),
+            layouts: Vec::new(),
+        })?
     };
     let theme_css: String = if reader.has_entry(PATH_THEME_CSS)? {
         reader.read_string(PATH_THEME_CSS)?
     } else {
         String::new()
     };
+    let globals_css: String = if reader.has_entry(PATH_GLOBALS_CSS)? {
+        reader.read_string(PATH_GLOBALS_CSS)?
+    } else {
+        String::new()
+    };
+
+    // Read each layout file the theme.json layout list references. Absent
+    // entries are skipped; deserialize_deck falls back to the Default seed
+    // when the list is empty (back-compat with pre-layout-editor bundles).
+    let theme_meta: ThemeJson = serde_json::from_str(&theme_json)?;
+    let mut layout_files: BTreeMap<String, String> = BTreeMap::new();
+    for meta in &theme_meta.layouts {
+        let path: String = layout_path_for(&meta.id);
+        if reader.has_entry(&path)? {
+            let html: String = reader.read_string(&path)?;
+            layout_files.insert(path, html);
+        }
+    }
 
     let mut slide_files: BTreeMap<String, String> = BTreeMap::new();
     let mut i: usize = 0;
@@ -193,7 +275,9 @@ pub fn read_serialized(reader: &mut BundleReader) -> BundleResult<SerializedDeck
         manifest_json,
         theme_json,
         theme_css,
+        globals_css,
         slide_files,
+        layout_files,
         asset_files,
         assets_index_json,
     })
@@ -213,9 +297,37 @@ pub fn deserialize_deck(serialized: SerializedDeck) -> BundleResult<Deck> {
     validate_format_version(&manifest.format_version)?;
     let theme_meta: ThemeJson = serde_json::from_str(&serialized.theme_json)?;
 
+    // Rebuild the theme's layouts from theme.json's layout list + the
+    // per-layout HTML files. An empty list (older bundles that predate the
+    // layout editor) falls back to the Default "blank" seed so they still
+    // open. globals_css comes from theme/globals.css (empty when absent).
+    let (layouts, layout_order): (BTreeMap<_, _>, Vec<_>) = if theme_meta.layouts.is_empty() {
+        let seed: ThemeData = ThemeData::default();
+        (seed.layouts, seed.layout_order)
+    } else {
+        let mut layouts: BTreeMap<crate::deck::LayoutId, LayoutNode> = BTreeMap::new();
+        let mut layout_order: Vec<crate::deck::LayoutId> =
+            Vec::with_capacity(theme_meta.layouts.len());
+        for meta in &theme_meta.layouts {
+            let path: String = layout_path_for(&meta.id);
+            let html: &String = serialized.layout_files.get(&path).ok_or_else(|| {
+                BundleError::MissingEntry(format!("layout html missing for {}", meta.id))
+            })?;
+            let parsed: SlideNode = parse_slide_fragment(html)
+                .map_err(|e| BundleError::SlideParse(format!("layout {}: {}", meta.id, e)))?;
+            let node: LayoutNode =
+                LayoutNode::new(meta.id.clone(), meta.name.clone(), parsed.root);
+            layouts.insert(meta.id.clone(), node);
+            layout_order.push(meta.id.clone());
+        }
+        (layouts, layout_order)
+    };
     let theme: ThemeData = ThemeData {
         theme_id: theme_meta.theme_id,
         theme_css: serialized.theme_css,
+        globals_css: serialized.globals_css,
+        layouts,
+        layout_order,
     };
 
     let mut slides: BTreeMap<SlideId, SlideNode> = BTreeMap::new();
@@ -230,8 +342,11 @@ pub fn deserialize_deck(serialized: SerializedDeck) -> BundleResult<Deck> {
                 entry.id
             ))
         })?;
-        let slide: SlideNode = parse_slide_fragment(html)
+        let mut slide: SlideNode = parse_slide_fragment(html)
             .map_err(|e| BundleError::SlideParse(format!("{}: {}", entry.id, e)))?;
+        // The manifest is authoritative for the animation timeline (the HTML
+        // carries only a derived, dropped-on-read targeting tag).
+        slide.animations = entry.animations.clone();
         // Manifest is authoritative for slide id; ensure parsed slide
         // matches so round trips are stable.
         if slide.id != entry.id {
@@ -380,7 +495,7 @@ mod tests {
         let eid = original_deck.slides[&sid].root.children[0].id.clone();
         let mut d = CommandDispatcher::new(original_deck);
         d.dispatch(Box::new(MoveElement {
-            slide_id: sid.clone(),
+            target: crate::deck::CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             new_position: Point { x: 777.0, y: 333.0 },
             previous_position: None,
@@ -453,5 +568,122 @@ mod tests {
         let s_back = read_serialized(&mut r).unwrap();
         assert_eq!(s_back.slide_files.len(), 1);
         assert!(s_back.theme_css.is_empty());
+    }
+
+    // ---------- Stage 11: layout + globals persistence ----------
+
+    #[test]
+    fn round_trip_preserves_layouts_and_globals() {
+        use crate::deck::builders::{group_element, text_element};
+        let mut original = Deck::sample();
+        original.theme.globals_css = "@keyframes spin { to { rotate: 360deg; } }".into();
+        // Add a second layout after the seeded "blank".
+        let title_root = group_element("el_layout_root", vec![text_element("el_t", "Title")]);
+        original
+            .theme
+            .layouts
+            .insert("title".into(), LayoutNode::new("title".into(), "Title".into(), title_root));
+        original.theme.layout_order.push("title".into());
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("layouts.slidedeck");
+        let mut w = BundleWriter::create(&path).unwrap();
+        write_serialized(&mut w, &serialize_deck(&original).unwrap()).unwrap();
+        w.finish().unwrap();
+
+        let mut r = BundleReader::open(&path).unwrap();
+        let back = deserialize_deck(read_serialized(&mut r).unwrap()).unwrap();
+
+        assert_eq!(back.theme.globals_css, original.theme.globals_css);
+        assert_eq!(back.theme.layout_order, vec!["blank".to_string(), "title".to_string()]);
+        assert_eq!(back.theme.layouts.len(), 2);
+        assert_eq!(back.theme.layouts["title"].name, "Title");
+        // Element tree survived the HTML round-trip.
+        let title = &back.theme.layouts["title"];
+        assert_eq!(title.root.children.len(), 1);
+        assert_eq!(title.root.children[0].id, "el_t");
+        assert_eq!(back.theme.layouts["blank"].name, "Blank");
+    }
+
+    #[test]
+    fn round_trip_preserves_slide_animations() {
+        use crate::deck::animation::{
+            AnimationCategory, AnimationEntry, AnimationTiming, AnimationTrigger,
+        };
+        let mut original = Deck::sample();
+        let sid = original.slide_order[0].clone();
+        let el = original.slides[&sid].root.children[0].id.clone();
+        original.slides.get_mut(&sid).unwrap().animations.push(AnimationEntry::new(
+            "anim_1".into(), el.clone(), "appear".into(),
+            AnimationCategory::Entrance, AnimationTrigger::OnClick,
+            AnimationTiming { duration_ms: 700, ..AnimationTiming::default() },
+        ));
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("anim.slidedeck");
+        let mut w = BundleWriter::create(&path).unwrap();
+        write_serialized(&mut w, &serialize_deck(&original).unwrap()).unwrap();
+        w.finish().unwrap();
+
+        let mut r = BundleReader::open(&path).unwrap();
+        let back = deserialize_deck(read_serialized(&mut r).unwrap()).unwrap();
+
+        let t = &back.slides[&sid].animations;
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].id, "anim_1");
+        assert_eq!(t[0].element_id, el);
+        assert_eq!(t[0].category, AnimationCategory::Entrance);
+        assert_eq!(t[0].timing.duration_ms, 700);
+    }
+
+    #[test]
+    fn older_bundle_without_animations_loads_empty_timeline() {
+        // A manifest whose SlideEntry JSON predates the animations field must
+        // still load (serde default → empty timeline). Round-trip a sample
+        // deck but drop "animations" from the manifest before writing.
+        let deck = Deck::sample();
+        let mut s = serialize_deck(&deck).unwrap();
+        // Remove the "animations" key from every slide entry to mimic an
+        // older writer that never emitted the field (serde default → empty).
+        let mut manifest: serde_json::Value = serde_json::from_str(&s.manifest_json).unwrap();
+        for slide in manifest["slides"].as_array_mut().unwrap() {
+            slide.as_object_mut().unwrap().remove("animations");
+        }
+        assert!(manifest["slides"][0].get("animations").is_none());
+        s.manifest_json = serde_json::to_string(&manifest).unwrap();
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("legacy_anim.slidedeck");
+        let mut w = BundleWriter::create(&path).unwrap();
+        write_serialized(&mut w, &s).unwrap();
+        w.finish().unwrap();
+
+        let mut r = BundleReader::open(&path).unwrap();
+        let back = deserialize_deck(read_serialized(&mut r).unwrap()).unwrap();
+        let sid = back.slide_order[0].clone();
+        assert!(back.slides[&sid].animations.is_empty());
+    }
+
+    #[test]
+    fn older_bundle_without_layouts_loads_the_seed() {
+        // A bundle whose theme.json predates the layout editor (no `layouts`
+        // array, no globals.css) must still open with the Default seed.
+        let deck = Deck::sample();
+        let s = serialize_deck(&deck).unwrap();
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("legacy.slidedeck");
+        let mut w = BundleWriter::create(&path).unwrap();
+        w.write_string(PATH_MANIFEST, &s.manifest_json).unwrap();
+        w.write_string(PATH_THEME_JSON, r#"{"theme_id":"legacy","name":"legacy"}"#).unwrap();
+        w.write_string(PATH_THEME_CSS, &s.theme_css).unwrap();
+        for (p, h) in &s.slide_files {
+            w.write_string(p, h).unwrap();
+        }
+        w.finish().unwrap();
+
+        let mut r = BundleReader::open(&path).unwrap();
+        let back = deserialize_deck(read_serialized(&mut r).unwrap()).unwrap();
+        assert_eq!(back.theme.layout_order, vec!["blank".to_string()]);
+        assert!(back.theme.layouts.contains_key("blank"));
+        assert!(back.theme.globals_css.is_empty());
     }
 }

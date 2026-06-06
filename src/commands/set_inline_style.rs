@@ -11,13 +11,13 @@
 // inspector's key:value entry produces. Theme references are not
 // resolved at this layer — the value string is what hits the DOM.
 
-use crate::commands::{Command, CommandError, CommandOutput};
-use crate::deck::{ElementId, SlideId};
+use crate::commands::{Command, CommandError, CommandOutput, resolve_canvas_mut};
+use crate::deck::{Canvas, CanvasTarget, ElementId, SlideId};
 use crate::ipc::Patch;
 
 #[derive(Debug, Clone)]
 pub struct SetInlineStyle {
-    pub slide_id: SlideId,
+    pub target: CanvasTarget,
     pub element_id: ElementId,
     pub property: String,
     pub new_value: String,
@@ -34,18 +34,15 @@ impl Command for SetInlineStyle {
     // Dataflow: locate element -> snapshot prior value -> overwrite the
     // inline_styles entry -> invalidate index -> build patch + inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
-        assert!(!self.slide_id.is_empty(), "SetInlineStyle: slide_id is empty");
+        assert!(!self.target.id().is_empty(), "SetInlineStyle: target id is empty");
         assert!(!self.element_id.is_empty(), "SetInlineStyle: element_id is empty");
         if self.property.trim().is_empty() {
             return Err(CommandError::InvalidOperation(
                 "SetInlineStyle: empty property name".into(),
             ));
         }
-        let slide = deck
-            .slides
-            .get_mut(&self.slide_id)
-            .ok_or_else(|| CommandError::SlideNotFound(self.slide_id.clone()))?;
-        let element = slide
+        let canvas = resolve_canvas_mut(deck, &self.target)?;
+        let element = canvas
             .find_element_mut(&self.element_id)
             .ok_or_else(|| CommandError::ElementNotFound(self.element_id.clone()))?;
 
@@ -53,8 +50,8 @@ impl Command for SetInlineStyle {
         element
             .inline_styles
             .insert(self.property.clone(), self.new_value.clone());
-        slide.dirty = true;
-        slide.invalidate_index();
+        canvas.mark_dirty();
+        canvas.invalidate_index();
 
         let patch: Patch = Patch::SetStyle {
             element_id: self.element_id.clone(),
@@ -63,13 +60,13 @@ impl Command for SetInlineStyle {
         };
         let inverse: Box<dyn Command> = match prior {
             Some(old) => Box::new(SetInlineStyle {
-                slide_id: self.slide_id.clone(),
+                target: self.target.clone(),
                 element_id: self.element_id.clone(),
                 property: self.property.clone(),
                 new_value: old,
             }),
             None => Box::new(RemoveInlineStyle {
-                slide_id: self.slide_id.clone(),
+                target: self.target.clone(),
                 element_id: self.element_id.clone(),
                 property: self.property.clone(),
             }),
@@ -78,8 +75,9 @@ impl Command for SetInlineStyle {
         Ok(CommandOutput {
             patches: vec![patch],
             inverse,
-            dirty_slides: vec![self.slide_id.clone()],
+            dirty_targets: vec![self.target.clone()],
             manifest_dirty: false,
+            warnings: Vec::new(),
         })
     }
 
@@ -90,7 +88,7 @@ impl Command for SetInlineStyle {
 
 #[derive(Debug, Clone)]
 pub struct RemoveInlineStyle {
-    pub slide_id: SlideId,
+    pub target: CanvasTarget,
     pub element_id: ElementId,
     pub property: String,
 }
@@ -107,24 +105,21 @@ impl Command for RemoveInlineStyle {
     // Dataflow: locate element -> remove the entry -> invalidate index
     // -> build patch + inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
-        assert!(!self.slide_id.is_empty(), "RemoveInlineStyle: slide_id is empty");
+        assert!(!self.target.id().is_empty(), "RemoveInlineStyle: target id is empty");
         assert!(!self.element_id.is_empty(), "RemoveInlineStyle: element_id is empty");
         if self.property.trim().is_empty() {
             return Err(CommandError::InvalidOperation(
                 "RemoveInlineStyle: empty property name".into(),
             ));
         }
-        let slide = deck
-            .slides
-            .get_mut(&self.slide_id)
-            .ok_or_else(|| CommandError::SlideNotFound(self.slide_id.clone()))?;
-        let element = slide
+        let canvas = resolve_canvas_mut(deck, &self.target)?;
+        let element = canvas
             .find_element_mut(&self.element_id)
             .ok_or_else(|| CommandError::ElementNotFound(self.element_id.clone()))?;
 
         let prior: Option<String> = element.inline_styles.remove(&self.property);
-        slide.dirty = true;
-        slide.invalidate_index();
+        canvas.mark_dirty();
+        canvas.invalidate_index();
 
         let (patches, inverse): (Vec<Patch>, Box<dyn Command>) = match prior {
             Some(old) => (
@@ -133,7 +128,7 @@ impl Command for RemoveInlineStyle {
                     property: self.property.clone(),
                 }],
                 Box::new(SetInlineStyle {
-                    slide_id: self.slide_id.clone(),
+                    target: self.target.clone(),
                     element_id: self.element_id.clone(),
                     property: self.property.clone(),
                     new_value: old,
@@ -142,7 +137,7 @@ impl Command for RemoveInlineStyle {
             None => (
                 Vec::new(),
                 Box::new(RemoveInlineStyle {
-                    slide_id: self.slide_id.clone(),
+                    target: self.target.clone(),
                     element_id: self.element_id.clone(),
                     property: self.property.clone(),
                 }) as Box<dyn Command>,
@@ -152,8 +147,9 @@ impl Command for RemoveInlineStyle {
         Ok(CommandOutput {
             patches,
             inverse,
-            dirty_slides: vec![self.slide_id.clone()],
+            dirty_targets: vec![self.target.clone()],
             manifest_dirty: false,
+            warnings: Vec::new(),
         })
     }
 
@@ -187,7 +183,7 @@ mod tests {
     fn set_writes_into_inline_styles_and_emits_patch() {
         let (mut deck, sid, eid) = fixture();
         let cmd = SetInlineStyle {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             property: "background-color".into(),
             new_value: "#ff0066".into(),
@@ -209,7 +205,7 @@ mod tests {
     fn set_inverse_when_key_was_absent_is_remove() {
         let (mut deck, sid, eid) = fixture();
         let cmd = SetInlineStyle {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             property: "border".into(),
             new_value: "1px solid #000".into(),
@@ -237,7 +233,7 @@ mod tests {
             .inline_styles
             .insert("border".into(), "1px dotted #aaa".into());
         let cmd = SetInlineStyle {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             property: "border".into(),
             new_value: "2px solid #000".into(),
@@ -259,7 +255,7 @@ mod tests {
             .inline_styles
             .insert("border-radius".into(), "12px".into());
         let cmd = RemoveInlineStyle {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             property: "border-radius".into(),
         };
@@ -278,7 +274,7 @@ mod tests {
     fn remove_absent_key_is_no_op_with_no_patches() {
         let (mut deck, sid, eid) = fixture();
         let cmd = RemoveInlineStyle {
-            slide_id: sid,
+            target: CanvasTarget::Slide(sid),
             element_id: eid,
             property: "background-color".into(),
         };
@@ -297,7 +293,7 @@ mod tests {
             .inline_styles
             .insert("background-color".into(), "#abc".into());
         let cmd = RemoveInlineStyle {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             property: "background-color".into(),
         };
@@ -311,7 +307,7 @@ mod tests {
     fn empty_property_is_rejected() {
         let (mut deck, sid, eid) = fixture();
         let cmd = SetInlineStyle {
-            slide_id: sid,
+            target: CanvasTarget::Slide(sid),
             element_id: eid,
             property: "  ".into(),
             new_value: "anything".into(),
@@ -324,7 +320,7 @@ mod tests {
     fn set_then_remove_round_trip_clears_state() {
         let (mut deck, sid, eid) = fixture();
         SetInlineStyle {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             property: "border".into(),
             new_value: "1px solid red".into(),
@@ -332,7 +328,7 @@ mod tests {
         .apply(&mut deck)
         .unwrap();
         RemoveInlineStyle {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             property: "border".into(),
         }
@@ -351,7 +347,7 @@ mod tests {
     fn marks_slide_dirty() {
         let (mut deck, sid, eid) = fixture();
         SetInlineStyle {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid,
             property: "border".into(),
             new_value: "1px solid #000".into(),

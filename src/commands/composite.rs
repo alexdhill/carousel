@@ -14,7 +14,7 @@
 // where partial failure is implausible (per ROADMAP §6 debugging note).
 
 use crate::commands::{Command, CommandError, CommandOutput};
-use crate::deck::{Deck, SlideId};
+use crate::deck::{CanvasTarget, Deck};
 use crate::ipc::Patch;
 
 #[derive(Debug)]
@@ -66,15 +66,17 @@ impl Command for CompositeCommand {
         );
         let n: usize = self.commands.len();
         let mut patches: Vec<Patch> = Vec::new();
-        let mut dirty_slides: Vec<SlideId> = Vec::new();
+        let mut dirty_targets: Vec<CanvasTarget> = Vec::new();
         let mut manifest_dirty: bool = false;
+        let mut warnings: Vec<String> = Vec::new();
         let mut inverses: Vec<Box<dyn Command>> = Vec::with_capacity(n);
 
         let mut i: usize = 0;
         while i < n {
             let out: CommandOutput = self.commands[i].apply(deck)?;
             patches.extend(out.patches);
-            dirty_slides.extend(out.dirty_slides);
+            dirty_targets.extend(out.dirty_targets);
+            warnings.extend(out.warnings);
             if out.manifest_dirty {
                 manifest_dirty = true;
             }
@@ -89,8 +91,9 @@ impl Command for CompositeCommand {
                 commands: inverses,
                 label: self.label,
             }),
-            dirty_slides,
+            dirty_targets,
             manifest_dirty,
+            warnings,
         })
     }
 
@@ -129,7 +132,7 @@ mod tests {
 
     fn move_cmd(sid: &SlideId, eid: &ElementId, x: f64, y: f64) -> Box<dyn Command> {
         Box::new(MoveElement {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             new_position: Point { x, y },
             previous_position: None,
@@ -176,9 +179,12 @@ mod tests {
         assert_eq!(geo_b.y, 400.0);
         // Each MoveElement produces two patches (left + top), so 4 total.
         assert_eq!(out.patches.len(), 4);
-        // Dirty slides aggregated.
-        assert_eq!(out.dirty_slides.len(), 2);
-        assert!(out.dirty_slides.iter().all(|s| s == &sid));
+        // Dirty targets aggregated.
+        assert_eq!(out.dirty_targets.len(), 2);
+        assert!(out
+            .dirty_targets
+            .iter()
+            .all(|t| t == &CanvasTarget::Slide(sid.clone())));
         assert!(!out.manifest_dirty);
     }
 

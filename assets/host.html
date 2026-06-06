@@ -5,10 +5,20 @@
     <title>carousel</title>
     <style>__HOST_CSS__</style>
 </head>
-<body>
+<body data-mode="slide">
     <aside id="object-panel" class="panel panel--objects">
         <header class="objects__header">
             <h2 class="objects__title">Objects</h2>
+            <button type="button" id="mode-toggle" class="mode-toggle"
+                    title="Toggle slide / layout editor">
+                <span class="mode-toggle__label mode-toggle__label--slide">Slides</span>
+                <span class="mode-toggle__label mode-toggle__label--layout">Layouts</span>
+            </button>
+            <button type="button" id="present-btn" class="present-btn"
+                    title="Present (⌘↩)">
+                <span class="present-btn__glyph" aria-hidden="true">▶</span>
+                <span>Play</span>
+            </button>
         </header>
         <div class="objects__scroll" id="objects-tree" role="tree"></div>
         <div class="objects__toolbar">
@@ -49,8 +59,23 @@
                 <button type="submit" class="inspector__apply">Apply</button>
             </div>
         </form>
+        <section id="animations-section" class="animations">
+            <h3 class="animations__title">Animations</h3>
+            <label class="animations__row">
+                <input type="checkbox" id="anim-appear"> Appear (entrance)
+            </label>
+            <label class="animations__row">
+                <input type="checkbox" id="anim-disappear"> Disappear (exit)
+            </label>
+        </section>
+        <section id="globals-editor" class="globals">
+            <label class="globals__label" for="globals-css">Globals CSS</label>
+            <textarea id="globals-css" class="globals__textarea" spellcheck="false"
+                      placeholder="/* deck-wide CSS: @keyframes, :root custom properties… */"></textarea>
+        </section>
     </aside>
     <nav id="thumbnail-row" class="panel panel--thumbs" aria-label="Slides"></nav>
+    <div id="notice-banner"></div>
     <script>__HOST_JS__</script>
 </body>
 </html>

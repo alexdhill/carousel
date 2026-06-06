@@ -20,7 +20,7 @@
 
 use crate::bundle::SlideEntry;
 use crate::commands::{Command, CommandError, CommandOutput};
-use crate::deck::SlideId;
+use crate::deck::{CanvasTarget, SlideId};
 use crate::deck::slide::SlideNode;
 
 // InsertSlide
@@ -67,8 +67,9 @@ impl Command for InsertSlide {
         Ok(CommandOutput {
             patches: Vec::new(),
             inverse: Box::new(RemoveSlide { slide_id }),
-            dirty_slides: vec![self.slide.id.clone()],
+            dirty_targets: vec![CanvasTarget::Slide(self.slide.id.clone())],
             manifest_dirty: true,
+            warnings: Vec::new(),
         })
     }
 
@@ -150,6 +151,7 @@ impl Command for RemoveSlide {
                 transition: None,
                 duration_hint: None,
                 notes_ref: None,
+                animations: Vec::new(),
             }
         };
         deck.dirty_slides.remove(&self.slide_id);
@@ -162,8 +164,9 @@ impl Command for RemoveSlide {
                 slide: removed_slide,
                 manifest_entry: removed_entry,
             }),
-            dirty_slides: Vec::new(),
+            dirty_targets: Vec::new(),
             manifest_dirty: true,
+            warnings: Vec::new(),
         })
     }
 
@@ -202,6 +205,7 @@ mod tests {
             transition: None,
             duration_hint: None,
             notes_ref: None,
+            animations: Vec::new(),
         }
     }
 

@@ -7,14 +7,14 @@
 // RichText gains spans in a later stage, this command can switch to
 // SetInnerHtml + a serializer for the inline run sequence.
 
-use crate::commands::{Command, CommandError, CommandOutput};
+use crate::commands::{Command, CommandError, CommandOutput, resolve_canvas_mut};
 use crate::deck::element::{ElementContent, RichText};
-use crate::deck::{ElementId, SlideId};
+use crate::deck::{Canvas, CanvasTarget, ElementId, SlideId};
 use crate::ipc::Patch;
 
 #[derive(Debug, Clone)]
 pub struct SetTextContent {
-    pub slide_id: SlideId,
+    pub target: CanvasTarget,
     pub element_id: ElementId,
     pub new_content: RichText,
 }
@@ -31,13 +31,10 @@ impl Command for SetTextContent {
     // Dataflow: locate slide -> locate element -> assert it carries Text
     // content -> snapshot prior -> overwrite -> build patch + inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
-        assert!(!self.slide_id.is_empty(), "SetTextContent: slide_id is empty");
+        assert!(!self.target.id().is_empty(), "SetTextContent: target id is empty");
         assert!(!self.element_id.is_empty(), "SetTextContent: element_id is empty");
-        let slide = deck
-            .slides
-            .get_mut(&self.slide_id)
-            .ok_or_else(|| CommandError::SlideNotFound(self.slide_id.clone()))?;
-        let element = slide
+        let canvas = resolve_canvas_mut(deck, &self.target)?;
+        let element = canvas
             .find_element_mut(&self.element_id)
             .ok_or_else(|| CommandError::ElementNotFound(self.element_id.clone()))?;
 
@@ -52,11 +49,11 @@ impl Command for SetTextContent {
         };
 
         element.content = ElementContent::Text(self.new_content.clone());
-        slide.dirty = true;
-        slide.invalidate_index();
+        canvas.mark_dirty();
+        canvas.invalidate_index();
 
         let inverse: SetTextContent = SetTextContent {
-            slide_id: self.slide_id.clone(),
+            target: self.target.clone(),
             element_id: self.element_id.clone(),
             new_content: prev_content,
         };
@@ -67,8 +64,9 @@ impl Command for SetTextContent {
                 text: self.new_content.plain.clone(),
             }],
             inverse: Box::new(inverse),
-            dirty_slides: vec![self.slide_id.clone()],
+            dirty_targets: vec![self.target.clone()],
             manifest_dirty: false,
+            warnings: Vec::new(),
         })
     }
 
@@ -95,7 +93,7 @@ mod tests {
     fn set_text_replaces_plain_content() {
         let (mut deck, sid, eid) = fresh_deck_first_text_child();
         let cmd = SetTextContent {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             new_content: RichText::new("new contents"),
         };
@@ -110,7 +108,7 @@ mod tests {
     fn set_text_emits_one_set_text_patch() {
         let (mut deck, sid, eid) = fresh_deck_first_text_child();
         let cmd = SetTextContent {
-            slide_id: sid,
+            target: CanvasTarget::Slide(sid),
             element_id: eid.clone(),
             new_content: RichText::new("hi"),
         };
@@ -133,7 +131,7 @@ mod tests {
             _ => panic!("expected Text"),
         };
         let cmd = SetTextContent {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             new_content: RichText::new("nope"),
         };
@@ -153,7 +151,7 @@ mod tests {
         let slide = deck.slides.get_mut(&sid).unwrap();
         slide.root = group_element("rt", vec![image_element("im_a", "asset_x")]);
         let cmd = SetTextContent {
-            slide_id: sid,
+            target: CanvasTarget::Slide(sid),
             element_id: "im_a".into(),
             new_content: RichText::new("x"),
         };
@@ -165,7 +163,7 @@ mod tests {
     fn set_text_errors_on_missing_slide() {
         let mut deck = Deck::sample();
         let cmd = SetTextContent {
-            slide_id: "ghost".into(),
+            target: CanvasTarget::Slide("ghost".into()),
             element_id: "x".into(),
             new_content: RichText::new("x"),
         };
@@ -177,7 +175,7 @@ mod tests {
     fn set_text_errors_on_missing_element() {
         let (mut deck, sid, _) = fresh_deck_first_text_child();
         let cmd = SetTextContent {
-            slide_id: sid,
+            target: CanvasTarget::Slide(sid),
             element_id: "no_such".into(),
             new_content: RichText::new("x"),
         };
@@ -189,7 +187,7 @@ mod tests {
     fn set_text_marks_slide_dirty() {
         let (mut deck, sid, eid) = fresh_deck_first_text_child();
         let cmd = SetTextContent {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid,
             new_content: RichText::new("x"),
         };
@@ -201,7 +199,7 @@ mod tests {
     fn set_text_with_empty_string_is_valid() {
         let (mut deck, sid, eid) = fresh_deck_first_text_child();
         let cmd = SetTextContent {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             new_content: RichText::new(""),
         };
@@ -219,7 +217,7 @@ mod tests {
     #[test]
     fn set_text_label_and_undoable() {
         let cmd = SetTextContent {
-            slide_id: "s".into(),
+            target: CanvasTarget::Slide("s".into()),
             element_id: "e".into(),
             new_content: RichText::new(""),
         };

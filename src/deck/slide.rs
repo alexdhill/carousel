@@ -6,28 +6,17 @@
 // just walk root.children, and slide-level layout could later sit on the
 // root's geometry without a special case.
 
+use crate::deck::animation::AnimationEntry;
+use crate::deck::canvas::{self, Canvas};
 use crate::deck::element::ElementNode;
-use crate::deck::ids::{ElementId, LayoutId, SlideId};
+use crate::deck::ids::{LayoutId, SlideId};
 use serde::{Deserialize, Serialize};
 
-// Upper bound on tree depth and total node count for any bounded loop in
-// this file. Commands enforce a stricter group nesting limit at the model
-// level (SPEC §5.9 = 10); these constants exist only so the bounded-loop
-// requirement (CLAUDE.md) has a concrete ceiling well above any plausible
-// slide.
-const MAX_TREE_NODES: usize = 100_000;
-const MAX_TREE_DEPTH: usize = 1024;
-
-// RemovedElement
-// Returned by SlideNode::remove_element. Carries enough information to
-// re-insert the subtree at the same location, which is what the inverse
-// command for RemoveElement needs.
-#[derive(Clone, Debug, PartialEq)]
-pub struct RemovedElement {
-    pub node: ElementNode,
-    pub parent_id: ElementId,
-    pub position: usize,
-}
+// The element-tree ops and their result types now live on the shared
+// Canvas surface. Re-export so existing
+// `crate::deck::slide::{RemovedElement, InsertError}` import paths still
+// resolve.
+pub use crate::deck::canvas::{InsertError, RemovedElement};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SlideMetadata {
@@ -44,6 +33,11 @@ pub struct SlideNode {
     pub layout_id: LayoutId,
     pub root: ElementNode,
     pub metadata: SlideMetadata,
+    // The slide's ordered animation timeline (Stage: animations). Order is
+    // play order; the cursor state machine derives steps from it. Persisted
+    // via the manifest SlideEntry, not the slide HTML.
+    #[serde(default)]
+    pub animations: Vec<AnimationEntry>,
     pub dirty: bool,
 }
 
@@ -66,19 +60,7 @@ impl SlideNode {
     // Dataflow: iterative depth-first search over the owned tree using an
     // explicit stack. The outer loop is bounded by MAX_TREE_NODES.
     pub fn find_element<'a>(&'a self, id: &str) -> Option<&'a ElementNode> {
-        assert!(!id.is_empty(), "find_element called with empty id");
-        let mut stack: Vec<&'a ElementNode> = Vec::new();
-        stack.push(&self.root);
-        for _ in 0..MAX_TREE_NODES {
-            let Some(node) = stack.pop() else { return None; };
-            if node.id == id {
-                return Some(node);
-            }
-            for child in node.children.iter().rev() {
-                stack.push(child);
-            }
-        }
-        None
+        canvas::find_element(&self.root, id)
     }
 
     // find_element_mut
@@ -88,19 +70,7 @@ impl SlideNode {
     // mutable references. The borrow checker accepts the pop-then-push
     // pattern because each child is a disjoint subtree.
     pub fn find_element_mut<'a>(&'a mut self, id: &str) -> Option<&'a mut ElementNode> {
-        assert!(!id.is_empty(), "find_element_mut called with empty id");
-        let mut stack: Vec<&'a mut ElementNode> = Vec::new();
-        stack.push(&mut self.root);
-        for _ in 0..MAX_TREE_NODES {
-            let Some(node) = stack.pop() else { return None; };
-            if node.id == id {
-                return Some(node);
-            }
-            for child in node.children.iter_mut().rev() {
-                stack.push(child);
-            }
-        }
-        None
+        canvas::find_element_mut(&mut self.root, id)
     }
 
     // remove_non_root_element
@@ -114,19 +84,8 @@ impl SlideNode {
     //   2. With the path in hand, walk it mutably to land on the parent,
     //      then call Vec::remove at the recorded index.
     pub fn remove_non_root_element(&mut self, id: &str) -> Option<RemovedElement> {
-        assert!(!id.is_empty(), "remove_non_root_element called with empty id");
         assert!(self.root.id != id, "remove_non_root_element called with root id");
-        let (path, position): (Vec<usize>, usize) = find_parent_path(&self.root, id)?;
-        let mut current: &mut ElementNode = &mut self.root;
-        let mut step: usize = 0;
-        for &idx in &path {
-            assert!(step < MAX_TREE_DEPTH, "tree depth exceeded MAX_TREE_DEPTH");
-            current = &mut current.children[idx];
-            step += 1;
-        }
-        let parent_id: ElementId = current.id.clone();
-        let removed: ElementNode = current.children.remove(position);
-        Some(RemovedElement { node: removed, parent_id, position })
+        canvas::remove_non_root_element(&mut self.root, id)
     }
 
     // insert_child
@@ -140,16 +99,7 @@ impl SlideNode {
         position: usize,
         node: ElementNode,
     ) -> Result<(), InsertError> {
-        assert!(!parent_id.is_empty(), "insert_child called with empty parent_id");
-        let parent: &mut ElementNode = self
-            .find_element_mut(parent_id)
-            .ok_or(InsertError::ParentNotFound)?;
-        let len: usize = parent.children.len();
-        if position > len {
-            return Err(InsertError::PositionOutOfRange { len, requested: position });
-        }
-        parent.children.insert(position, node);
-        Ok(())
+        canvas::insert_child(&mut self.root, parent_id, position, node)
     }
 
     // invalidate_index
@@ -173,42 +123,25 @@ impl SlideNode {
             layout_id,
             root,
             metadata: SlideMetadata::default(),
+            animations: Vec::new(),
             dirty: false,
         }
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub enum InsertError {
-    ParentNotFound,
-    PositionOutOfRange { len: usize, requested: usize },
-}
-
-// find_parent_path
-// Inputs: a tree root and a target id to locate (target must not equal
-// root id).
-// Output: (path-of-indices-to-parent, position-of-target-within-parent),
-// or None if the id is absent.
-// Dataflow: iterative DFS with an explicit (path, node) stack; each entry
-// holds the indices needed to descend back to that node from the root.
-fn find_parent_path(root: &ElementNode, target: &str) -> Option<(Vec<usize>, usize)> {
-    assert!(!target.is_empty(), "find_parent_path called with empty target");
-    let mut stack: Vec<(Vec<usize>, &ElementNode)> = Vec::new();
-    stack.push((Vec::new(), root));
-    for _ in 0..MAX_TREE_NODES {
-        let Some((path, node)) = stack.pop() else { return None; };
-        for (i, child) in node.children.iter().enumerate() {
-            if child.id == target {
-                return Some((path, i));
-            }
-        }
-        for (i, child) in node.children.iter().enumerate().rev() {
-            let mut child_path: Vec<usize> = path.clone();
-            child_path.push(i);
-            stack.push((child_path, child));
-        }
+// SlideNode is an editable Canvas. The inherent methods above delegate to
+// the same free functions these defaults use, so concrete-SlideNode call
+// sites and `&mut dyn Canvas` holders share one implementation.
+impl Canvas for SlideNode {
+    fn root(&self) -> &ElementNode {
+        &self.root
     }
-    None
+    fn root_mut(&mut self) -> &mut ElementNode {
+        &mut self.root
+    }
+    fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
 }
 
 #[cfg(test)]

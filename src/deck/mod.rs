@@ -7,14 +7,18 @@
 // dirty-tracking sets. Stage 3 builds a `sample()` deck in code; Stage 7
 // will replace that with bundle I/O.
 
+pub mod animation;
 pub mod builders;
+pub mod canvas;
 pub mod element;
 pub mod ids;
+pub mod layout;
 pub mod slide;
 pub mod style;
 pub mod theme;
 
 use crate::bundle::{AssetRegistry, ManifestData, SlideEntry, manifest::slide_path_for};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 
@@ -22,7 +26,16 @@ pub use element::{
     AssetRef, ElementContent, ElementNode, ElementStyle, ElementType, RichText, ShapeGeometry,
     TableCell, TableData,
 };
-pub use ids::{AssetId, ElementId, LayoutId, SlideId, new_element_id, new_slide_id};
+pub use animation::{
+    AnimationCategory, AnimationEntry, AnimationIterations, AnimationState, AnimationTiming,
+    AnimationTrigger,
+};
+pub use canvas::{Canvas, InsertError, RemovedElement};
+pub use ids::{
+    AnimationId, AssetId, ElementId, LayoutId, SlideId, new_animation_id, new_element_id,
+    new_slide_id,
+};
+pub use layout::LayoutNode;
 pub use slide::{SlideMetadata, SlideNode};
 pub use style::{
     Border, BorderStyle, ColorRef, FillRef, Filter, FontRef, FontStyle, Geometry, ImageStyle,
@@ -30,6 +43,30 @@ pub use style::{
     TextStyle,
 };
 pub use theme::ThemeData;
+
+// CanvasTarget
+// Identifies which editable surface an element command operates on: a slide
+// (in `deck.slides`) or a layout template (in `deck.theme.layouts`).
+// Resolved to a `&dyn Canvas` by `Deck::canvas[_mut]`. Element commands carry
+// one of these in place of the old `slide_id` field.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CanvasTarget {
+    Slide(SlideId),
+    Layout(LayoutId),
+}
+
+impl CanvasTarget {
+    // id
+    // Inputs: self.
+    // Output: the inner slide / layout id as a &str. Lets callers assert a
+    // non-empty target id without matching the variant.
+    pub fn id(&self) -> &str {
+        match self {
+            CanvasTarget::Slide(id) => id,
+            CanvasTarget::Layout(id) => id,
+        }
+    }
+}
 
 // Deck
 // Top-level deck state. `slides` is a BTreeMap for deterministic
@@ -81,6 +118,7 @@ impl Deck {
                 transition: None,
                 duration_hint: None,
                 notes_ref: None,
+                animations: Vec::new(),
             }],
             ..ManifestData::default()
         };
@@ -168,6 +206,7 @@ impl Deck {
                 transition: None,
                 duration_hint: None,
                 notes_ref: None,
+                animations: Vec::new(),
             }],
             ..ManifestData::default()
         };
@@ -190,6 +229,38 @@ impl Deck {
     pub fn active_slide(&self) -> Option<&SlideNode> {
         let first: &SlideId = self.slide_order.first()?;
         self.slides.get(first)
+    }
+
+    // canvas
+    // Inputs: a CanvasTarget.
+    // Output: an immutable `&dyn Canvas` for that surface, or None if the
+    // referenced slide / layout does not exist.
+    // Dataflow: resolves Slide(id) into `self.slides` and Layout(id) into
+    // `self.theme.layouts`, erasing the concrete type to the shared trait.
+    pub fn canvas(&self, target: &CanvasTarget) -> Option<&dyn Canvas> {
+        match target {
+            CanvasTarget::Slide(id) => self.slides.get(id).map(|s| s as &dyn Canvas),
+            CanvasTarget::Layout(id) => {
+                self.theme.layouts.get(id).map(|l| l as &dyn Canvas)
+            }
+        }
+    }
+
+    // canvas_mut
+    // Inputs: a CanvasTarget.
+    // Output: a mutable `&mut dyn Canvas` for that surface, or None if the
+    // referenced slide / layout does not exist.
+    // Dataflow: mirror of `canvas`, used by element commands to mutate the
+    // active editable surface regardless of whether it is a slide or layout.
+    pub fn canvas_mut(&mut self, target: &CanvasTarget) -> Option<&mut dyn Canvas> {
+        match target {
+            CanvasTarget::Slide(id) => {
+                self.slides.get_mut(id).map(|s| s as &mut dyn Canvas)
+            }
+            CanvasTarget::Layout(id) => {
+                self.theme.layouts.get_mut(id).map(|l| l as &mut dyn Canvas)
+            }
+        }
     }
 }
 
@@ -252,5 +323,31 @@ mod tests {
     fn empty_deck_has_no_active_slide() {
         let d = Deck::default();
         assert!(d.active_slide().is_none());
+    }
+
+    #[test]
+    fn canvas_mut_resolves_slide_target() {
+        let mut d = Deck::sample();
+        let sid: SlideId = d.slide_order[0].clone();
+        let target = CanvasTarget::Slide(sid.clone());
+        let canvas = d.canvas_mut(&target).expect("slide canvas resolves");
+        assert!(canvas.find_element("el_demo_title").is_some());
+    }
+
+    #[test]
+    fn canvas_mut_resolves_blank_layout_target() {
+        // The default theme (carried by Deck::default) seeds a "blank" layout.
+        let mut d = Deck::default();
+        let target = CanvasTarget::Layout("blank".into());
+        let canvas = d.canvas_mut(&target).expect("layout canvas resolves");
+        // The layout root is "el_layout_root"; find it via the shared trait.
+        assert!(canvas.find_element("el_layout_root").is_some());
+    }
+
+    #[test]
+    fn canvas_returns_none_for_unknown_target() {
+        let d = Deck::sample();
+        assert!(d.canvas(&CanvasTarget::Slide("nope".into())).is_none());
+        assert!(d.canvas(&CanvasTarget::Layout("nope".into())).is_none());
     }
 }

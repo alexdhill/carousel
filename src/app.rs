@@ -18,27 +18,32 @@ use crate::bundle::{
     IoRequest, IoResponse, IoThread, deserialize_deck, serialize_deck,
 };
 use crate::commands::{
-    Command, CommandDispatcher, CompositeCommand, FileAction, GeometryProperty, InsertElement,
-    InsertSlide, InterpretResult, MoveElement, RemoveElementCommand, RemoveInlineStyle,
-    RenameElement, ReparentElement, ResizeElement, SetGeometryProperty, SetInlineStyle,
-    TransactionSnapshot,
+    Command, CommandDispatcher, CompositeCommand, EditorMode, FileAction, GeometryProperty,
+    InsertAnimation, InsertElement, InsertLayout, InsertSlide, InterpretResult, MoveElement,
+    RemoveAnimation, RemoveElementCommand, RemoveInlineStyle, RenameElement, ReparentElement,
+    ResizeElement, SetElementId, SetGeometryProperty, SetGlobalsCss, SetInlineStyle, SetLayoutName,
+    SetSlideTitle, SetTextContent, TransactionSnapshot,
 };
+use crate::deck::animation::{AnimationCategory, AnimationEntry, AnimationTiming, AnimationTrigger};
 use crate::deck::element::{
     AssetRef, ElementContent, ElementNode, ElementStyle, ElementType, RichText,
 };
-use crate::deck::ids::new_element_id;
+use crate::deck::ids::{new_animation_id, new_element_id};
+use crate::deck::layout::LayoutNode;
 use crate::deck::slide::SlideNode;
 use crate::deck::style::{
     ColorRef, FontRef, Geometry, ImageStyle, Length, ShapeStyle, TextStyle,
 };
-use crate::deck::{Deck, ElementId, ShapeGeometry, SlideId};
+use crate::deck::{Canvas, CanvasTarget, Deck, ElementId, LayoutId, ShapeGeometry, SlideId};
 use crate::error::{AppError, AppResult};
-use crate::html::serialize::serialize_slide;
+use crate::html::serialize::{serialize_slide, ANIMATION_KEYFRAMES_CSS};
 use crate::ipc::bridge::WebviewSender;
+use crate::ipc::present::{PresentInbound, PresentInitPayload};
+use crate::present::session::{PresentationSession, PresentStep};
 use crate::ipc::{
-    AssetPayload, AssetsBundle, InteractionEvent, IpcMessage, MessageKind, MountSlideArgs,
-    ObjectTreeData, ObjectTreeNode, Patch, Point, SelectionState, Size, SlideListData,
-    SlideListEntry,
+    AssetPayload, AssetsBundle, EditorConfig, InteractionEvent, IpcMessage, LayoutListData,
+    LayoutListEntry, MessageKind, MountSlideArgs, ObjectTreeData, ObjectTreeNode, Patch, Point,
+    SelectionState, Size, SlideAnimationEntry, SlideAnimationsData, SlideListData, SlideListEntry,
 };
 use base64::Engine;
 use std::collections::BTreeMap;
@@ -58,6 +63,8 @@ const NEW_KEY: &str = "new_deck";
 const OPEN_KEY: &str = "open_deck";
 const SAVE_KEY: &str = "save_deck";
 const SAVE_AS_KEY: &str = "save_as_deck";
+// Synthetic accelerator the JS host posts for ⌘↩ / the toolbar Play button.
+const PRESENT_KEY: &str = "present";
 const BUNDLE_FILE_EXTENSION: &str = "slidedeck";
 // Keys forwarded by the JS host that should trigger element deletion.
 // Both names cover the two physical keys users reach for: macOS users
@@ -82,10 +89,24 @@ enum HistoryStep {
 pub struct ApplicationCore {
     dispatcher: CommandDispatcher,
     active_slide: Option<SlideId>,
+    // The layout currently being edited in layout mode. Joins `active_slide`
+    // so the editor remembers each mode's selection independently. The
+    // dispatcher's mode decides which one `active_canvas()` returns.
+    active_layout: Option<LayoutId>,
     selection: SelectionState,
     sender: WebviewSender,
     schedule_flush: Box<dyn Fn()>,
     io_thread: IoThread,
+    // Presentation mode (None unless presenting). Holds the cursor + the
+    // presentation WebviewSender. The two wakes ask the event loop to build /
+    // tear down the fullscreen window (window creation needs the event-loop
+    // target, only available inside the run closure).
+    present: Option<PresentationSession>,
+    request_present_open: Box<dyn Fn()>,
+    request_present_close: Box<dyn Fn()>,
+    // Set by start_presentation to the slide index the presentation should open
+    // on; consumed by begin_presentation once main.rs has built the webview.
+    pending_present_index: Option<usize>,
     // Set by interpret_asset_imported just before it returns the
     // InsertElement command. handle_interaction consumes it after the
     // command dispatches successfully — at that point the asset is
@@ -97,6 +118,10 @@ pub struct ApplicationCore {
     // affects_slide_list path to switch the active slide to the new
     // one once the InsertSlide command has applied.
     pending_new_active_slide: Option<SlideId>,
+    // Layout-mode analogue of pending_new_active_slide: set by the
+    // AddLayoutRequested arm so react_to_outcome switches to the freshly
+    // created layout once InsertLayout has applied.
+    pending_new_active_layout: Option<LayoutId>,
 }
 
 impl ApplicationCore {
@@ -110,20 +135,51 @@ impl ApplicationCore {
         sender: WebviewSender,
         schedule_flush: Box<dyn Fn()>,
         io_thread: IoThread,
+        request_present_open: Box<dyn Fn()>,
+        request_present_close: Box<dyn Fn()>,
     ) -> Self {
         let deck: Deck = Deck::sample();
         let active_slide: Option<SlideId> = deck.slide_order.first().cloned();
+        let active_layout: Option<LayoutId> = deck.theme.layout_order.first().cloned();
         assert!(active_slide.is_some(), "sample deck must contain a slide");
         Self {
             dispatcher: CommandDispatcher::new(deck),
             active_slide,
+            active_layout,
             selection: SelectionState::empty(),
             sender,
             schedule_flush,
             io_thread,
+            present: None,
+            request_present_open,
+            request_present_close,
+            pending_present_index: None,
             pending_asset_broadcast: None,
             pending_new_active_slide: None,
+            pending_new_active_layout: None,
         }
+    }
+
+    // active_canvas
+    // Inputs: none.
+    // Output: the CanvasTarget for the current editor mode — the active
+    // slide in Slide mode, the active layout in Layout mode — or None when
+    // that mode has no active canvas. This is the single source of truth for
+    // "which surface do mounts, the object tree, and element commands act
+    // on"; `active_target` is its alias used by command builders.
+    fn active_canvas(&self) -> Option<CanvasTarget> {
+        match self.dispatcher.mode() {
+            EditorMode::Slide => self.active_slide.clone().map(CanvasTarget::Slide),
+            EditorMode::Layout => self.active_layout.clone().map(CanvasTarget::Layout),
+        }
+    }
+
+    // active_canvas_id
+    // The active canvas's id as a String (used as SelectionState.slide_id so
+    // the JS overlay scopes to whichever surface — slide or layout — is
+    // mounted in the viewport).
+    fn active_canvas_id(&self) -> Option<String> {
+        self.active_canvas().map(|t| t.id().to_string())
     }
 
     pub fn selection(&self) -> &SelectionState {
@@ -143,13 +199,19 @@ impl ApplicationCore {
         debug!(id = %msg.id, "ipc <- webview");
         match msg.kind {
             MessageKind::Ready => {
-                // First contact from JS: announce the full slide list so
-                // the thumbnail row can render every slide, dump every
-                // asset's bytes so embedded images resolve to blob URLs,
-                // then mount the active slide.
+                // First contact from JS: deliver one-shot config (the built-in
+                // animation keyframes), announce the full slide list so the
+                // thumbnail row can render every slide, dump every asset's
+                // bytes so embedded images resolve to blob URLs, then mount
+                // the active slide and its animation timeline.
+                self.sender.send(MessageKind::Configure(EditorConfig {
+                    debug: false,
+                    animation_keyframes_css: ANIMATION_KEYFRAMES_CSS.to_string(),
+                }))?;
                 self.send_slide_list()?;
                 self.send_assets_bundle()?;
-                self.send_active_slide()
+                self.send_active_slide()?;
+                self.send_slide_animations()
             }
             MessageKind::Interaction(event) => self.handle_interaction(event),
             other => {
@@ -188,31 +250,59 @@ impl ApplicationCore {
     // -> bundle slide_html + theme_css into MountSlideArgs -> dispatch
     // -> build the matching ObjectTreeData -> dispatch.
     fn send_active_slide(&mut self) -> AppResult<()> {
-        let active: SlideId = match &self.active_slide {
-            Some(id) => id.clone(),
+        let target: CanvasTarget = match self.active_canvas() {
+            Some(t) => t,
             None => {
-                warn!("no active slide; nothing to mount");
+                warn!("no active canvas; nothing to mount");
                 return Ok(());
             }
         };
-        let slide = match self.dispatcher.deck().slides.get(&active) {
-            Some(s) => s,
-            None => {
-                warn!(slide_id = %active, "active slide id absent from map");
-                return Ok(());
-            }
-        };
-        let slide_html: String = serialize_slide(slide);
-        assert!(!slide_html.is_empty(), "serializer produced empty slide");
-        let tree: ObjectTreeData = build_object_tree(slide);
-        info!(slide_id = %active, "mounting active slide via IPC");
+        let (id, slide_html, tree): (String, String, ObjectTreeData) =
+            match self.canvas_mount_artifacts(&target) {
+                Some(parts) => parts,
+                None => {
+                    warn!(target = ?target, "active canvas absent; nothing to mount");
+                    return Ok(());
+                }
+            };
+        assert!(!slide_html.is_empty(), "serializer produced empty canvas");
+        info!(canvas = %id, "mounting active canvas via IPC");
         let args = MountSlideArgs {
-            slide_id: active,
+            slide_id: id,
             slide_html,
             theme_css: self.dispatcher.deck().theme.theme_css.clone(),
+            globals_css: self.dispatcher.deck().theme.globals_css.clone(),
         };
         self.sender.send(MessageKind::MountSlide(args))?;
         self.sender.send(MessageKind::ObjectTreeUpdate(tree))
+    }
+
+    // canvas_mount_artifacts
+    // Inputs: a CanvasTarget.
+    // Output: (id, serialized HTML, object tree) for the target canvas, or
+    // None if it no longer exists. Layouts serialize through a transient
+    // SlideNode wrapper so they reuse the exact, tested slide serializer and
+    // object-tree builder (a layout root is a Group, like a slide root).
+    fn canvas_mount_artifacts(
+        &self,
+        target: &CanvasTarget,
+    ) -> Option<(String, String, ObjectTreeData)> {
+        match target {
+            CanvasTarget::Slide(id) => {
+                let slide = self.dispatcher.deck().slides.get(id)?;
+                Some((id.clone(), serialize_slide(slide), build_object_tree(slide)))
+            }
+            CanvasTarget::Layout(id) => {
+                let layout = self.dispatcher.deck().theme.layouts.get(id)?;
+                let transient: SlideNode =
+                    SlideNode::new(layout.id.clone(), layout.id.clone(), layout.root.clone());
+                Some((
+                    id.clone(),
+                    serialize_slide(&transient),
+                    build_object_tree(&transient),
+                ))
+            }
+        }
     }
 
     // send_object_tree
@@ -223,15 +313,14 @@ impl ApplicationCore {
     // updates the DOM; the panel needs the new label string).
     // Dataflow: lookup active slide -> build ObjectTreeData -> dispatch.
     fn send_object_tree(&self) -> AppResult<()> {
-        let active: SlideId = match &self.active_slide {
-            Some(id) => id.clone(),
+        let target: CanvasTarget = match self.active_canvas() {
+            Some(t) => t,
             None => return Ok(()),
         };
-        let slide = match self.dispatcher.deck().slides.get(&active) {
-            Some(s) => s,
+        let tree: ObjectTreeData = match self.canvas_mount_artifacts(&target) {
+            Some((_, _, tree)) => tree,
             None => return Ok(()),
         };
-        let tree: ObjectTreeData = build_object_tree(slide);
         self.sender.send(MessageKind::ObjectTreeUpdate(tree))
     }
 
@@ -253,32 +342,12 @@ impl ApplicationCore {
     // cache from scratch. Skipped silently when no assets exist (the
     // empty payload is harmless but the noise isn't worth it).
     fn send_assets_bundle(&self) -> AppResult<()> {
-        let registry = &self.dispatcher.deck().assets;
-        if registry.is_empty() {
-            return Ok(());
-        }
-        let mut payloads: Vec<AssetPayload> = Vec::with_capacity(registry.entry_count());
-        for entry in &registry.assets {
-            let bytes: &Vec<u8> = match registry.files.get(&entry.path) {
-                Some(b) => b,
-                None => {
-                    warn!(asset_id = %entry.id, "AssetsUpdate: file bytes missing");
-                    continue;
-                }
-            };
-            payloads.push(AssetPayload {
-                asset_id: entry.id.clone(),
-                media_type: entry.media_type.clone(),
-                content_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
-            });
-        }
-        if payloads.is_empty() {
-            return Ok(());
-        }
-        debug!(count = payloads.len(), "ipc -> AssetsUpdate");
-        self.sender.send(MessageKind::AssetsUpdate(AssetsBundle {
-            assets: payloads,
-        }))
+        let bundle: AssetsBundle = match build_assets_bundle(self.dispatcher.deck()) {
+            Some(b) => b,
+            None => return Ok(()),
+        };
+        debug!(count = bundle.assets.len(), "ipc -> AssetsUpdate");
+        self.sender.send(MessageKind::AssetsUpdate(bundle))
     }
 
     // send_asset_added
@@ -315,6 +384,41 @@ impl ApplicationCore {
             "ipc -> SlideListUpdate"
         );
         self.sender.send(MessageKind::SlideListUpdate(data))
+    }
+
+    // send_slide_animations
+    // Inputs: none.
+    // Output: Ok(()) after sending one SlideAnimationsUpdate carrying the
+    // active slide's timeline (id / element / category per entry). The
+    // inspector's Appear/Disappear toggles reflect this. No-op when there is
+    // no active slide (animations are slide-only).
+    fn send_slide_animations(&self) -> AppResult<()> {
+        let sid: SlideId = match &self.active_slide {
+            Some(s) => s.clone(),
+            None => return Ok(()),
+        };
+        let slide = match self.dispatcher.deck().slides.get(&sid) {
+            Some(s) => s,
+            None => return Ok(()),
+        };
+        let entries: Vec<SlideAnimationEntry> = slide
+            .animations
+            .iter()
+            .map(|e| SlideAnimationEntry {
+                animation_id: e.id.clone(),
+                element_id: e.element_id.clone(),
+                category: match e.category {
+                    AnimationCategory::Entrance => "entrance",
+                    AnimationCategory::Emphasis => "emphasis",
+                    AnimationCategory::Exit => "exit",
+                }
+                .to_string(),
+            })
+            .collect();
+        self.sender.send(MessageKind::SlideAnimationsUpdate(SlideAnimationsData {
+            slide_id: sid,
+            entries,
+        }))
     }
 
     // set_active_slide
@@ -355,6 +459,81 @@ impl ApplicationCore {
         self.send_active_slide()
     }
 
+    // set_editor_mode
+    // Inputs: the mode to switch to.
+    // Output: Ok(()); no-op when already in that mode.
+    // Dataflow: flush pending patches to the OLD canvas -> switch the
+    // dispatcher's mode -> ensure the new mode has an active canvas (lazily
+    // adopt the first layout when entering Layout mode with none) -> clear
+    // selection -> echo SetMode to JS -> broadcast the relevant list and
+    // remount the active canvas.
+    fn set_editor_mode(&mut self, mode: EditorMode) -> AppResult<()> {
+        if self.dispatcher.mode() == mode {
+            return Ok(());
+        }
+        info!(?mode, "switching editor mode");
+        self.flush_patches()?;
+        self.dispatcher.set_mode(mode);
+        if mode == EditorMode::Layout && self.active_layout.is_none() {
+            self.active_layout = self.dispatcher.deck().theme.layout_order.first().cloned();
+        }
+        self.selection = SelectionState::empty();
+        let mode_str: &str = match mode {
+            EditorMode::Slide => "slide",
+            EditorMode::Layout => "layout",
+        };
+        self.sender.send(MessageKind::SetMode { mode: mode_str.to_string() })?;
+        self.sender
+            .send(MessageKind::SetSelection(SelectionState::empty()))?;
+        match mode {
+            EditorMode::Slide => self.send_slide_list()?,
+            EditorMode::Layout => self.send_layout_list()?,
+        }
+        self.send_active_slide()
+    }
+
+    // set_active_layout
+    // Inputs: the target layout id.
+    // Output: Ok(()); no-op when empty, unknown, or already active.
+    // The layout-mode analogue of set_active_slide: flush, swap the active
+    // layout, clear selection, then remount the active canvas.
+    fn set_active_layout(&mut self, layout_id: LayoutId) -> AppResult<()> {
+        if layout_id.is_empty() {
+            return Ok(());
+        }
+        if !self.dispatcher.deck().theme.layouts.contains_key(&layout_id) {
+            warn!(target = %layout_id, "set_active_layout: unknown layout id");
+            return Ok(());
+        }
+        if self.active_layout.as_deref() == Some(layout_id.as_str()) {
+            return Ok(());
+        }
+        info!(target = %layout_id, "switching active layout");
+        self.flush_patches()?;
+        self.active_layout = Some(layout_id);
+        self.selection = SelectionState::empty();
+        self.sender
+            .send(MessageKind::SetSelection(SelectionState::empty()))?;
+        self.send_active_slide()
+    }
+
+    // send_layout_list
+    // Inputs: none.
+    // Output: Ok(()) after sending one LayoutListUpdate carrying every
+    // layout's id + name + serialized HTML, the active layout id, and the
+    // shared theme/globals CSS. Sent on entering layout mode and after any
+    // command reporting affects_layout_list / affects_globals.
+    fn send_layout_list(&self) -> AppResult<()> {
+        let data: LayoutListData =
+            build_layout_list_data(self.dispatcher.deck(), self.active_layout.as_ref());
+        debug!(
+            layout_count = data.layouts.len(),
+            active = ?data.active_layout_id,
+            "ipc -> LayoutListUpdate"
+        );
+        self.sender.send(MessageKind::LayoutListUpdate(data))
+    }
+
     // interpret
     // Inputs: an InteractionEvent.
     // Output: an InterpretResult describing what should happen next.
@@ -368,7 +547,7 @@ impl ApplicationCore {
                 } else {
                     SelectionState::empty()
                 };
-                sel.slide_id = self.active_slide.clone();
+                sel.slide_id = self.active_canvas_id();
                 if modifiers.shift {
                     sel.toggle(element_id);
                 } else if !sel.contains(&element_id) {
@@ -391,20 +570,20 @@ impl ApplicationCore {
             // updated once at ElementDragEnded with the full delta.
             InteractionEvent::ElementDragged { .. } => InterpretResult::Nothing,
             InteractionEvent::ElementDragEnded { element_id, delta } => {
-                let slide_id: SlideId = match &self.active_slide {
-                    Some(id) => id.clone(),
+                let target: CanvasTarget = match self.active_canvas() {
+                    Some(t) => t,
                     None => return InterpretResult::Nothing,
                 };
                 let start_xy: (f64, f64) = match self
                     .dispatcher
                     .transaction()
-                    .and_then(|t| t.start_snapshot.position_of(&slide_id, &element_id))
+                    .and_then(|t| t.start_snapshot.position_of(&target, &element_id))
                 {
                     Some(p) => p,
                     None => return InterpretResult::Nothing,
                 };
                 let cmd = MoveElement {
-                    slide_id,
+                    target,
                     element_id,
                     new_position: Point {
                         x: start_xy.0 + delta.x,
@@ -432,8 +611,8 @@ impl ApplicationCore {
                 new_position,
                 new_size,
             } => {
-                let slide_id: SlideId = match &self.active_slide {
-                    Some(id) => id.clone(),
+                let target: CanvasTarget = match self.active_canvas() {
+                    Some(t) => t,
                     None => return InterpretResult::Nothing,
                 };
                 // Verify we actually have a snapshot for this element — a
@@ -442,13 +621,13 @@ impl ApplicationCore {
                 if self
                     .dispatcher
                     .transaction()
-                    .and_then(|t| t.start_snapshot.position_of(&slide_id, &element_id))
+                    .and_then(|t| t.start_snapshot.position_of(&target, &element_id))
                     .is_none()
                 {
                     return InterpretResult::Nothing;
                 }
                 InterpretResult::CommitTransactionWith(Box::new(ResizeElement {
-                    slide_id,
+                    target,
                     element_id,
                     new_x: new_position.x,
                     new_y: new_position.y,
@@ -456,12 +635,28 @@ impl ApplicationCore {
                     new_height: new_size.height,
                 }))
             }
+            // Inline text editing (SPEC §8.5). The webview owns the text
+            // during the session, so Started / Edited are no-ops on the
+            // Rust side; only the commit produces a mutation.
+            InteractionEvent::TextEditStarted { .. } => InterpretResult::Nothing,
+            InteractionEvent::TextEdited { .. } => InterpretResult::Nothing,
+            InteractionEvent::TextEditEnded { element_id, text } => {
+                match build_set_text_command(
+                    &self.dispatcher,
+                    self.active_canvas(),
+                    element_id,
+                    text,
+                ) {
+                    Some(cmd) => InterpretResult::Command(cmd),
+                    None => InterpretResult::Nothing,
+                }
+            }
             InteractionEvent::BackgroundClicked { .. } => {
                 InterpretResult::Selection(SelectionState::empty())
             }
             InteractionEvent::PropertyChanged { element_id, property, value } => {
                 interpret_property_changed(
-                    self.active_slide.as_ref(),
+                    self.active_canvas(),
                     element_id,
                     property,
                     value,
@@ -469,7 +664,7 @@ impl ApplicationCore {
             }
             InteractionEvent::SetSelectionFromPanel { element_ids } => {
                 let mut sel: SelectionState = SelectionState::empty();
-                sel.slide_id = self.active_slide.clone();
+                sel.slide_id = self.active_canvas_id();
                 sel.element_ids = element_ids;
                 InterpretResult::Selection(sel)
             }
@@ -479,20 +674,20 @@ impl ApplicationCore {
                 position,
             } => interpret_insert_element_request(
                 &self.dispatcher,
-                self.active_slide.as_ref(),
+                self.active_canvas(),
                 element_type,
                 parent_id,
                 position,
             ),
             InteractionEvent::RenameElementRequested { element_id, new_name } => {
-                interpret_rename_request(self.active_slide.as_ref(), element_id, new_name)
+                interpret_rename_request(self.active_canvas(), element_id, new_name)
             }
             InteractionEvent::ReparentElementRequested {
                 element_id,
                 new_parent_id,
                 new_position,
             } => interpret_reparent_request(
-                self.active_slide.as_ref(),
+                self.active_canvas(),
                 element_id,
                 new_parent_id,
                 new_position,
@@ -531,6 +726,69 @@ impl ApplicationCore {
                     None => InterpretResult::Nothing,
                 }
             }
+            InteractionEvent::SlideTitleEditRequested { slide_id, new_title } => {
+                match build_set_slide_title_command(&self.dispatcher, &slide_id, &new_title) {
+                    Some(cmd) => InterpretResult::Command(cmd),
+                    None => InterpretResult::Nothing,
+                }
+            }
+            // ---- Stage 11: layout editor ----
+            InteractionEvent::SetEditorMode { mode } => match mode.as_str() {
+                "slide" => InterpretResult::SetEditorMode(EditorMode::Slide),
+                "layout" => InterpretResult::SetEditorMode(EditorMode::Layout),
+                other => {
+                    warn!("SetEditorMode with unknown mode: {}", other);
+                    InterpretResult::Nothing
+                }
+            },
+            InteractionEvent::LayoutThumbnailClicked { layout_id } => {
+                if layout_id.is_empty() {
+                    InterpretResult::Nothing
+                } else {
+                    InterpretResult::SetActiveLayout(layout_id)
+                }
+            }
+            InteractionEvent::AddLayoutRequested => {
+                match build_insert_layout_after_active(
+                    &self.dispatcher,
+                    self.active_layout.as_ref(),
+                ) {
+                    Some((cmd, new_id)) => {
+                        self.pending_new_active_layout = Some(new_id);
+                        InterpretResult::Command(cmd)
+                    }
+                    None => InterpretResult::Nothing,
+                }
+            }
+            InteractionEvent::LayoutNameEditRequested { layout_id, new_name } => {
+                if layout_id.is_empty()
+                    || !self.dispatcher.deck().theme.layouts.contains_key(&layout_id)
+                {
+                    InterpretResult::Nothing
+                } else {
+                    InterpretResult::Command(Box::new(SetLayoutName { layout_id, new_name }))
+                }
+            }
+            InteractionEvent::GlobalsCssEditRequested { new_css } => {
+                // No-op when unchanged so the globals textarea blur doesn't
+                // push a dead history entry.
+                if self.dispatcher.deck().theme.globals_css == new_css {
+                    InterpretResult::Nothing
+                } else {
+                    InterpretResult::Command(Box::new(SetGlobalsCss { new_css }))
+                }
+            }
+            // ---- Stage: animations ----
+            InteractionEvent::SetElementAnimation { element_id, category, enabled } => {
+                interpret_set_element_animation(
+                    self.dispatcher.deck(),
+                    self.dispatcher.mode(),
+                    self.active_slide.as_ref(),
+                    element_id,
+                    &category,
+                    enabled,
+                )
+            }
             InteractionEvent::KeyPressed { ref key, .. } if key == UNDO_KEY => {
                 InterpretResult::Undo
             }
@@ -548,6 +806,9 @@ impl ApplicationCore {
             }
             InteractionEvent::KeyPressed { ref key, .. } if key == SAVE_AS_KEY => {
                 InterpretResult::FileAction(FileAction::SaveAs)
+            }
+            InteractionEvent::KeyPressed { ref key, .. } if key == PRESENT_KEY => {
+                InterpretResult::StartPresentation
             }
             InteractionEvent::KeyPressed { ref key, .. }
                 if key == DELETE_KEY_BACKSPACE || key == DELETE_KEY_DELETE =>
@@ -577,7 +838,13 @@ impl ApplicationCore {
     // Dataflow: route through interpret(), then realize each result
     // variant via dispatcher calls and outbound IPC. Scheduling a flush
     // happens whenever the patch buffer transitions empty → non-empty.
+    // ElementIdEditRequested is handled ahead of interpret() because it
+    // needs a multi-step follow-up (remap the selection onto the new id)
+    // that a single InterpretResult cannot express.
     fn handle_interaction(&mut self, event: InteractionEvent) -> AppResult<()> {
+        if let InteractionEvent::ElementIdEditRequested { element_id, new_id } = &event {
+            return self.handle_element_id_edit(element_id.clone(), new_id.clone());
+        }
         let result: InterpretResult = self.interpret(event);
         match result {
             InterpretResult::Command(cmd) => {
@@ -595,7 +862,11 @@ impl ApplicationCore {
             }
             InterpretResult::Selection(sel) => {
                 self.selection = sel.clone();
-                self.sender.send(MessageKind::SetSelection(sel))
+                self.sender.send(MessageKind::SetSelection(sel))?;
+                // Keep the inspector's animation toggles in sync with the
+                // newly-selected element (the panel filters the slide's
+                // timeline by the selected id client-side).
+                self.send_slide_animations()
             }
             InterpretResult::TransactionBegin { label, snapshot } => {
                 self.dispatcher.begin_transaction(label, snapshot);
@@ -632,7 +903,137 @@ impl ApplicationCore {
             }
             InterpretResult::FileAction(action) => self.run_file_action(action),
             InterpretResult::SetActiveSlide(slide_id) => self.set_active_slide(slide_id),
+            InterpretResult::SetEditorMode(mode) => self.set_editor_mode(mode),
+            InterpretResult::SetActiveLayout(layout_id) => self.set_active_layout(layout_id),
+            InterpretResult::StartPresentation => {
+                self.start_presentation();
+                Ok(())
+            }
             InterpretResult::Nothing => Ok(()),
+        }
+    }
+
+    // start_presentation
+    // Inputs: none (reads the deck + active slide).
+    // Output: side-effect; records the start slide index and asks the event
+    // loop to build the presentation window. No-op when already presenting or
+    // when the deck has no slides (nothing to present).
+    fn start_presentation(&mut self) {
+        if self.present.is_some() {
+            debug!("start_presentation: already presenting; ignoring");
+            return;
+        }
+        let idx: usize = match present_start_index(
+            self.dispatcher.deck(),
+            self.active_slide.as_ref(),
+        ) {
+            Some(i) => i,
+            None => {
+                warn!("start_presentation: empty deck; nothing to present");
+                return;
+            }
+        };
+        info!(slide_index = idx, "presentation requested");
+        self.pending_present_index = Some(idx);
+        (self.request_present_open)();
+    }
+
+    // begin_presentation
+    // Inputs: the presentation WebviewSender built by main.rs.
+    // Output: side-effect; constructs the PresentationSession at the pending
+    // start index. The reveal/mount happens later, when the presentation
+    // webview reports Ready.
+    pub fn begin_presentation(&mut self, sender: WebviewSender) {
+        let idx: usize = self.pending_present_index.take().unwrap_or(0);
+        assert!(
+            !self.dispatcher.deck().slide_order.is_empty(),
+            "begin_presentation: empty deck"
+        );
+        info!(slide_index = idx, "presentation window ready; session begun");
+        self.present = Some(PresentationSession::new(sender, idx));
+    }
+
+    // handle_present_control
+    // Inputs: a control posted by the presentation webview.
+    // Output: Ok(()) on success.
+    // Dataflow: Ready mounts the start slide; Advance/Back step the cursor and
+    // send the resulting reveal; Exit asks the event loop to tear the window
+    // down (main.rs owns the close path so the webview drops before the window).
+    pub fn handle_present_control(&mut self, ctrl: PresentInbound) -> AppResult<()> {
+        match ctrl {
+            PresentInbound::Ready => self.handle_present_ready(),
+            PresentInbound::Advance => self.present_step(true),
+            PresentInbound::Back => self.present_step(false),
+            PresentInbound::Exit => {
+                info!("presentation exit requested");
+                (self.request_present_close)();
+                Ok(())
+            }
+        }
+    }
+
+    // handle_present_ready
+    // Inputs: none.
+    // Output: Ok(()) after sending PresentInit + PresentSlide + the snapped
+    // step-0 PresentReveal. No-op if there is no active session.
+    fn handle_present_ready(&mut self) -> AppResult<()> {
+        let session = match &self.present {
+            Some(s) => s,
+            None => return Ok(()),
+        };
+        let deck: &Deck = self.dispatcher.deck();
+        let init = PresentInitPayload {
+            animation_keyframes_css: ANIMATION_KEYFRAMES_CSS.to_string(),
+            width: deck.manifest.dimensions.width,
+            height: deck.manifest.dimensions.height,
+        };
+        session.sender().send(MessageKind::PresentInit(init))?;
+        // Ship asset bytes before the first mount so images resolve on the very
+        // first paint (the present webview mints its own blob URLs from these).
+        if let Some(bundle) = build_assets_bundle(deck) {
+            session.sender().send(MessageKind::PresentAssets(bundle))?;
+        }
+        if let Some(slide) = session.current_slide_payload(deck) {
+            session.sender().send(MessageKind::PresentSlide(slide))?;
+        }
+        if let Some(reveal) = session.current_reveal(deck) {
+            session.sender().send(MessageKind::PresentReveal(reveal))?;
+        }
+        Ok(())
+    }
+
+    // present_step
+    // Inputs: forward (true = Advance, false = Back).
+    // Output: Ok(()); advances/rewinds the cursor and sends the resulting
+    // reveal (and a slide mount when the step crossed slides). No-op without a
+    // session. The deck and the session live in disjoint fields of self, so the
+    // immutable deck borrow and the mutable session borrow coexist.
+    fn present_step(&mut self, forward: bool) -> AppResult<()> {
+        let deck: &Deck = self.dispatcher.deck();
+        let session = match self.present.as_mut() {
+            Some(s) => s,
+            None => return Ok(()),
+        };
+        let step: PresentStep = if forward { session.advance(deck) } else { session.back(deck) };
+        match step {
+            PresentStep::Reveal(reveal) => {
+                session.sender().send(MessageKind::PresentReveal(reveal))
+            }
+            PresentStep::SlideChanged { slide, reveal } => {
+                session.sender().send(MessageKind::PresentSlide(slide))?;
+                session.sender().send(MessageKind::PresentReveal(reveal))
+            }
+            PresentStep::Unchanged => Ok(()),
+        }
+    }
+
+    // end_presentation
+    // Inputs: none.
+    // Output: side-effect; drops the session (and with it the presentation
+    // WebviewSender / WebView). main.rs drops the Window afterwards.
+    pub fn end_presentation(&mut self) {
+        if self.present.take().is_some() {
+            info!("presentation session ended");
         }
     }
 
@@ -701,6 +1102,60 @@ impl ApplicationCore {
         }
     }
 
+    // handle_element_id_edit
+    // Inputs: the element's current id and the raw replacement text typed
+    // in the object panel.
+    // Output: Ok(()). Validates and sanitizes the new id, dispatches
+    // SetElementId (which remounts the slide and rebuilds the object
+    // tree), then remaps the selection so the renamed element stays
+    // selected. No-ops (empty/unchanged id, missing element, collision)
+    // re-send the object tree so the panel's edit-in-place input reverts
+    // to the real id.
+    // Dataflow: sanitize -> resolve active slide -> guard empty/unchanged
+    // -> guard missing element / id collision -> dispatch -> remap
+    // selection -> SetSelection.
+    fn handle_element_id_edit(&mut self, old_id: ElementId, raw_new_id: String) -> AppResult<()> {
+        let new_id: ElementId = sanitize_element_id(&raw_new_id);
+        let slide_id: SlideId = match &self.active_slide {
+            Some(s) => s.clone(),
+            None => return Ok(()),
+        };
+        if new_id.is_empty() || new_id == old_id {
+            // Nothing to change; refresh the panel so the inline editor
+            // reverts to the element's real id.
+            return self.send_object_tree();
+        }
+        let slide = match self.dispatcher.deck().slides.get(&slide_id) {
+            Some(s) => s,
+            None => return Ok(()),
+        };
+        if slide.find_element(&old_id).is_none() {
+            return Ok(());
+        }
+        if slide.find_element(&new_id).is_some() {
+            warn!(new_id = %new_id, "element id already in use on slide; ignoring rename");
+            return self.send_object_tree();
+        }
+
+        self.dispatch_and_maybe_flush(Box::new(SetElementId {
+            target: CanvasTarget::Slide(slide_id),
+            old_id: old_id.clone(),
+            new_id: new_id.clone(),
+        }));
+
+        let mut remapped: bool = false;
+        for id in self.selection.element_ids.iter_mut() {
+            if *id == old_id {
+                *id = new_id.clone();
+                remapped = true;
+            }
+        }
+        if remapped {
+            self.sender.send(MessageKind::SetSelection(self.selection.clone()))?;
+        }
+        Ok(())
+    }
+
     // react_to_outcome
     // Inputs: a DispatchOutcome from dispatch / undo / redo.
     // Output: side-effect; honors the structural flags:
@@ -715,8 +1170,42 @@ impl ApplicationCore {
     // Errors logged, not propagated — these are housekeeping sends that
     // should never fail a primary edit.
     fn react_to_outcome(&mut self, outcome: crate::commands::DispatchOutcome) {
+        // Surface any non-fatal advisories first (an accommodation warning
+        // still applied the command), regardless of which structural branch
+        // the outcome takes below.
+        for msg in &outcome.warnings {
+            if let Err(e) = self.sender.send(MessageKind::Notice { message: msg.clone() }) {
+                warn!("notice send failed: {}", e);
+            }
+        }
         if outcome.affects_slide_list {
             self.resync_after_slide_list_change();
+            return;
+        }
+        if outcome.affects_layout_list {
+            self.resync_after_layout_list_change();
+            return;
+        }
+        if outcome.affects_globals {
+            // Remount the active canvas so the new globals CSS is visible,
+            // and (in layout mode) refresh the layout list so the globals
+            // textarea + thumbnails reflect the committed value.
+            if let Err(e) = self.send_active_slide() {
+                warn!("remount after globals change failed: {}", e);
+            }
+            if self.dispatcher.mode() == EditorMode::Layout
+                && let Err(e) = self.send_layout_list()
+            {
+                warn!("layout list broadcast after globals change failed: {}", e);
+            }
+            return;
+        }
+        if outcome.affects_animations {
+            // The timeline changed; rebroadcast it so the inspector toggles
+            // resync. No remount (animations have no static visual effect).
+            if let Err(e) = self.send_slide_animations() {
+                warn!("animations broadcast after dispatch failed: {}", e);
+            }
             return;
         }
         if outcome.requires_remount {
@@ -770,6 +1259,37 @@ impl ApplicationCore {
         }
     }
 
+    // resync_after_layout_list_change
+    // Layout-mode analogue of resync_after_slide_list_change: re-establish a
+    // coherent active layout after the theme's layout set changed (add /
+    // remove / rename / undo), then rebroadcast the layout list, clear
+    // selection, and remount the active canvas.
+    fn resync_after_layout_list_change(&mut self) {
+        if let Some(pending) = self.pending_new_active_layout.take()
+            && self.dispatcher.deck().theme.layouts.contains_key(&pending)
+        {
+            self.active_layout = Some(pending);
+        }
+        let active_valid: bool = self
+            .active_layout
+            .as_ref()
+            .map(|id| self.dispatcher.deck().theme.layouts.contains_key(id))
+            .unwrap_or(false);
+        if !active_valid {
+            self.active_layout = self.dispatcher.deck().theme.layout_order.first().cloned();
+        }
+        self.selection = SelectionState::empty();
+        if let Err(e) = self.send_layout_list() {
+            warn!("layout list broadcast after layout-list change failed: {}", e);
+        }
+        if let Err(e) = self.sender.send(MessageKind::SetSelection(SelectionState::empty())) {
+            warn!("selection clear after layout-list change failed: {}", e);
+        }
+        if let Err(e) = self.send_active_slide() {
+            warn!("remount after layout-list change failed: {}", e);
+        }
+    }
+
     // snapshot_for_drag
     // Inputs: the element id being dragged.
     // Output: a TransactionSnapshot pre-loaded with the element's current
@@ -777,19 +1297,19 @@ impl ApplicationCore {
     // positions from cumulative drag deltas.
     fn snapshot_for_drag(&self, element_id: &str) -> TransactionSnapshot {
         let mut snap: TransactionSnapshot = TransactionSnapshot::empty();
-        let slide_id: SlideId = match &self.active_slide {
-            Some(id) => id.clone(),
+        let target: CanvasTarget = match self.active_canvas() {
+            Some(t) => t,
             None => return snap,
         };
-        let slide = match self.dispatcher.deck().slides.get(&slide_id) {
-            Some(s) => s,
+        let canvas = match self.dispatcher.deck().canvas(&target) {
+            Some(c) => c,
             None => return snap,
         };
-        let el = match slide.find_element(element_id) {
+        let el = match canvas.find_element(element_id) {
             Some(e) => e,
             None => return snap,
         };
-        snap.record_geometry(slide_id, element_id.to_string(), el.geometry.clone());
+        snap.record_geometry(target, element_id.to_string(), el.geometry.clone());
         snap
     }
 
@@ -801,7 +1321,7 @@ impl ApplicationCore {
     // wrap into a CompositeCommand so a single undo reverses the entire
     // delete.
     fn interpret_delete_selection(&self) -> InterpretResult {
-        interpret_delete_selection(&self.dispatcher, self.active_slide.as_ref(), &self.selection)
+        interpret_delete_selection(&self.dispatcher, self.active_canvas(), &self.selection)
     }
 
     // interpret_asset_imported
@@ -872,7 +1392,7 @@ impl ApplicationCore {
         let position_in_parent: usize =
             self.dispatcher.deck().slides[&slide_id].root.children.len();
         InterpretResult::Command(Box::new(InsertElement {
-            slide_id,
+            target: CanvasTarget::Slide(slide_id),
             parent_id,
             position: position_in_parent,
             node,
@@ -888,7 +1408,7 @@ impl ApplicationCore {
         let slide = self.dispatcher.deck().slides.get(&slide_id)?;
         let first = slide.root.children.first()?;
         let cmd = MoveElement {
-            slide_id,
+            target: CanvasTarget::Slide(slide_id),
             element_id: first.id.clone(),
             new_position: Point {
                 x: first.geometry.x + DEBUG_NUDGE_PX,
@@ -1101,6 +1621,57 @@ fn ensure_extension(path: PathBuf, ext: &str) -> PathBuf {
     }
 }
 
+// build_assets_bundle
+// Inputs: the deck (reads its asset registry).
+// Output: an AssetsBundle carrying every registered asset's bytes
+// (base64-encoded), or None when the deck has no assets (an empty bundle is
+// harmless but not worth the IPC). Shared by the editor's AssetsUpdate path and
+// the presentation webview's PresentAssets path so both build their blob-URL
+// caches from identical data — a `blob:` URL minted in one webview is invalid in
+// the other, so each context must receive the raw bytes and mint its own.
+fn build_assets_bundle(deck: &Deck) -> Option<AssetsBundle> {
+    let registry = &deck.assets;
+    if registry.is_empty() {
+        return None;
+    }
+    let mut payloads: Vec<AssetPayload> = Vec::with_capacity(registry.entry_count());
+    for entry in &registry.assets {
+        let bytes: &Vec<u8> = match registry.files.get(&entry.path) {
+            Some(b) => b,
+            None => {
+                warn!(asset_id = %entry.id, "build_assets_bundle: file bytes missing");
+                continue;
+            }
+        };
+        payloads.push(AssetPayload {
+            asset_id: entry.id.clone(),
+            media_type: entry.media_type.clone(),
+            content_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+        });
+    }
+    if payloads.is_empty() {
+        return None;
+    }
+    Some(AssetsBundle { assets: payloads })
+}
+
+// present_start_index
+// Inputs: the deck and the editor's active slide id.
+// Output: the index into `deck.slide_order` the presentation should open on —
+// the active slide's position, falling back to the first slide, or None when
+// the deck has no slides (presentation is impossible).
+fn present_start_index(deck: &Deck, active: Option<&SlideId>) -> Option<usize> {
+    if deck.slide_order.is_empty() {
+        return None;
+    }
+    if let Some(a) = active
+        && let Some(i) = deck.slide_order.iter().position(|s| s == a)
+    {
+        return Some(i);
+    }
+    Some(0)
+}
+
 // interpret_property_changed
 // Inputs: active slide id (the inspector targets the currently mounted
 // slide), element id, property name, value string.
@@ -1119,14 +1690,14 @@ fn ensure_extension(path: PathBuf, ext: &str) -> PathBuf {
 // The function is intentionally a free function so both ApplicationCore
 // (production) and the test mirror `interpret_inline` can call it.
 fn interpret_property_changed(
-    active_slide: Option<&SlideId>,
+    active: Option<CanvasTarget>,
     element_id: ElementId,
     property: String,
     value: String,
 ) -> InterpretResult {
     assert!(!element_id.is_empty(), "interpret_property_changed: empty element_id");
-    let slide_id: SlideId = match active_slide {
-        Some(sid) => sid.clone(),
+    let target: CanvasTarget = match active {
+        Some(t) => t,
         None => return InterpretResult::Nothing,
     };
 
@@ -1139,7 +1710,7 @@ fn interpret_property_changed(
             }
         };
         return InterpretResult::Command(Box::new(SetGeometryProperty {
-            slide_id,
+            target,
             element_id,
             property: geom_prop,
             new_value: parsed,
@@ -1148,14 +1719,14 @@ fn interpret_property_changed(
 
     if value.trim().is_empty() {
         return InterpretResult::Command(Box::new(RemoveInlineStyle {
-            slide_id,
+            target,
             element_id,
             property,
         }));
     }
 
     InterpretResult::Command(Box::new(SetInlineStyle {
-        slide_id,
+        target,
         element_id,
         property,
         new_value: value,
@@ -1175,18 +1746,18 @@ fn interpret_property_changed(
 // unwrap based on count.
 fn interpret_delete_selection(
     dispatcher: &CommandDispatcher,
-    active_slide: Option<&SlideId>,
+    active: Option<CanvasTarget>,
     selection: &SelectionState,
 ) -> InterpretResult {
-    let slide_id: SlideId = match active_slide {
-        Some(s) => s.clone(),
+    let target: CanvasTarget = match active {
+        Some(t) => t,
         None => return InterpretResult::Nothing,
     };
     if selection.element_ids.is_empty() {
         return InterpretResult::Nothing;
     }
-    let slide = match dispatcher.deck().slides.get(&slide_id) {
-        Some(s) => s,
+    let canvas = match dispatcher.deck().canvas(&target) {
+        Some(c) => c,
         None => return InterpretResult::Nothing,
     };
     // Filter out elements whose ancestor is also selected — removing
@@ -1199,18 +1770,18 @@ fn interpret_delete_selection(
         .collect();
     let mut commands: Vec<Box<dyn Command>> = Vec::new();
     for eid in &selection.element_ids {
-        if eid.is_empty() || slide.is_root_id(eid) {
+        if eid.is_empty() || canvas.is_root_id(eid) {
             continue;
         }
-        let target = match slide.find_element(eid) {
+        let node = match canvas.find_element(eid) {
             Some(n) => n,
             None => continue,
         };
-        if has_selected_ancestor(&slide.root, &target.id, &selected_set) {
+        if has_selected_ancestor(canvas.root(), &node.id, &selected_set) {
             continue;
         }
         commands.push(Box::new(RemoveElementCommand {
-            slide_id: slide_id.clone(),
+            target: target.clone(),
             element_id: eid.clone(),
         }));
     }
@@ -1286,16 +1857,13 @@ fn build_object_tree(slide: &SlideNode) -> ObjectTreeData {
 
 // build_object_tree_node
 // Inputs: an ElementNode.
-// Output: the ObjectTreeNode mirror — id, type token, display name
-// (name field, falling back to the element id), and recursive children.
+// Output: the ObjectTreeNode mirror — id, type token, and recursive
+// children. The panel labels each row with the id itself (no separate
+// display name), so the shown value and the editable identity match.
 // Dataflow: pure walk; iteration order matches the source children Vec,
 // which is the z-order shown in the panel.
 fn build_object_tree_node(node: &ElementNode) -> ObjectTreeNode {
     assert!(!node.id.is_empty(), "build_object_tree_node: empty id");
-    let display_name: String = match &node.name {
-        Some(name) if !name.trim().is_empty() => name.clone(),
-        _ => node.id.clone(),
-    };
     let mut children: Vec<ObjectTreeNode> = Vec::with_capacity(node.children.len());
     for child in &node.children {
         children.push(build_object_tree_node(child));
@@ -1303,7 +1871,6 @@ fn build_object_tree_node(node: &ElementNode) -> ObjectTreeNode {
     ObjectTreeNode {
         id: node.id.clone(),
         element_type: node.element_type.as_html().to_string(),
-        display_name,
         children,
     }
 }
@@ -1413,13 +1980,13 @@ fn build_image_element_from_asset(
 // Output: an InterpretResult dispatching RenameElement, or Nothing when
 // there is no active slide / the element id is missing.
 fn interpret_rename_request(
-    active_slide: Option<&SlideId>,
+    active: Option<CanvasTarget>,
     element_id: ElementId,
     new_name: String,
 ) -> InterpretResult {
     assert!(!element_id.is_empty(), "interpret_rename_request: empty id");
-    let slide_id: SlideId = match active_slide {
-        Some(s) => s.clone(),
+    let target: CanvasTarget = match active {
+        Some(t) => t,
         None => return InterpretResult::Nothing,
     };
     let new_name: Option<String> = if new_name.trim().is_empty() {
@@ -1428,7 +1995,7 @@ fn interpret_rename_request(
         Some(new_name)
     };
     InterpretResult::Command(Box::new(RenameElement {
-        slide_id,
+        target,
         element_id,
         new_name,
     }))
@@ -1439,19 +2006,19 @@ fn interpret_rename_request(
 // the post-removal position in the target parent's children list.
 // Output: an InterpretResult dispatching ReparentElement.
 fn interpret_reparent_request(
-    active_slide: Option<&SlideId>,
+    active: Option<CanvasTarget>,
     element_id: ElementId,
     new_parent_id: ElementId,
     new_position: usize,
 ) -> InterpretResult {
     assert!(!element_id.is_empty(), "interpret_reparent_request: empty element id");
     assert!(!new_parent_id.is_empty(), "interpret_reparent_request: empty parent id");
-    let slide_id: SlideId = match active_slide {
-        Some(s) => s.clone(),
+    let target: CanvasTarget = match active {
+        Some(t) => t,
         None => return InterpretResult::Nothing,
     };
     InterpretResult::Command(Box::new(ReparentElement {
-        slide_id,
+        target,
         element_id,
         new_parent_id,
         new_position,
@@ -1470,21 +2037,21 @@ fn interpret_reparent_request(
 // omitted) -> build the element via construct_default_element_for_type.
 fn interpret_insert_element_request(
     dispatcher: &CommandDispatcher,
-    active_slide: Option<&SlideId>,
+    active: Option<CanvasTarget>,
     element_type: String,
     parent_id: Option<ElementId>,
     position: Option<usize>,
 ) -> InterpretResult {
-    let slide_id: SlideId = match active_slide {
-        Some(s) => s.clone(),
+    let target: CanvasTarget = match active {
+        Some(t) => t,
         None => return InterpretResult::Nothing,
     };
-    let slide = match dispatcher.deck().slides.get(&slide_id) {
-        Some(s) => s,
+    let canvas = match dispatcher.deck().canvas(&target) {
+        Some(c) => c,
         None => return InterpretResult::Nothing,
     };
-    let parent_id: ElementId = parent_id.unwrap_or_else(|| slide.root.id.clone());
-    let parent_children_len: usize = match slide.find_element(&parent_id) {
+    let parent_id: ElementId = parent_id.unwrap_or_else(|| canvas.root().id.clone());
+    let parent_children_len: usize = match canvas.find_element(&parent_id) {
         Some(n) => n.children.len(),
         None => return InterpretResult::Nothing,
     };
@@ -1498,11 +2065,279 @@ fn interpret_insert_element_request(
         }
     };
     InterpretResult::Command(Box::new(InsertElement {
-        slide_id,
+        target,
         parent_id,
         position,
         node,
     }))
+}
+
+// sanitize_element_id
+// Inputs: the raw id text the user typed.
+// Output: the id with every run of whitespace collapsed to a single '_'
+// (and leading/trailing whitespace dropped), e.g. "my  box \t" -> "my_box".
+// A new id that is all whitespace collapses to the empty string, which the
+// caller treats as "no change".
+fn sanitize_element_id(raw: &str) -> String {
+    raw.split_whitespace().collect::<Vec<&str>>().join("_")
+}
+
+// build_set_slide_title_command
+// Inputs: read access to the deck, the target slide id, and the new title.
+// Output: Some(SetSlideTitle) when a manifest entry for the slide exists
+//   AND the title actually changed; None otherwise (unknown slide, or an
+//   unchanged title that would only add a dead history entry).
+// Errors: none — failures collapse to None.
+fn build_set_slide_title_command(
+    dispatcher: &CommandDispatcher,
+    slide_id: &SlideId,
+    new_title: &str,
+) -> Option<Box<dyn Command>> {
+    let entry = dispatcher
+        .deck()
+        .manifest
+        .slides
+        .iter()
+        .find(|e| e.id == *slide_id)?;
+    if entry.title == new_title {
+        return None;
+    }
+    Some(Box::new(SetSlideTitle {
+        slide_id: slide_id.clone(),
+        new_title: new_title.to_string(),
+    }))
+}
+
+// build_set_text_command
+// Inputs:
+//   dispatcher   — read access to the live deck.
+//   active_slide — the slide currently being edited, if any.
+//   element_id   — the text element whose content was committed.
+//   new_text     — the final plain text from the webview edit session.
+// Output: Some(SetTextContent) when the element exists, is a Text element,
+//   AND the text actually changed; None otherwise. Returning None for an
+//   unchanged edit keeps double-click-then-click-away from pushing an
+//   empty history entry.
+// Errors: none — every validation failure collapses to None so malformed
+//   inbound IPC can never panic the editor.
+// Control flow: resolve the active slide -> find the element -> confirm it
+//   carries Text content and that new_text differs from the current plain
+//   text -> build the command.
+fn build_set_text_command(
+    dispatcher: &CommandDispatcher,
+    active: Option<CanvasTarget>,
+    element_id: ElementId,
+    new_text: String,
+) -> Option<Box<dyn Command>> {
+    let target: CanvasTarget = active?;
+    assert!(!target.id().is_empty(), "build_set_text_command: active canvas id is empty");
+    let canvas = dispatcher.deck().canvas(&target)?;
+    let element = canvas.find_element(&element_id)?;
+    let current: &str = match &element.content {
+        ElementContent::Text(rt) => rt.plain.as_str(),
+        _ => return None,
+    };
+    if current == new_text {
+        return None;
+    }
+    Some(Box::new(SetTextContent {
+        target,
+        element_id,
+        new_content: RichText::new(new_text),
+    }))
+}
+
+// interpret_set_element_animation
+// Inputs: the deck (read), editor mode, active slide, target element, the
+// category string ("entrance"|"exit"), and the toggle state.
+// Output: an InsertAnimation when enabling an absent animation of that
+// category, a RemoveAnimation when disabling a present one, else Nothing.
+// Animations are slide-only, so this no-ops outside Slide mode. The minimal
+// UI uses the built-in "appear"/"disappear" keyframes with default timing.
+fn interpret_set_element_animation(
+    deck: &Deck,
+    mode: EditorMode,
+    active_slide: Option<&SlideId>,
+    element_id: ElementId,
+    category: &str,
+    enabled: bool,
+) -> InterpretResult {
+    if mode != EditorMode::Slide {
+        return InterpretResult::Nothing;
+    }
+    let slide_id: SlideId = match active_slide {
+        Some(s) => s.clone(),
+        None => return InterpretResult::Nothing,
+    };
+    let cat = match category {
+        "entrance" => AnimationCategory::Entrance,
+        "exit" => AnimationCategory::Exit,
+        _ => return InterpretResult::Nothing,
+    };
+    let slide = match deck.slides.get(&slide_id) {
+        Some(s) => s,
+        None => return InterpretResult::Nothing,
+    };
+    let existing: Option<String> = slide
+        .animations
+        .iter()
+        .find(|e| e.element_id == element_id && e.category == cat)
+        .map(|e| e.id.clone());
+    match (enabled, existing) {
+        (true, None) => {
+            let keyframe = if cat == AnimationCategory::Entrance { "appear" } else { "disappear" };
+            let entry = AnimationEntry::new(
+                new_animation_id(),
+                element_id,
+                keyframe.to_string(),
+                cat,
+                AnimationTrigger::OnClick,
+                AnimationTiming::default(),
+            );
+            InterpretResult::Command(Box::new(InsertAnimation {
+                slide_id,
+                position: slide.animations.len(),
+                entry,
+            }))
+        }
+        (false, Some(id)) => {
+            InterpretResult::Command(Box::new(RemoveAnimation { slide_id, animation_id: id }))
+        }
+        _ => InterpretResult::Nothing,
+    }
+}
+
+// build_insert_slide_after_active
+// Inputs:
+//   dispatcher   — read access to the live deck (slide_order is consulted
+//                  to derive the insert position).
+//   active_slide — the currently-mounted slide, if any. The new slide is
+//                  inserted directly after it; when None (or the active id
+//                  is somehow absent from the order) the slide is appended.
+// Output: Some((InsertSlide command, fresh slide id)). The caller stashes
+//   the id as the pending new active slide so react_to_outcome switches to
+//   it once the command applies. Never None in practice — construction
+//   cannot fail — but the Option keeps the interpret arm uniform with the
+//   other request builders.
+// Errors: none here; InsertSlide validates duplicate ids at apply time.
+// Control flow: mint a fresh slide id -> locate the active slide's index
+//   to derive position (+1), defaulting to append -> build an empty
+//   blank-layout SlideNode plus its matching manifest entry -> wrap them
+//   in an InsertSlide command.
+fn build_insert_slide_after_active(
+    dispatcher: &CommandDispatcher,
+    active_slide: Option<&SlideId>,
+) -> Option<(Box<dyn Command>, SlideId)> {
+    use crate::bundle::SlideEntry;
+    use crate::bundle::manifest::slide_path_for;
+    use crate::deck::builders::group_element;
+    use crate::deck::new_slide_id;
+
+    let order: &[SlideId] = &dispatcher.deck().slide_order;
+    let position: usize = match active_slide {
+        Some(id) => order.iter().position(|s| s == id).map(|i| i + 1).unwrap_or(order.len()),
+        None => order.len(),
+    };
+
+    let slide_id: SlideId = new_slide_id();
+    assert!(!slide_id.is_empty(), "build_insert_slide_after_active: minted empty slide id");
+    let root: ElementNode = group_element(new_element_id(), vec![]);
+    let slide: SlideNode = SlideNode::new(slide_id.clone(), "blank".into(), root);
+
+    let manifest_entry: SlideEntry = SlideEntry {
+        id: slide_id.clone(),
+        path: slide_path_for(&slide_id),
+        layout_id: "blank".into(),
+        title: String::new(),
+        thumbnail: None,
+        transition: None,
+        duration_hint: None,
+        notes_ref: None,
+        animations: Vec::new(),
+    };
+
+    let cmd: Box<dyn Command> = Box::new(InsertSlide { position, slide, manifest_entry });
+    Some((cmd, slide_id))
+}
+
+// build_insert_layout_after_active
+// Inputs: dispatcher (to read layout_order for the insert position and to
+// dedupe the new id) and the active layout id.
+// Output: Some((InsertLayout command, fresh layout id)). The caller stashes
+// the id as the pending new active layout. Mirrors
+// build_insert_slide_after_active.
+// Control flow: derive position (+1 after the active layout, else append)
+// -> mint a unique "Layout N" name / slugged id not already in the theme
+// -> build an empty blank-rooted LayoutNode -> wrap in InsertLayout.
+fn build_insert_layout_after_active(
+    dispatcher: &CommandDispatcher,
+    active_layout: Option<&LayoutId>,
+) -> Option<(Box<dyn Command>, LayoutId)> {
+    use crate::deck::builders::group_element;
+
+    let order: &[LayoutId] = &dispatcher.deck().theme.layout_order;
+    let position: usize = match active_layout {
+        Some(id) => order.iter().position(|l| l == id).map(|i| i + 1).unwrap_or(order.len()),
+        None => order.len(),
+    };
+
+    // Mint a unique display name + slugged id. Bounded by a generous cap so
+    // the search always terminates (CLAUDE.md: loops need a fixed bound).
+    let mut n: usize = order.len() + 1;
+    let mut layout_id: LayoutId = String::new();
+    let mut name: String = String::new();
+    const MAX_TRIES: usize = 10_000;
+    let mut tries: usize = 0;
+    while tries < MAX_TRIES {
+        name = format!("Layout {n}");
+        layout_id = sanitize_element_id(&name.to_lowercase());
+        if !dispatcher.deck().theme.layouts.contains_key(&layout_id) {
+            break;
+        }
+        n += 1;
+        tries += 1;
+    }
+    assert!(!layout_id.is_empty(), "build_insert_layout_after_active: minted empty id");
+
+    let root: ElementNode = group_element(new_element_id(), vec![]);
+    let layout: LayoutNode = LayoutNode::new(layout_id.clone(), name, root);
+    let cmd: Box<dyn Command> = Box::new(InsertLayout { position, layout });
+    Some((cmd, layout_id))
+}
+
+// build_layout_list_data
+// Inputs: the deck (layout_order, layouts, theme/globals CSS, dimensions)
+// and the active layout id.
+// Output: LayoutListData ready to ship in LayoutListUpdate, iterating
+// layout_order so the wire payload matches display order. Each layout
+// serializes through a transient SlideNode so it reuses the slide
+// serializer (a layout root is a Group, like a slide root).
+fn build_layout_list_data(deck: &Deck, active_layout: Option<&LayoutId>) -> LayoutListData {
+    let mut layouts: Vec<LayoutListEntry> = Vec::with_capacity(deck.theme.layout_order.len());
+    for lid in &deck.theme.layout_order {
+        let layout = match deck.theme.layouts.get(lid) {
+            Some(l) => l,
+            None => {
+                warn!(layout_id = %lid, "build_layout_list_data: layout_order ref missing");
+                continue;
+            }
+        };
+        let transient: SlideNode =
+            SlideNode::new(layout.id.clone(), layout.id.clone(), layout.root.clone());
+        layouts.push(LayoutListEntry {
+            layout_id: lid.clone(),
+            name: layout.name.clone(),
+            html: serialize_slide(&transient),
+        });
+    }
+    LayoutListData {
+        layouts,
+        active_layout_id: active_layout.cloned(),
+        theme_css: deck.theme.theme_css.clone(),
+        globals_css: deck.theme.globals_css.clone(),
+        width: deck.manifest.dimensions.width,
+        height: deck.manifest.dimensions.height,
+    }
 }
 
 // construct_default_element_for_type
@@ -1662,7 +2497,7 @@ mod tests {
                 if let Some(sid) = active_slide.clone() {
                     if let Some(slide) = dispatcher.deck().slides.get(&sid) {
                         if let Some(el) = slide.find_element(&element_id) {
-                            snap.record_geometry(sid, element_id, el.geometry.clone());
+                            snap.record_geometry(CanvasTarget::Slide(sid), element_id, el.geometry.clone());
                         }
                     }
                 }
@@ -1676,13 +2511,13 @@ mod tests {
                 };
                 let (sx, sy) = match dispatcher
                     .transaction()
-                    .and_then(|t| t.start_snapshot.position_of(&sid, &element_id))
+                    .and_then(|t| t.start_snapshot.position_of(&CanvasTarget::Slide(sid.clone()), &element_id))
                 {
                     Some(p) => p,
                     None => return InterpretResult::Nothing,
                 };
                 InterpretResult::CommitTransactionWith(Box::new(MoveElement {
-                    slide_id: sid,
+                    target: CanvasTarget::Slide(sid),
                     element_id,
                     new_position: Point { x: sx + delta.x, y: sy + delta.y },
                     previous_position: None,
@@ -1693,7 +2528,7 @@ mod tests {
                 if let Some(sid) = active_slide.clone() {
                     if let Some(slide) = dispatcher.deck().slides.get(&sid) {
                         if let Some(el) = slide.find_element(&element_id) {
-                            snap.record_geometry(sid, element_id, el.geometry.clone());
+                            snap.record_geometry(CanvasTarget::Slide(sid), element_id, el.geometry.clone());
                         }
                     }
                 }
@@ -1714,13 +2549,13 @@ mod tests {
                 };
                 if dispatcher
                     .transaction()
-                    .and_then(|t| t.start_snapshot.position_of(&sid, &element_id))
+                    .and_then(|t| t.start_snapshot.position_of(&CanvasTarget::Slide(sid.clone()), &element_id))
                     .is_none()
                 {
                     return InterpretResult::Nothing;
                 }
                 InterpretResult::CommitTransactionWith(Box::new(ResizeElement {
-                    slide_id: sid,
+                    target: CanvasTarget::Slide(sid),
                     element_id,
                     new_x: new_position.x,
                     new_y: new_position.y,
@@ -1733,7 +2568,7 @@ mod tests {
             }
             InteractionEvent::PropertyChanged { element_id, property, value } => {
                 interpret_property_changed(
-                    active_slide.as_ref(),
+                    active_slide.clone().map(CanvasTarget::Slide),
                     element_id,
                     property,
                     value,
@@ -1751,20 +2586,20 @@ mod tests {
                 position,
             } => interpret_insert_element_request(
                 dispatcher,
-                active_slide.as_ref(),
+                active_slide.clone().map(CanvasTarget::Slide),
                 element_type,
                 parent_id,
                 position,
             ),
             InteractionEvent::RenameElementRequested { element_id, new_name } => {
-                interpret_rename_request(active_slide.as_ref(), element_id, new_name)
+                interpret_rename_request(active_slide.clone().map(CanvasTarget::Slide), element_id, new_name)
             }
             InteractionEvent::ReparentElementRequested {
                 element_id,
                 new_parent_id,
                 new_position,
             } => interpret_reparent_request(
-                active_slide.as_ref(),
+                active_slide.clone().map(CanvasTarget::Slide),
                 element_id,
                 new_parent_id,
                 new_position,
@@ -1797,7 +2632,7 @@ mod tests {
             InteractionEvent::KeyPressed { ref key, .. }
                 if key == DELETE_KEY_BACKSPACE || key == DELETE_KEY_DELETE =>
             {
-                interpret_delete_selection(dispatcher, active_slide.as_ref(), selection)
+                interpret_delete_selection(dispatcher, active_slide.clone().map(CanvasTarget::Slide), selection)
             }
             _ => InterpretResult::Nothing,
         }
@@ -1901,7 +2736,7 @@ mod tests {
         match interpret_inline(&d, &sel, &Some(sid.clone()), event) {
             InterpretResult::TransactionBegin { label, snapshot } => {
                 assert_eq!(label, "Move Element");
-                assert!(snapshot.position_of(&sid, &eid).is_some());
+                assert!(snapshot.position_of(&CanvasTarget::Slide(sid.clone()), &eid).is_some());
             }
             other => panic!("expected TransactionBegin, got {other:?}"),
         }
@@ -1915,7 +2750,7 @@ mod tests {
         let (mut d, sel, sid, eid) = fixture();
         let geo = d.deck().slides[&sid].find_element(&eid).unwrap().geometry.clone();
         let mut snap = TransactionSnapshot::empty();
-        snap.record_geometry(sid.clone(), eid.clone(), geo);
+        snap.record_geometry(CanvasTarget::Slide(sid.clone()), eid.clone(), geo);
         d.begin_transaction("Move Element", snap);
 
         let event = InteractionEvent::ElementDragged {
@@ -1934,7 +2769,7 @@ mod tests {
         let (mut d, sel, sid, eid) = fixture();
         let geo = d.deck().slides[&sid].find_element(&eid).unwrap().geometry.clone();
         let mut snap = TransactionSnapshot::empty();
-        snap.record_geometry(sid.clone(), eid.clone(), geo.clone());
+        snap.record_geometry(CanvasTarget::Slide(sid.clone()), eid.clone(), geo.clone());
         d.begin_transaction("Move Element", snap);
 
         let event = InteractionEvent::ElementDragEnded {
@@ -1986,12 +2821,12 @@ mod tests {
 
         // Begin: snapshot
         let mut snap = TransactionSnapshot::empty();
-        snap.record_geometry(sid.clone(), eid.clone(), start_geo.clone());
+        snap.record_geometry(CanvasTarget::Slide(sid.clone()), eid.clone(), start_geo.clone());
         d.begin_transaction("Move Element", snap);
 
         // Update: dispatch a MoveElement against the deck
         let cmd = MoveElement {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             new_position: Point { x: start_geo.x + 100.0, y: start_geo.y + 200.0 },
             previous_position: None,
@@ -2057,7 +2892,7 @@ mod tests {
         let (mut d, _sel, sid, eid) = fixture();
         let original = d.deck().slides[&sid].find_element(&eid).unwrap().geometry.clone();
         d.dispatch(Box::new(MoveElement {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             new_position: Point { x: original.x + 444.0, y: original.y + 222.0 },
             previous_position: None,
@@ -2074,7 +2909,7 @@ mod tests {
     fn dispatcher_redo_after_undo_reapplies_command() {
         let (mut d, _sel, sid, eid) = fixture();
         d.dispatch(Box::new(MoveElement {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             new_position: Point { x: 21.0, y: 84.0 },
             previous_position: None,
@@ -2156,12 +2991,12 @@ mod tests {
         let start = d.deck().slides[&sid].find_element(&eid).unwrap().geometry.clone();
 
         let mut snap = TransactionSnapshot::empty();
-        snap.record_geometry(sid.clone(), eid.clone(), start.clone());
+        snap.record_geometry(CanvasTarget::Slide(sid.clone()), eid.clone(), start.clone());
         d.begin_transaction(DRAG_TRANSACTION_LABEL, snap);
         let mut step: f64 = 0.0;
         while step < 32.0 {
             d.dispatch(Box::new(MoveElement {
-                slide_id: sid.clone(),
+                target: CanvasTarget::Slide(sid.clone()),
                 element_id: eid.clone(),
                 new_position: Point { x: start.x + step, y: start.y },
                 previous_position: None,
@@ -2254,7 +3089,7 @@ mod tests {
         // Seed an existing inline style, then trigger a clear.
         let (mut d, sel, sid, eid) = fixture();
         d.dispatch(Box::new(SetInlineStyle {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             property: "border".into(),
             new_value: "1px solid #000".into(),
@@ -2452,27 +3287,9 @@ mod tests {
         assert_eq!(tree.root_id, slide.root.id);
         assert_eq!(tree.nodes.len(), slide.root.children.len());
         for i in 0..tree.nodes.len() {
+            // The panel labels each row with the element id directly.
             assert_eq!(tree.nodes[i].id, slide.root.children[i].id);
-            // No element has a name by default → display_name falls back
-            // to the element id.
-            assert_eq!(tree.nodes[i].display_name, slide.root.children[i].id);
         }
-    }
-
-    #[test]
-    fn build_object_tree_uses_name_when_set_else_id() {
-        let mut deck = Deck::sample();
-        let sid = deck.slide_order[0].clone();
-        let eid = deck.slides[&sid].root.children[0].id.clone();
-        deck.slides
-            .get_mut(&sid)
-            .unwrap()
-            .find_element_mut(&eid)
-            .unwrap()
-            .name = Some("Heading".into());
-        let tree = build_object_tree(&deck.slides[&sid]);
-        assert_eq!(tree.nodes[0].display_name, "Heading");
-        assert_eq!(tree.nodes[1].display_name, deck.slides[&sid].root.children[1].id);
     }
 
     // ---------- Stage 9 fix: Backspace / Delete deletes selection ----------
@@ -2699,7 +3516,7 @@ mod tests {
             .find_element("el_a").unwrap().geometry.x;
         dispatcher
             .dispatch(Box::new(MoveElement {
-                slide_id: sid_a.clone(),
+                target: CanvasTarget::Slide(sid_a.clone()),
                 element_id: "el_a".into(),
                 new_position: Point { x: original_x + 250.0, y: 0.0 },
                 previous_position: None,
@@ -2755,7 +3572,7 @@ mod tests {
         match interpret_inline(&d, &sel, &Some(sid.clone()), event) {
             InterpretResult::TransactionBegin { label, snapshot } => {
                 assert_eq!(label, "Resize Element");
-                assert!(snapshot.position_of(&sid, &eid).is_some());
+                assert!(snapshot.position_of(&CanvasTarget::Slide(sid.clone()), &eid).is_some());
             }
             other => panic!("expected TransactionBegin, got {other:?}"),
         }
@@ -2781,7 +3598,7 @@ mod tests {
         let (mut d, sel, sid, eid) = fixture();
         let geo = d.deck().slides[&sid].find_element(&eid).unwrap().geometry.clone();
         let mut snap = TransactionSnapshot::empty();
-        snap.record_geometry(sid.clone(), eid.clone(), geo);
+        snap.record_geometry(CanvasTarget::Slide(sid.clone()), eid.clone(), geo);
         d.begin_transaction("Resize Element", snap);
 
         let event = InteractionEvent::ElementResizeEnded {
@@ -2827,12 +3644,12 @@ mod tests {
 
         // Started → snapshot.
         let mut snap = TransactionSnapshot::empty();
-        snap.record_geometry(sid.clone(), eid.clone(), original.clone());
+        snap.record_geometry(CanvasTarget::Slide(sid.clone()), eid.clone(), original.clone());
         d.begin_transaction("Resize Element", snap);
 
         // Ended → commit ResizeElement.
         let cmd = ResizeElement {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             new_x: original.x + 100.0,
             new_y: original.y + 50.0,
@@ -2955,5 +3772,301 @@ mod tests {
         // assigned, so round-tripping the deck preserves images.
         let entry = back.assets.assets.last().unwrap().clone();
         assert_eq!(back.assets.files.get(&entry.path), Some(&bytes));
+    }
+
+    #[test]
+    fn build_insert_slide_after_active_inserts_after_the_active_slide() {
+        // Order: [orig, s_b]. Adding after s_b must land at index 2,
+        // i.e. append; adding after orig must land at index 1.
+        let mut deck = Deck::sample();
+        let orig: SlideId = deck.slide_order[0].clone();
+        InsertSlide {
+            position: 1,
+            slide: SlideNode::new(
+                "s_b".into(),
+                "blank".into(),
+                crate::deck::builders::group_element("rt_b", vec![]),
+            ),
+            manifest_entry: crate::bundle::SlideEntry {
+                id: "s_b".into(),
+                path: crate::bundle::manifest::slide_path_for("s_b"),
+                layout_id: "blank".into(),
+                title: String::new(),
+                thumbnail: None,
+                transition: None,
+                duration_hint: None,
+                notes_ref: None,
+                animations: Vec::new(),
+            },
+        }
+        .apply(&mut deck)
+        .unwrap();
+        let dispatcher = CommandDispatcher::new(deck);
+
+        let (cmd, new_id) =
+            build_insert_slide_after_active(&dispatcher, Some(&orig)).unwrap();
+        assert!(!new_id.is_empty());
+        assert_eq!(cmd.label(), "Add Slide");
+        assert!(cmd.affects_slide_list());
+
+        // Applying it on a clone of the deck must place the new slide at
+        // index 1 (directly after `orig`), ahead of s_b.
+        let mut deck2 = dispatcher.deck().clone();
+        cmd.apply(&mut deck2).unwrap();
+        assert_eq!(deck2.slide_order[1], new_id);
+        assert_eq!(deck2.slide_order[2], "s_b");
+        assert!(deck2.slides.contains_key(&new_id));
+        assert!(deck2.manifest.slides.iter().any(|e| e.id == new_id));
+    }
+
+    #[test]
+    fn build_insert_slide_after_active_appends_when_no_active_slide() {
+        let deck = Deck::sample();
+        let len_before: usize = deck.slide_order.len();
+        let dispatcher = CommandDispatcher::new(deck);
+
+        let (cmd, new_id) = build_insert_slide_after_active(&dispatcher, None).unwrap();
+        let mut deck2 = dispatcher.deck().clone();
+        cmd.apply(&mut deck2).unwrap();
+        assert_eq!(deck2.slide_order.len(), len_before + 1);
+        assert_eq!(deck2.slide_order.last().cloned(), Some(new_id));
+    }
+
+    #[test]
+    fn build_insert_slide_after_active_makes_a_blank_layout_slide() {
+        let deck = Deck::sample();
+        let active: SlideId = deck.slide_order[0].clone();
+        let dispatcher = CommandDispatcher::new(deck);
+        let (cmd, new_id) =
+            build_insert_slide_after_active(&dispatcher, Some(&active)).unwrap();
+
+        let mut deck2 = dispatcher.deck().clone();
+        cmd.apply(&mut deck2).unwrap();
+        let slide = deck2.slides.get(&new_id).unwrap();
+        assert_eq!(slide.layout_id, "blank");
+        // A brand-new slide carries an empty root group (no elements yet).
+        assert!(slide.root.children.is_empty());
+    }
+
+    #[test]
+    fn build_set_text_command_some_on_changed_text() {
+        let (dispatcher, _sel, sid, eid) = fixture();
+        let out = build_set_text_command(&dispatcher, Some(CanvasTarget::Slide(sid.clone())), eid, "brand new text".into());
+        let cmd = out.expect("changed text should produce a command");
+        assert_eq!(cmd.label(), "Edit Text");
+    }
+
+    #[test]
+    fn build_set_text_command_none_when_text_unchanged() {
+        let (dispatcher, _sel, sid, eid) = fixture();
+        let current: String =
+            match &dispatcher.deck().slides[&sid].find_element(&eid).unwrap().content {
+                ElementContent::Text(rt) => rt.plain.clone(),
+                other => panic!("expected text, got {other:?}"),
+            };
+        // Re-committing the identical text must not create a history entry.
+        assert!(build_set_text_command(&dispatcher, Some(CanvasTarget::Slide(sid.clone())), eid, current).is_none());
+    }
+
+    #[test]
+    fn build_set_text_command_none_without_active_slide() {
+        let (dispatcher, _sel, _sid, eid) = fixture();
+        assert!(build_set_text_command(&dispatcher, None, eid, "x".into()).is_none());
+    }
+
+    #[test]
+    fn build_set_text_command_none_on_non_text_element() {
+        // The slide root is a Group, not a Text element.
+        let (dispatcher, _sel, sid, _eid) = fixture();
+        let root_id: ElementId = dispatcher.deck().slides[&sid].root.id.clone();
+        assert!(build_set_text_command(&dispatcher, Some(CanvasTarget::Slide(sid.clone())), root_id, "x".into()).is_none());
+    }
+
+    #[test]
+    fn sanitize_element_id_collapses_whitespace_runs() {
+        assert_eq!(sanitize_element_id("my  box"), "my_box");
+        assert_eq!(sanitize_element_id("a\tb\nc"), "a_b_c");
+        assert_eq!(sanitize_element_id("  lead trail  "), "lead_trail");
+        assert_eq!(sanitize_element_id("nospace"), "nospace");
+        assert_eq!(sanitize_element_id("   "), "");
+    }
+
+    #[test]
+    fn build_set_slide_title_some_on_change_none_on_same() {
+        let (dispatcher, _sel, sid, _eid) = fixture();
+        assert!(build_set_slide_title_command(&dispatcher, &sid, "New Title").is_some());
+        let current: String = dispatcher
+            .deck()
+            .manifest
+            .slides
+            .iter()
+            .find(|e| e.id == sid)
+            .unwrap()
+            .title
+            .clone();
+        assert!(build_set_slide_title_command(&dispatcher, &sid, &current).is_none());
+    }
+
+    #[test]
+    fn build_set_slide_title_none_on_unknown_slide() {
+        let (dispatcher, _sel, _sid, _eid) = fixture();
+        let ghost: SlideId = "ghost".into();
+        assert!(build_set_slide_title_command(&dispatcher, &ghost, "x").is_none());
+    }
+
+    // ---------- Stage 11: layout editor helpers ----------
+
+    #[test]
+    fn build_insert_layout_after_active_creates_a_unique_layout() {
+        let (mut dispatcher, _sel, _sid, _eid) = fixture();
+        // Deck::sample's theme seeds the "blank" layout.
+        let active: Option<LayoutId> = Some("blank".into());
+        let (cmd, new_id) =
+            build_insert_layout_after_active(&dispatcher, active.as_ref()).unwrap();
+        assert_ne!(new_id, "blank");
+        assert!(!dispatcher.deck().theme.layouts.contains_key(&new_id));
+        cmd.apply(dispatcher.deck_mut()).unwrap();
+        assert!(dispatcher.deck().theme.layouts.contains_key(&new_id));
+        // Inserted directly after the active layout.
+        let pos = dispatcher.deck().theme.layout_order.iter().position(|l| l == &new_id);
+        assert_eq!(pos, Some(1));
+    }
+
+    #[test]
+    fn build_layout_list_data_emits_layouts_in_order_with_globals() {
+        let (mut dispatcher, _sel, _sid, _eid) = fixture();
+        dispatcher.deck_mut().theme.globals_css = ":root{--g:1}".into();
+        let data = build_layout_list_data(dispatcher.deck(), Some(&"blank".to_string()));
+        assert_eq!(data.layouts.len(), dispatcher.deck().theme.layout_order.len());
+        assert_eq!(data.layouts[0].layout_id, "blank");
+        assert_eq!(data.layouts[0].name, "Blank");
+        assert!(!data.layouts[0].html.is_empty());
+        assert_eq!(data.active_layout_id.as_deref(), Some("blank"));
+        assert_eq!(data.globals_css, ":root{--g:1}");
+    }
+
+    #[test]
+    fn property_changed_targets_the_active_layout_in_layout_mode() {
+        let (mut dispatcher, _sel, sid, _eid) = fixture();
+        // Add an element to the blank layout to edit.
+        dispatcher
+            .deck_mut()
+            .theme
+            .layouts
+            .get_mut("blank")
+            .unwrap()
+            .root
+            .children
+            .push(crate::deck::builders::text_element("el_lt", "hi"));
+
+        let result = interpret_property_changed(
+            Some(CanvasTarget::Layout("blank".into())),
+            "el_lt".into(),
+            "width".into(),
+            "321".into(),
+        );
+        let cmd = match result {
+            InterpretResult::Command(c) => c,
+            other => panic!("expected Command, got {other:?}"),
+        };
+        cmd.apply(dispatcher.deck_mut()).unwrap();
+        // The layout element changed; no slide was touched.
+        assert_eq!(
+            dispatcher.deck().theme.layouts["blank"].find_element("el_lt").unwrap().geometry.width,
+            321.0
+        );
+        let slide_root_children = dispatcher.deck().slides[&sid].root.children.len();
+        assert!(slide_root_children > 0);
+    }
+
+    // ---------- Stage: animations interpret path ----------
+
+    #[test]
+    fn set_element_animation_enable_builds_insert() {
+        let (mut dispatcher, _sel, sid, eid) = fixture();
+        let result = interpret_set_element_animation(
+            dispatcher.deck(), EditorMode::Slide, Some(&sid), eid.clone(), "entrance", true);
+        let cmd = match result {
+            InterpretResult::Command(c) => c,
+            other => panic!("expected Command, got {other:?}"),
+        };
+        cmd.apply(dispatcher.deck_mut()).unwrap();
+        let t = &dispatcher.deck().slides[&sid].animations;
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].category, AnimationCategory::Entrance);
+        assert_eq!(t[0].keyframe, "appear");
+        assert_eq!(t[0].element_id, eid);
+    }
+
+    #[test]
+    fn set_element_animation_disable_removes_existing() {
+        let (mut dispatcher, _sel, sid, eid) = fixture();
+        if let InterpretResult::Command(c) = interpret_set_element_animation(
+            dispatcher.deck(), EditorMode::Slide, Some(&sid), eid.clone(), "exit", true) {
+            c.apply(dispatcher.deck_mut()).unwrap();
+        }
+        assert_eq!(dispatcher.deck().slides[&sid].animations.len(), 1);
+        let result = interpret_set_element_animation(
+            dispatcher.deck(), EditorMode::Slide, Some(&sid), eid, "exit", false);
+        match result {
+            InterpretResult::Command(c) => { c.apply(dispatcher.deck_mut()).unwrap(); }
+            other => panic!("expected Command, got {other:?}"),
+        }
+        assert!(dispatcher.deck().slides[&sid].animations.is_empty());
+    }
+
+    #[test]
+    fn set_element_animation_noop_in_layout_mode() {
+        let (dispatcher, _sel, sid, eid) = fixture();
+        let result = interpret_set_element_animation(
+            dispatcher.deck(), EditorMode::Layout, Some(&sid), eid, "entrance", true);
+        assert!(matches!(result, InterpretResult::Nothing));
+    }
+
+    // ---------- Presentation mode ----------
+
+    #[test]
+    fn present_start_index_uses_active_slide_position() {
+        let mut deck = Deck::sample();
+        // Add a second slide so the active one is not trivially index 0.
+        let root = crate::deck::builders::group_element("el_root", vec![]);
+        let s2 = SlideNode::new("slide_two".into(), "blank".into(), root);
+        deck.slides.insert("slide_two".into(), s2);
+        deck.slide_order.push("slide_two".into());
+        let active: Option<SlideId> = Some("slide_two".into());
+        assert_eq!(present_start_index(&deck, active.as_ref()), Some(1));
+    }
+
+    #[test]
+    fn build_assets_bundle_encodes_each_registered_asset() {
+        let mut deck = Deck::sample();
+        let entry = deck.assets.insert_blob(
+            vec![1, 2, 3, 4],
+            "logo.png".into(),
+            "image/png".into(),
+            None,
+        );
+        let bundle = build_assets_bundle(&deck).expect("non-empty registry yields a bundle");
+        assert_eq!(bundle.assets.len(), 1);
+        assert_eq!(bundle.assets[0].asset_id, entry.id);
+        assert_eq!(bundle.assets[0].media_type, "image/png");
+        // base64 of [1,2,3,4] is "AQIDBA==".
+        assert_eq!(bundle.assets[0].content_base64, "AQIDBA==");
+    }
+
+    #[test]
+    fn build_assets_bundle_is_none_when_no_assets() {
+        let deck = Deck::sample();
+        assert!(build_assets_bundle(&deck).is_none());
+    }
+
+    #[test]
+    fn present_start_index_falls_back_to_zero_then_none() {
+        let deck = Deck::sample();
+        // Unknown active id → first slide.
+        assert_eq!(present_start_index(&deck, Some(&"ghost".to_string())), Some(0));
+        // Empty deck → no presentation possible.
+        let empty = Deck::default();
+        assert_eq!(present_start_index(&empty, None), None);
     }
 }

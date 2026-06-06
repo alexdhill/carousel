@@ -21,14 +21,14 @@
 // remount cost is negligible; future optimisation may replace the remount
 // with targeted z-index + Insert/Remove patches.
 
-use crate::commands::{Command, CommandError, CommandOutput};
+use crate::commands::{Command, CommandError, CommandOutput, resolve_canvas_mut};
+use crate::deck::canvas::{InsertError, RemovedElement};
 use crate::deck::element::ElementNode;
-use crate::deck::slide::{InsertError, RemovedElement};
-use crate::deck::{ElementId, SlideId};
+use crate::deck::{Canvas, CanvasTarget, ElementId, SlideId};
 
 #[derive(Debug, Clone)]
 pub struct ReparentElement {
-    pub slide_id: SlideId,
+    pub target: CanvasTarget,
     pub element_id: ElementId,
     pub new_parent_id: ElementId,
     pub new_position: usize,
@@ -55,21 +55,18 @@ impl Command for ReparentElement {
     //   5. Insert it into the target parent at new_position.
     //   6. Build the inverse command.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
-        assert!(!self.slide_id.is_empty(), "ReparentElement: slide_id is empty");
+        assert!(!self.target.id().is_empty(), "ReparentElement: target id is empty");
         assert!(!self.element_id.is_empty(), "ReparentElement: element_id is empty");
         assert!(!self.new_parent_id.is_empty(), "ReparentElement: new_parent_id is empty");
 
-        let slide = deck
-            .slides
-            .get_mut(&self.slide_id)
-            .ok_or_else(|| CommandError::SlideNotFound(self.slide_id.clone()))?;
+        let canvas = resolve_canvas_mut(deck, &self.target)?;
 
-        if slide.is_root_id(&self.element_id) {
+        if canvas.is_root_id(&self.element_id) {
             return Err(CommandError::InvalidOperation(
-                "ReparentElement: cannot move the slide root".into(),
+                "ReparentElement: cannot move the canvas root".into(),
             ));
         }
-        let moving: &ElementNode = slide
+        let moving: &ElementNode = canvas
             .find_element(&self.element_id)
             .ok_or_else(|| CommandError::ElementNotFound(self.element_id.clone()))?;
         if subtree_contains(moving, &self.new_parent_id) {
@@ -79,7 +76,7 @@ impl Command for ReparentElement {
             )));
         }
         // Verify target parent exists at all.
-        if slide.find_element(&self.new_parent_id).is_none() {
+        if canvas.find_element(&self.new_parent_id).is_none() {
             return Err(CommandError::ElementNotFound(self.new_parent_id.clone()));
         }
 
@@ -87,11 +84,11 @@ impl Command for ReparentElement {
             node,
             parent_id: old_parent,
             position: old_position,
-        } = slide
+        } = canvas
             .remove_non_root_element(&self.element_id)
             .ok_or_else(|| CommandError::ElementNotFound(self.element_id.clone()))?;
 
-        slide
+        canvas
             .insert_child(&self.new_parent_id, self.new_position, node)
             .map_err(|e| match e {
                 InsertError::ParentNotFound => {
@@ -104,11 +101,11 @@ impl Command for ReparentElement {
                     ))
                 }
             })?;
-        slide.dirty = true;
-        slide.invalidate_index();
+        canvas.mark_dirty();
+        canvas.invalidate_index();
 
         let inverse: ReparentElement = ReparentElement {
-            slide_id: self.slide_id.clone(),
+            target: self.target.clone(),
             element_id: self.element_id.clone(),
             new_parent_id: old_parent,
             new_position: old_position,
@@ -117,8 +114,9 @@ impl Command for ReparentElement {
         Ok(CommandOutput {
             patches: Vec::new(),
             inverse: Box::new(inverse),
-            dirty_slides: vec![self.slide_id.clone()],
+            dirty_targets: vec![self.target.clone()],
             manifest_dirty: false,
+            warnings: Vec::new(),
         })
     }
 
@@ -197,7 +195,7 @@ mod tests {
         let kids = child_ids(&deck, &sid, &root_id);
         let third = kids[2].clone();
         let cmd = ReparentElement {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: third.clone(),
             new_parent_id: root_id.clone(),
             new_position: 0,
@@ -223,7 +221,7 @@ mod tests {
         deck.slide_order = vec!["s".into()];
 
         let cmd = ReparentElement {
-            slide_id: "s".into(),
+            target: CanvasTarget::Slide("s".into()),
             element_id: "el_a".into(),
             new_parent_id: "el_group".into(),
             new_position: 0,
@@ -242,7 +240,7 @@ mod tests {
         let kids_before = child_ids(&deck, &sid, &root_id);
         let second = kids_before[1].clone();
         let cmd = ReparentElement {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: second.clone(),
             new_parent_id: root_id.clone(),
             new_position: 0,
@@ -258,7 +256,7 @@ mod tests {
         let (mut deck, sid, _) = fixture();
         let root_id = deck.slides[&sid].root.id.clone();
         let cmd = ReparentElement {
-            slide_id: sid,
+            target: CanvasTarget::Slide(sid),
             element_id: root_id.clone(),
             new_parent_id: root_id,
             new_position: 0,
@@ -281,7 +279,7 @@ mod tests {
         deck.slide_order = vec!["s".into()];
 
         let cmd = ReparentElement {
-            slide_id: "s".into(),
+            target: CanvasTarget::Slide("s".into()),
             element_id: "el_group".into(),
             new_parent_id: "el_inner".into(),
             new_position: 0,
@@ -294,7 +292,7 @@ mod tests {
     fn target_parent_missing_yields_element_not_found() {
         let (mut deck, sid, eid) = fixture();
         let cmd = ReparentElement {
-            slide_id: sid,
+            target: CanvasTarget::Slide(sid),
             element_id: eid,
             new_parent_id: "no_such".into(),
             new_position: 0,
@@ -308,7 +306,7 @@ mod tests {
         let (mut deck, sid, eid) = fixture();
         let root_id = deck.slides[&sid].root.id.clone();
         let cmd = ReparentElement {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid,
             new_parent_id: root_id,
             new_position: 999,
@@ -323,7 +321,7 @@ mod tests {
         let root_id = deck.slides[&sid].root.id.clone();
         let third = child_ids(&deck, &sid, &root_id)[2].clone();
         let cmd = ReparentElement {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: third,
             new_parent_id: root_id,
             new_position: 0,
@@ -332,7 +330,7 @@ mod tests {
         assert!(cmd.requires_remount());
         let out = cmd.apply(&mut deck).unwrap();
         assert!(out.patches.is_empty());
-        assert_eq!(out.dirty_slides.len(), 1);
+        assert_eq!(out.dirty_targets.len(), 1);
     }
 
     #[test]
@@ -341,7 +339,7 @@ mod tests {
         let root_id = deck.slides[&sid].root.id.clone();
         let third = child_ids(&deck, &sid, &root_id)[2].clone();
         ReparentElement {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: third,
             new_parent_id: root_id,
             new_position: 0,

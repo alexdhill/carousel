@@ -10,13 +10,13 @@
 // element shows its id again. Inverse is symmetric: setting None inverses
 // to the previous name (or to None when none was set).
 
-use crate::commands::{Command, CommandError, CommandOutput};
-use crate::deck::{ElementId, SlideId};
+use crate::commands::{Command, CommandError, CommandOutput, resolve_canvas_mut};
+use crate::deck::{Canvas, CanvasTarget, ElementId, SlideId};
 use crate::ipc::Patch;
 
 #[derive(Debug, Clone)]
 pub struct RenameElement {
-    pub slide_id: SlideId,
+    pub target: CanvasTarget,
     pub element_id: ElementId,
     pub new_name: Option<String>,
 }
@@ -32,13 +32,10 @@ impl Command for RenameElement {
     // Dataflow: locate element -> snapshot prior name -> overwrite ->
     // invalidate index -> build patch + inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
-        assert!(!self.slide_id.is_empty(), "RenameElement: slide_id is empty");
+        assert!(!self.target.id().is_empty(), "RenameElement: target id is empty");
         assert!(!self.element_id.is_empty(), "RenameElement: element_id is empty");
-        let slide = deck
-            .slides
-            .get_mut(&self.slide_id)
-            .ok_or_else(|| CommandError::SlideNotFound(self.slide_id.clone()))?;
-        let element = slide
+        let canvas = resolve_canvas_mut(deck, &self.target)?;
+        let element = canvas
             .find_element_mut(&self.element_id)
             .ok_or_else(|| CommandError::ElementNotFound(self.element_id.clone()))?;
 
@@ -50,8 +47,8 @@ impl Command for RenameElement {
             _ => None,
         };
         element.name = normalised.clone();
-        slide.dirty = true;
-        slide.invalidate_index();
+        canvas.mark_dirty();
+        canvas.invalidate_index();
 
         let patches: Vec<Patch> = match normalised {
             Some(name) => vec![Patch::SetAttribute {
@@ -66,7 +63,7 @@ impl Command for RenameElement {
         };
 
         let inverse: RenameElement = RenameElement {
-            slide_id: self.slide_id.clone(),
+            target: self.target.clone(),
             element_id: self.element_id.clone(),
             new_name: prior,
         };
@@ -74,8 +71,9 @@ impl Command for RenameElement {
         Ok(CommandOutput {
             patches,
             inverse: Box::new(inverse),
-            dirty_slides: vec![self.slide_id.clone()],
+            dirty_targets: vec![self.target.clone()],
             manifest_dirty: false,
+            warnings: Vec::new(),
         })
     }
 
@@ -105,7 +103,7 @@ mod tests {
     fn set_writes_name_and_emits_set_attribute_patch() {
         let (mut deck, sid, eid) = fixture();
         let cmd = RenameElement {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             new_name: Some("Header".into()),
         };
@@ -134,7 +132,7 @@ mod tests {
             .unwrap()
             .name = Some("Existing".into());
         let cmd = RenameElement {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             new_name: None,
         };
@@ -152,7 +150,7 @@ mod tests {
     fn empty_string_treated_as_none() {
         let (mut deck, sid, eid) = fixture();
         let cmd = RenameElement {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             new_name: Some("   ".into()),
         };
@@ -170,7 +168,7 @@ mod tests {
             .unwrap()
             .name = Some("Original".into());
         let cmd = RenameElement {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             new_name: Some("Changed".into()),
         };
@@ -185,7 +183,7 @@ mod tests {
     #[test]
     fn affects_object_tree_but_does_not_remount() {
         let cmd = RenameElement {
-            slide_id: "s".into(),
+            target: CanvasTarget::Slide("s".into()),
             element_id: "e".into(),
             new_name: Some("X".into()),
         };
@@ -197,7 +195,7 @@ mod tests {
     fn errors_on_missing_slide() {
         let mut deck = Deck::sample();
         let cmd = RenameElement {
-            slide_id: "ghost".into(),
+            target: CanvasTarget::Slide("ghost".into()),
             element_id: "x".into(),
             new_name: Some("y".into()),
         };
@@ -209,7 +207,7 @@ mod tests {
     fn errors_on_missing_element() {
         let (mut deck, sid, _) = fixture();
         let cmd = RenameElement {
-            slide_id: sid,
+            target: CanvasTarget::Slide(sid),
             element_id: "no_such".into(),
             new_name: None,
         };
@@ -221,7 +219,7 @@ mod tests {
     fn marks_slide_dirty() {
         let (mut deck, sid, eid) = fixture();
         RenameElement {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid,
             new_name: Some("a".into()),
         }

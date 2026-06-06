@@ -30,6 +30,11 @@
     // timeout clears it anyway after PENDING_TRANSFORM_TIMEOUT_MS so the
     // element is never stuck if the patch never arrives.
     let pendingDragEnd = null;
+    // textEditState: non-null while a text element is being edited inline
+    // (double-click). Holds the element id, the contenteditable DOM node,
+    // its text at edit-start (for cancel), and the keydown/blur listeners
+    // so they can be detached on finish. See beginTextEdit / finishTextEdit.
+    let textEditState = null;
 
     const DRAG_THRESHOLD = 3;
     const MAX_BATCH_ITER = 100000;
@@ -40,6 +45,19 @@
     // root that maps :host { --asset-<id>: url(<blob-url>); }.
     const assetBlobCache = Object.create(null);
     let assetVarStyleEl = null;
+    // Deck-wide globals CSS (Stage 11). Injected into every shadow root —
+    // the viewport mount and every thumbnail — between theme CSS and the
+    // asset-vars block. Refreshed by MountSlide / LayoutListUpdate.
+    let currentGlobalsCss = "";
+    // The active editor mode ("slide" | "layout"), echoed by the Rust side
+    // via SetMode. Drives body[data-mode] and which list the row shows.
+    let currentMode = "slide";
+    // The immutable built-in @keyframes library (delivered once via Configure)
+    // injected into every shadow root for forthcoming playback.
+    let builtinKeyframesCss = "";
+    // The active slide's animation timeline (from SlideAnimationsUpdate); the
+    // inspector's Appear/Disappear toggles filter this by the selected id.
+    let slideAnimations = [];
 
     // ---------- envelope id ----------
     function newId() {
@@ -55,12 +73,19 @@
     // Output: side-effect; replaces #viewport's slide-host with a fresh
     // div whose shadow root contains theme CSS + slide HTML. Caches the
     // shadow root and host for the selection overlay + patch applier.
-    function mountSlide(slideId, slideHtml, themeCss) {
+    function mountSlide(slideId, slideHtml, themeCss, globalsCss) {
+        if (typeof globalsCss === "string") {
+            currentGlobalsCss = globalsCss;
+        }
         const viewport = document.getElementById("viewport");
         if (!viewport) {
             console.error("mountSlide: #viewport not found");
             return;
         }
+        // A remount replaces the shadow DOM, so any in-progress text edit
+        // is referencing a node that is about to be discarded. Abandon the
+        // session silently (the node is gone; there is nothing to commit).
+        textEditState = null;
         const host = document.createElement("div");
         host.className = "slide-host";
         host.dataset.slideId = slideId;
@@ -74,6 +99,8 @@
         //   background-image: var(--asset-<id>);
         // ) resolve to actual blob URLs.
         shadow.innerHTML = "<style>" + themeCss + "</style>"
+            + "<style id=\"globals-css\">" + currentGlobalsCss + "</style>"
+            + "<style id=\"anim-kf\">" + builtinKeyframesCss + "</style>"
             + "<style id=\"asset-vars\"></style>"
             + slideHtml;
         viewport.replaceChildren(host);
@@ -448,6 +475,136 @@
         };
     }
 
+    // ---------- inline text editing ----------
+    // onViewportDblClick
+    // Inputs: a dblclick MouseEvent on the viewport container.
+    // Output: side-effect; if the double-clicked element is a Text
+    // element, enters inline editing on it. Other element types are
+    // ignored (double-click has no meaning for them yet).
+    function onViewportDblClick(e) {
+        const target = findInteractionTarget(e);
+        if (!target || target.dataset.elementType !== "text") {
+            return;
+        }
+        e.preventDefault();
+        beginTextEdit(target);
+    }
+
+    // beginTextEdit
+    // Inputs: the Text element's DOM node (inside the slide shadow root).
+    // Output: side-effect; makes the node contenteditable, focuses it,
+    // selects its text, records textEditState, and notifies Rust with
+    // TextEditStarted. Enter inserts a newline in the box (default
+    // contenteditable behavior); the edit commits on blur / clicking away
+    // and cancels on Escape. The keydown listener stopPropagation()s so
+    // the global hotkey dispatcher never sees — or crash-guards — edit
+    // keystrokes, while leaving that dispatcher (and its Enter handling)
+    // intact for use outside edit mode.
+    function beginTextEdit(target) {
+        const elementId = target.dataset.elementId;
+        if (!elementId) {
+            return;
+        }
+        if (textEditState) {
+            if (textEditState.elementId === elementId) {
+                return;
+            }
+            commitTextEdit();
+        }
+        const onKeydown = function (ev) {
+            // Keep edit keystrokes out of the global shortcut dispatcher.
+            // Enter is deliberately NOT handled here: it falls through to
+            // the contenteditable default and types a newline. Escape
+            // cancels the edit.
+            ev.stopPropagation();
+            if (ev.key === "Escape") {
+                ev.preventDefault();
+                cancelTextEdit();
+            }
+        };
+        const onBlur = function () {
+            commitTextEdit();
+        };
+        textEditState = {
+            elementId: elementId,
+            target: target,
+            original: target.innerText,
+            onKeydown: onKeydown,
+            onBlur: onBlur,
+        };
+        target.setAttribute("contenteditable", "true");
+        target.spellcheck = false;
+        target.addEventListener("keydown", onKeydown);
+        target.addEventListener("blur", onBlur);
+        target.focus();
+        selectAllText(target);
+        window.__deck.send("Interaction", {
+            kind: "TextEditStarted",
+            element_id: elementId,
+        });
+    }
+
+    // finishTextEdit
+    // Inputs: commit — true to keep the edited text (send TextEditEnded so
+    // Rust dispatches SetTextContent), false to revert to the original.
+    // Output: side-effect; tears down the contenteditable session exactly
+    // once. textEditState is cleared FIRST so the blur fired by our own
+    // .blur() call re-enters as a no-op.
+    function finishTextEdit(commit) {
+        const state = textEditState;
+        if (!state) {
+            return;
+        }
+        textEditState = null;
+        const target = state.target;
+        target.removeEventListener("keydown", state.onKeydown);
+        target.removeEventListener("blur", state.onBlur);
+        target.removeAttribute("contenteditable");
+        if (commit) {
+            // innerText (not textContent) so the line breaks the user
+            // typed with Enter survive as "\n" characters in the committed
+            // text rather than being flattened away.
+            window.__deck.send("Interaction", {
+                kind: "TextEditEnded",
+                element_id: state.elementId,
+                text: target.innerText,
+            });
+        } else {
+            target.textContent = state.original;
+        }
+        if (typeof target.blur === "function") {
+            target.blur();
+        }
+    }
+
+    function commitTextEdit() {
+        finishTextEdit(true);
+    }
+
+    function cancelTextEdit() {
+        finishTextEdit(false);
+    }
+
+    // selectAllText
+    // Inputs: a DOM element. Output: side-effect; selects all of its text
+    // so the user can type over it immediately. Best-effort: selection
+    // across shadow boundaries is inconsistent between engines, so any
+    // failure is swallowed (focus alone still allows editing).
+    function selectAllText(el) {
+        try {
+            const sel = window.getSelection();
+            if (!sel) {
+                return;
+            }
+            const range = document.createRange();
+            range.selectNodeContents(el);
+            sel.removeAllRanges();
+            sel.addRange(range);
+        } catch (err) {
+            // No selection available; editing still works via the caret.
+        }
+    }
+
     // onMouseDown
     // Inputs: a MouseEvent on #viewport (the host of slide-host).
     // Output: side-effect; sends ElementClicked or BackgroundClicked and
@@ -457,6 +614,17 @@
         // Only react to primary button.
         if (e.button !== 0) {
             return;
+        }
+        // While a text element is being edited, let the contenteditable
+        // own pointer interactions (caret placement, text selection). A
+        // click inside the editor is left alone; a click anywhere else
+        // commits the edit and then proceeds with normal handling.
+        if (textEditState) {
+            const path = (e.composedPath && e.composedPath()) || [];
+            if (path.indexOf(textEditState.target) >= 0) {
+                return;
+            }
+            commitTextEdit();
         }
         const slideHost = e.target.closest && e.target.closest(".slide-host");
         if (!slideHost) {
@@ -611,7 +779,12 @@
     // ---------- IPC handlers ----------
     const handlers = {
         MountSlide: function (payload) {
-            mountSlide(payload.slide_id, payload.slide_html, payload.theme_css);
+            mountSlide(
+                payload.slide_id,
+                payload.slide_html,
+                payload.theme_css,
+                payload.globals_css
+            );
             refreshInspector();
             // Keep the cached HTML for this slide fresh so its thumbnail
             // reflects the latest mount. Theme CSS may also have changed
@@ -635,12 +808,39 @@
             updateSelectionOverlay();
             refreshInspector();
             updateObjectPanelSelection();
+            refreshAnimationsSection();
         },
         ObjectTreeUpdate: function (payload) {
             renderObjectPanel(payload);
         },
         SlideListUpdate: function (payload) {
-            renderThumbnailRow(payload);
+            renderThumbnailRow(payload, "slide");
+        },
+        LayoutListUpdate: function (payload) {
+            renderThumbnailRow(payload, "layout");
+            // Keep the globals textarea in sync with the committed value.
+            if (payload && typeof payload.globals_css === "string") {
+                currentGlobalsCss = payload.globals_css;
+                const ta = document.getElementById("globals-css");
+                if (ta && document.activeElement !== ta) {
+                    ta.value = payload.globals_css;
+                }
+            }
+        },
+        SetMode: function (payload) {
+            const mode = (payload && payload.mode) || "slide";
+            currentMode = mode;
+            document.body.dataset.mode = mode;
+        },
+        Configure: function (payload) {
+            builtinKeyframesCss = (payload && payload.animation_keyframes_css) || "";
+        },
+        SlideAnimationsUpdate: function (payload) {
+            slideAnimations = (payload && payload.entries) || [];
+            refreshAnimationsSection();
+        },
+        Notice: function (payload) {
+            showNotice((payload && payload.message) || "");
         },
         AssetsUpdate: function (payload) {
             const assets = (payload && Array.isArray(payload.assets))
@@ -1392,8 +1592,8 @@
     }
 
     // buildObjectNode
-    // Inputs: an ObjectTreeNode (id, element_type, display_name, children),
-    // the depth (used purely so future styling can target nesting level).
+    // Inputs: an ObjectTreeNode (id, element_type, children), the depth
+    // (used purely so future styling can target nesting level).
     // Output: a DOM subtree representing this node and its descendants.
     function buildObjectNode(node, depth) {
         const wrap = document.createElement("div");
@@ -1429,7 +1629,7 @@
 
         const label = document.createElement("span");
         label.className = "objects__label";
-        label.textContent = node.display_name;
+        label.textContent = node.id;
         label.dataset.role = "label";
         row.appendChild(label);
 
@@ -1441,10 +1641,11 @@
         row.addEventListener("drop", onPanelDrop);
         row.addEventListener("dragend", onPanelDragEnd);
         row.addEventListener("dblclick", function (e) {
-            // Double-click is a faster path to rename than long-click;
-            // useful on trackpads where long-click is awkward.
+            // Double-click (and long-click) edit the element's id — the
+            // value shown on the row, the data-element-id, and the
+            // object-tree key, all one and the same.
             e.preventDefault();
-            beginRename(label, node.id);
+            editElementId(label, node.id);
         });
 
         wrap.appendChild(row);
@@ -1541,7 +1742,7 @@
         longClickAnchor = { x: x, y: y, elementId: elementId, labelNode: labelNode };
         longClickTimer = window.setTimeout(function () {
             if (longClickAnchor) {
-                beginRename(longClickAnchor.labelNode, longClickAnchor.elementId);
+                editElementId(longClickAnchor.labelNode, longClickAnchor.elementId);
             }
             cancelLongClick();
         }, LONG_CLICK_MS);
@@ -1575,56 +1776,74 @@
         cancelLongClick();
     }
 
-    // beginRename
-    // Inputs: the label DOM element, the target element id.
-    // Output: side-effect; swaps the label span for an inline <input>,
-    // focus + select all, wires commit/cancel handlers.
-    function beginRename(labelNode, elementId) {
-        if (!labelNode || labelNode.querySelector("input")) {
-            return; // already editing
+    // floatingEdit
+    // Inputs: an anchor node to position over, the initial text, and a
+    // commit callback invoked with the final value (only on commit, not on
+    // cancel). Spawns a fixed-position <input> overlaid on the anchor
+    // rather than nesting one inside it — so it works even when the anchor
+    // lives inside a <button> (the thumbnail label), where a nested input
+    // would be invalid HTML. Enter / blur commit; Escape cancels. The
+    // backend is authoritative for the committed value (it sanitizes ids
+    // and rebroadcasts), so this only sends the raw text.
+    function floatingEdit(anchorNode, initialValue, commitFn) {
+        if (!anchorNode || document.querySelector(".floating-edit")) {
+            return; // one editor at a time
         }
-        const original = labelNode.textContent || "";
+        const rect = anchorNode.getBoundingClientRect();
         const input = document.createElement("input");
-        input.className = "objects__label-edit";
         input.type = "text";
-        input.value = original;
+        input.className = "floating-edit";
+        input.value = initialValue;
         input.spellcheck = false;
-        labelNode.replaceChildren(input);
+        input.style.left = rect.left + "px";
+        input.style.top = rect.top + "px";
+        input.style.width = Math.max(rect.width, 80) + "px";
+        document.body.appendChild(input);
         input.focus();
         input.select();
-
-        const commit = function () {
-            const value = input.value;
-            labelNode.textContent = value || elementId;
-            window.__deck.send("Interaction", {
-                kind: "RenameElementRequested",
-                element_id: elementId,
-                new_name: value,
-            });
-        };
-        const cancel = function () {
-            labelNode.textContent = original;
-        };
         let resolved = false;
-        input.addEventListener("blur", function () {
+        const finish = function (commit) {
             if (resolved) {
                 return;
             }
             resolved = true;
-            commit();
+            const value = input.value;
+            if (input.parentNode) {
+                input.parentNode.removeChild(input);
+            }
+            if (commit) {
+                commitFn(value);
+            }
+        };
+        input.addEventListener("blur", function () {
+            finish(true);
         });
         input.addEventListener("keydown", function (e) {
+            e.stopPropagation();
             if (e.key === "Enter") {
                 e.preventDefault();
-                resolved = true;
-                commit();
-                input.blur();
+                finish(true);
             } else if (e.key === "Escape") {
                 e.preventDefault();
-                resolved = true;
-                cancel();
-                input.blur();
+                finish(false);
             }
+        });
+    }
+
+    // editElementId
+    // Inputs: the label DOM node to overlay, and the element's current id.
+    // Output: side-effect; opens a floating editor prefilled with the id
+    // and, on commit, sends ElementIdEditRequested. The Rust side
+    // sanitizes the value (whitespace runs → '_'), renames the element,
+    // remounts, and refreshes the panel. Shared by the object panel's
+    // double-click and long-click affordances.
+    function editElementId(labelNode, elementId) {
+        floatingEdit(labelNode, elementId, function (value) {
+            window.__deck.send("Interaction", {
+                kind: "ElementIdEditRequested",
+                element_id: elementId,
+                new_id: value,
+            });
         });
     }
 
@@ -1860,12 +2079,56 @@
     // can run even if SlideListUpdate hasn't arrived yet.
     let activeSlideId = null;
 
+    // THUMB_KINDS
+    // Per-mode descriptors so the thumbnail row renders slides or layouts
+    // from one set of functions (Stage 11). Each maps the payload/entry
+    // shape and the interaction events for its kind. The DOM mount id stays
+    // `dataset.slideId` for both so MountSlide's updateThumbnailHtml(id)
+    // keys uniformly (in layout mode the mounted canvas id IS the layout
+    // id).
+    const THUMB_KINDS = {
+        slide: {
+            listKey: "slides",
+            activeKey: "active_slide_id",
+            idOf: function (e) { return e.slide_id; },
+            labelOf: function (e) { return e.title || e.slide_id; },
+            // Untitled slides fall back to the id; start the rename editor
+            // empty rather than prefilling a ULID.
+            editInitial: function (e) {
+                return (e.title === e.slide_id) ? "" : (e.title || "");
+            },
+            clickKind: "SlideThumbnailClicked",
+            clickField: "slide_id",
+            renameKind: "SlideTitleEditRequested",
+            renameField: "new_title",
+            addKind: "AddSlideRequested",
+            emptyText: "No slides.",
+            addTitle: "New slide",
+        },
+        layout: {
+            listKey: "layouts",
+            activeKey: "active_layout_id",
+            idOf: function (e) { return e.layout_id; },
+            labelOf: function (e) { return e.name || e.layout_id; },
+            editInitial: function (e) { return e.name || ""; },
+            clickKind: "LayoutThumbnailClicked",
+            clickField: "layout_id",
+            renameKind: "LayoutNameEditRequested",
+            renameField: "new_name",
+            addKind: "AddLayoutRequested",
+            emptyText: "No layouts.",
+            addTitle: "New layout",
+        },
+    };
+
     // renderThumbnailRow
-    // Inputs: a SlideListData payload.
-    // Output: side-effect; rebuilds #thumbnail-row from scratch with
-    // one .thumb per slide, each mounting the slide HTML inside its
-    // own shadow root at a scaled-down size.
-    function renderThumbnailRow(payload) {
+    // Inputs: a SlideListData / LayoutListData payload and the kind
+    // ("slide" | "layout").
+    // Output: side-effect; rebuilds #thumbnail-row from scratch with one
+    // .thumb per item, each mounting the item HTML inside its own shadow
+    // root at a scaled-down size, followed by the "+" add tile.
+    function renderThumbnailRow(payload, kind) {
+        const spec = THUMB_KINDS[kind] || THUMB_KINDS.slide;
         const row = document.getElementById("thumbnail-row");
         if (!row) {
             return;
@@ -1875,50 +2138,84 @@
             height: (payload && payload.height) || 1080,
         };
         thumbnailThemeCss = (payload && payload.theme_css) || "";
+        if (payload && typeof payload.globals_css === "string") {
+            currentGlobalsCss = payload.globals_css;
+        }
+        const items = (payload && Array.isArray(payload[spec.listKey]))
+            ? payload[spec.listKey]
+            : [];
         // Seed / refresh the HTML cache from the payload.
-        if (payload && Array.isArray(payload.slides)) {
-            for (let i = 0; i < payload.slides.length; i++) {
-                const entry = payload.slides[i];
-                if (entry && entry.slide_id) {
-                    thumbnailHtmlCache[entry.slide_id] = entry.html || "";
-                }
+        for (let i = 0; i < items.length; i++) {
+            const entry = items[i];
+            const id = entry && spec.idOf(entry);
+            if (id) {
+                thumbnailHtmlCache[id] = entry.html || "";
             }
         }
         row.replaceChildren();
-        const slides = (payload && Array.isArray(payload.slides))
-            ? payload.slides
-            : [];
-        if (slides.length === 0) {
+        if (items.length === 0) {
             const empty = document.createElement("div");
             empty.className = "thumb__empty";
-            empty.textContent = "No slides.";
+            empty.textContent = spec.emptyText;
             row.appendChild(empty);
+            row.appendChild(buildAddTile(spec));
             return;
         }
-        const active = (payload && payload.active_slide_id) || activeSlideId;
+        const active = (payload && payload[spec.activeKey]) || activeSlideId;
         if (active) {
             activeSlideId = active;
         }
-        for (let i = 0; i < slides.length; i++) {
-            row.appendChild(buildThumbnail(slides[i], i, active));
+        for (let i = 0; i < items.length; i++) {
+            row.appendChild(buildThumbnail(items[i], i, active, spec));
         }
+        row.appendChild(buildAddTile(spec));
         scrollActiveThumbnailIntoView();
     }
 
+    // buildAddTile
+    // Inputs: the kind spec.
+    // Output: a <button>.thumb--add DOM node that asks the Rust side to
+    // insert a blank slide / layout after the active one. Lives at the tail
+    // of the row so it reads as "append".
+    function buildAddTile(spec) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "thumb thumb--add";
+        btn.title = spec.addTitle;
+        btn.setAttribute("aria-label", spec.addTitle);
+
+        const glyph = document.createElement("span");
+        glyph.className = "thumb__add-glyph";
+        glyph.setAttribute("aria-hidden", "true");
+        glyph.textContent = "+";
+        btn.appendChild(glyph);
+
+        const label = document.createElement("span");
+        label.className = "thumb__label";
+        label.textContent = "New";
+        btn.appendChild(label);
+
+        btn.addEventListener("click", function () {
+            window.__deck.send("Interaction", { kind: spec.addKind });
+        });
+        return btn;
+    }
+
     // buildThumbnail
-    // Inputs: a SlideListEntry, the slide's display index (1-based for
-    // the badge), and the active slide id.
-    // Output: a <button>.thumb DOM node fully wired (click → switches
-    // active slide via SlideThumbnailClicked).
-    function buildThumbnail(entry, index, activeId) {
+    // Inputs: a list entry, its display index (1-based badge), the active
+    // id, and the kind spec.
+    // Output: a <button>.thumb DOM node fully wired (click → switch active
+    // slide/layout; dblclick label → rename).
+    function buildThumbnail(entry, index, activeId, spec) {
+        const itemId = spec.idOf(entry);
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "thumb";
-        btn.dataset.slideId = entry.slide_id;
-        if (entry.slide_id === activeId) {
+        btn.dataset.slideId = itemId;
+        if (itemId === activeId) {
             btn.setAttribute("aria-current", "true");
         }
-        btn.title = entry.title || entry.slide_id;
+        btn.title = spec.labelOf(entry);
 
         const preview = document.createElement("div");
         preview.className = "thumb__preview";
@@ -1929,19 +2226,33 @@
 
         const mount = document.createElement("div");
         mount.className = "thumb__mount";
-        mount.dataset.slideId = entry.slide_id;
-        // Mount inside its own shadow root so theme CSS is scoped. The
-        // asset-vars block resolves any image elements to blob URLs,
-        // mirroring the viewport mount.
+        mount.dataset.slideId = itemId;
+        // Mount inside its own shadow root so theme + globals CSS are
+        // scoped. The asset-vars block resolves any image elements to blob
+        // URLs, mirroring the viewport mount.
         const shadow = mount.attachShadow({ mode: "open" });
         shadow.innerHTML = "<style>" + thumbnailThemeCss + "</style>"
+            + "<style class=\"globals-css\">" + currentGlobalsCss + "</style>"
+            + "<style class=\"anim-kf\">" + builtinKeyframesCss + "</style>"
             + "<style class=\"asset-vars\">" + buildAssetVarCss() + "</style>"
             + (entry.html || "");
         preview.appendChild(mount);
 
         const label = document.createElement("span");
         label.className = "thumb__label";
-        label.textContent = entry.title || entry.slide_id;
+        label.textContent = spec.labelOf(entry);
+        label.addEventListener("dblclick", function (e) {
+            // Edit the item's display name. stopPropagation so the
+            // double-click does not also fire the switch-active click.
+            e.preventDefault();
+            e.stopPropagation();
+            floatingEdit(label, spec.editInitial(entry), function (value) {
+                const msg = { kind: spec.renameKind };
+                msg[spec.clickField] = itemId;
+                msg[spec.renameField] = value;
+                window.__deck.send("Interaction", msg);
+            });
+        });
 
         btn.appendChild(preview);
         btn.appendChild(label);
@@ -1953,10 +2264,9 @@
         });
 
         btn.addEventListener("click", function () {
-            window.__deck.send("Interaction", {
-                kind: "SlideThumbnailClicked",
-                slide_id: entry.slide_id,
-            });
+            const msg = { kind: spec.clickKind };
+            msg[spec.clickField] = itemId;
+            window.__deck.send("Interaction", msg);
         });
         return btn;
     }
@@ -2012,6 +2322,7 @@
             if (mount.shadowRoot) {
                 mount.shadowRoot.innerHTML =
                     "<style>" + thumbnailThemeCss + "</style>"
+                    + "<style class=\"globals-css\">" + currentGlobalsCss + "</style>"
                     + "<style class=\"asset-vars\">" + buildAssetVarCss() + "</style>"
                     + (html || "");
             }
@@ -2287,6 +2598,7 @@
         const viewport = document.getElementById("viewport-container");
         if (viewport) {
             viewport.addEventListener("mousedown", onMouseDown);
+            viewport.addEventListener("dblclick", onViewportDblClick);
             viewport.addEventListener("dragover", onViewportDragOver);
             viewport.addEventListener("dragleave", onViewportDragLeave);
             viewport.addEventListener("drop", onViewportDrop);
@@ -2313,9 +2625,121 @@
         buildInspectorSections();
         refreshInspector();
         wireObjectsToolbar();
+        wireLayoutEditorControls();
+        wireAnimationsSection();
         renderObjectPanel(null);
         window.__deck.send("Ready", null);
     });
+
+    // refreshAnimationsSection
+    // Inputs: none (reads currentSelectionIds + slideAnimations).
+    // Output: side-effect; shows the Animations group only for a single
+    // selection and sets the Appear/Disappear checkboxes from the active
+    // slide's timeline.
+    function refreshAnimationsSection() {
+        const single = currentSelectionIds.length === 1;
+        document.body.classList.toggle("has-single-selection", single);
+        const appear = document.getElementById("anim-appear");
+        const disappear = document.getElementById("anim-disappear");
+        if (!appear || !disappear) {
+            return;
+        }
+        const el = single ? currentSelectionIds[0] : null;
+        const hasCat = function (cat) {
+            return !!el && slideAnimations.some(function (a) {
+                return a.element_id === el && a.category === cat;
+            });
+        };
+        appear.checked = hasCat("entrance");
+        disappear.checked = hasCat("exit");
+    }
+
+    // wireAnimationsSection
+    // Inputs: none (wires the two checkboxes once after load).
+    // Output: side-effect; a change on either toggle posts SetElementAnimation
+    // for the single selected element. Rust maps enabled→Insert / disabled→
+    // Remove and broadcasts SlideAnimationsUpdate, which repaints the boxes.
+    function wireAnimationsSection() {
+        const send = function (category, enabled) {
+            if (currentSelectionIds.length !== 1) {
+                return;
+            }
+            window.__deck.send("Interaction", {
+                kind: "SetElementAnimation",
+                element_id: currentSelectionIds[0],
+                category: category,
+                enabled: enabled,
+            });
+        };
+        const a = document.getElementById("anim-appear");
+        const d = document.getElementById("anim-disappear");
+        if (a) {
+            a.addEventListener("change", function () { send("entrance", a.checked); });
+        }
+        if (d) {
+            d.addEventListener("change", function () { send("exit", d.checked); });
+        }
+    }
+
+    // showNotice
+    // Inputs: a message string.
+    // Output: side-effect; flashes the #notice-banner for ~2.5s.
+    let noticeTimer = null;
+    function showNotice(message) {
+        const banner = document.getElementById("notice-banner");
+        if (!banner || !message) {
+            return;
+        }
+        banner.textContent = message;
+        banner.classList.add("show");
+        if (noticeTimer) {
+            window.clearTimeout(noticeTimer);
+        }
+        noticeTimer = window.setTimeout(function () {
+            banner.classList.remove("show");
+        }, 2500);
+    }
+
+    // wireLayoutEditorControls
+    // Inputs: none (reads the DOM after load).
+    // Output: side-effect; wires the mode toggle (Slides ⇄ Layouts) and the
+    // globals CSS textarea. The toggle flips to the opposite of the current
+    // mode and asks the Rust side to switch; the actual data-mode flip
+    // happens when the SetMode echo arrives. The textarea commits its value
+    // on blur via GlobalsCssEditRequested.
+    function wireLayoutEditorControls() {
+        const toggle = document.getElementById("mode-toggle");
+        if (toggle) {
+            toggle.addEventListener("click", function () {
+                const next = (currentMode === "layout") ? "slide" : "layout";
+                window.__deck.send("Interaction", {
+                    kind: "SetEditorMode",
+                    mode: next,
+                });
+            });
+        }
+        const presentBtn = document.getElementById("present-btn");
+        if (presentBtn) {
+            presentBtn.addEventListener("click", function () {
+                // Mirrors the Cmd+Return accelerator: start presenting from the
+                // active slide. modifiers are irrelevant for a button click.
+                window.__deck.send("Interaction", {
+                    kind: "KeyPressed",
+                    key: "present",
+                    modifiers: { shift: false, ctrl: false, alt: false, meta: false },
+                });
+            });
+        }
+        const globals = document.getElementById("globals-css");
+        if (globals) {
+            globals.addEventListener("blur", function () {
+                window.__deck.send("Interaction", {
+                    kind: "GlobalsCssEditRequested",
+                    new_css: globals.value,
+                });
+            });
+        }
+    }
 
     // matchUndoRedoShortcut
     // Inputs: a KeyboardEvent.
@@ -2373,6 +2797,32 @@
         return null;
     }
 
+    // matchPresentShortcut
+    // Inputs: a KeyboardEvent.
+    // Output: true when the event is the Present accelerator (Cmd+Return /
+    // Ctrl+Return, no Shift). Starts presentation from the active slide. The
+    // Shift variant is reserved for a future "from the beginning".
+    function matchPresentShortcut(e) {
+        const meta = !!(e.metaKey || e.ctrlKey);
+        return meta && !e.shiftKey && e.key === "Enter";
+    }
+
+    // matchAddSlideShortcut
+    // Inputs: a KeyboardEvent.
+    // Output: true when the event is the New-Slide accelerator
+    // (Cmd+Shift+N / Ctrl+Shift+N), false otherwise. Distinct from the
+    // File "New deck" accelerator (Cmd/Ctrl+N, no Shift) handled by
+    // matchFileShortcut, so the two never collide.
+    // Dataflow: require Cmd/Ctrl AND Shift; lowercase the key; match "n".
+    function matchAddSlideShortcut(e) {
+        const meta = !!(e.metaKey || e.ctrlKey);
+        if (!meta || !e.shiftKey) {
+            return false;
+        }
+        const key = (typeof e.key === "string") ? e.key.toLowerCase() : "";
+        return key === "n";
+    }
+
     // sendSyntheticKey
     // Inputs: a logical key name ("undo" / "redo" / ...), the original
     // KeyboardEvent (for its modifiers).
@@ -2422,7 +2872,10 @@
     // Keys whose default behavior is dangerous inside a WKWebView /
     // WebView2 host (history navigation on Backspace, tab focus
     // hijacking, etc.) so we always preventDefault them, even when we
-    // are about to forward them as Interaction events.
+    // are about to forward them as Interaction events. Keys NOT in this
+    // set are left to bubble: the native key path is now safe because the
+    // app installs an empty NSApp main menu (see src/main.rs), so wry's
+    // keyDown forwarding no longer null-derefs on unhandled keys.
     const ALWAYS_PREVENT_DEFAULT_KEYS = new Set([
         "Backspace", "Delete", "Tab",
     ]);
@@ -2437,6 +2890,16 @@
     // accelerator-keyed shortcuts (Cmd/Ctrl-…) still fire so that
     // Save / Undo / Redo remain available everywhere.
     document.addEventListener("keydown", function (e) {
+        if (matchAddSlideShortcut(e)) {
+            e.preventDefault();
+            window.__deck.send("Interaction", { kind: "AddSlideRequested" });
+            return;
+        }
+        if (matchPresentShortcut(e)) {
+            e.preventDefault();
+            sendSyntheticKey("present", e);
+            return;
+        }
         const fileAction = matchFileShortcut(e);
         if (fileAction) {
             e.preventDefault();

@@ -11,6 +11,7 @@ pub type SlideId = String;
 pub type ElementId = String;
 pub type LayoutId = String;
 pub type AssetId = String;
+pub type AnimationId = String;
 
 // new_element_id
 // Inputs: none.
@@ -29,6 +30,15 @@ pub fn new_element_id() -> ElementId {
 pub fn new_slide_id() -> SlideId {
     let out: String = Ulid::new().to_string();
     assert!(!out.is_empty(), "ULID must produce non-empty string");
+    out
+}
+
+// new_animation_id
+// Inputs: none.
+// Output: a fresh animation ID of the form "anim_<ULID>".
+pub fn new_animation_id() -> AnimationId {
+    let out: String = format!("anim_{}", Ulid::new());
+    assert!(out.starts_with("anim_"), "animation id must carry anim_ prefix");
     out
 }
 

@@ -15,7 +15,7 @@
 // and the operation's label.
 
 use crate::commands::{Command, CommandError, CommandOutput};
-use crate::deck::{Deck, SlideId};
+use crate::deck::{CanvasTarget, Deck, SlideId};
 use crate::ipc::Patch;
 use std::collections::VecDeque;
 use tracing::debug;
@@ -44,11 +44,15 @@ pub struct HistoryEntry {
 #[derive(Debug)]
 pub struct UndoOutput {
     pub patches: Vec<Patch>,
-    pub dirty_slides: Vec<SlideId>,
+    pub dirty_targets: Vec<CanvasTarget>,
     pub label: &'static str,
     pub affects_object_tree: bool,
     pub requires_remount: bool,
     pub affects_slide_list: bool,
+    pub affects_layout_list: bool,
+    pub affects_globals: bool,
+    pub affects_animations: bool,
+    pub warnings: Vec<String>,
 }
 
 // CommandHistory
@@ -145,7 +149,10 @@ impl CommandHistory {
         let affects_object_tree: bool = entry.inverse.affects_object_tree();
         let requires_remount: bool = entry.inverse.requires_remount();
         let affects_slide_list: bool = entry.inverse.affects_slide_list();
-        let CommandOutput { patches, inverse, dirty_slides, .. } =
+        let affects_layout_list: bool = entry.inverse.affects_layout_list();
+        let affects_globals: bool = entry.inverse.affects_globals();
+        let affects_animations: bool = entry.inverse.affects_animations();
+        let CommandOutput { patches, inverse, dirty_targets, warnings, .. } =
             entry.inverse.apply(deck)?;
         self.redo_stack.push_back(HistoryEntry {
             inverse,
@@ -156,11 +163,15 @@ impl CommandHistory {
         debug!(label, "history undo");
         Ok(Some(UndoOutput {
             patches,
-            dirty_slides,
+            dirty_targets,
             label,
             affects_object_tree,
             requires_remount,
             affects_slide_list,
+            affects_layout_list,
+            affects_globals,
+            affects_animations,
+            warnings,
         }))
     }
 
@@ -181,7 +192,10 @@ impl CommandHistory {
         let affects_object_tree: bool = entry.inverse.affects_object_tree();
         let requires_remount: bool = entry.inverse.requires_remount();
         let affects_slide_list: bool = entry.inverse.affects_slide_list();
-        let CommandOutput { patches, inverse, dirty_slides, .. } =
+        let affects_layout_list: bool = entry.inverse.affects_layout_list();
+        let affects_globals: bool = entry.inverse.affects_globals();
+        let affects_animations: bool = entry.inverse.affects_animations();
+        let CommandOutput { patches, inverse, dirty_targets, warnings, .. } =
             entry.inverse.apply(deck)?;
         self.undo_stack.push_back(HistoryEntry {
             inverse,
@@ -192,11 +206,15 @@ impl CommandHistory {
         debug!(label, "history redo");
         Ok(Some(UndoOutput {
             patches,
-            dirty_slides,
+            dirty_targets,
             label,
             affects_object_tree,
             requires_remount,
             affects_slide_list,
+            affects_layout_list,
+            affects_globals,
+            affects_animations,
+            warnings,
         }))
     }
 
@@ -266,7 +284,7 @@ mod tests {
 
     fn move_cmd(sid: &SlideId, eid: &crate::deck::ElementId, x: f64, y: f64) -> Box<dyn Command> {
         Box::new(MoveElement {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             new_position: Point { x, y },
             previous_position: None,
@@ -369,7 +387,7 @@ mod tests {
         assert_eq!(after.x, original.x);
         assert_eq!(after.y, original.y);
         assert_eq!(undone.label, "Move Element");
-        assert!(!undone.dirty_slides.is_empty());
+        assert!(!undone.dirty_targets.is_empty());
         assert!(!undone.patches.is_empty());
         assert!(h.can_redo());
         assert!(!h.can_undo());

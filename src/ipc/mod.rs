@@ -9,6 +9,7 @@
 // to be idempotent so they can be applied without coordination.
 
 pub mod bridge;
+pub mod present;
 
 use serde::{Deserialize, Serialize};
 
@@ -100,6 +101,42 @@ pub enum MessageKind {
     // Incremental delivery of a single newly-imported asset. Avoids
     // re-shipping every asset on each import.
     AssetAdded(AssetPayload),
+    // LayoutListUpdate
+    // Stage 11 — layouts row + globals editor. The layout-mode analogue of
+    // SlideListUpdate: every layout's id, name and serialized HTML plus the
+    // active layout id, the shared theme/globals CSS, and dimensions. Sent
+    // when entering layout mode and after any command that reports
+    // affects_layout_list / affects_globals.
+    LayoutListUpdate(LayoutListData),
+    // SetMode
+    // Stage 11 — editor mode echo. Tells JS which mode is now active
+    // ("slide" | "layout") so it can flip `body[data-mode]` and swap the
+    // slides-vs-layouts list and inspector-vs-globals panels.
+    SetMode { mode: String },
+    // SlideAnimationsUpdate
+    // Stage: animations — the active slide's timeline (id/element/category
+    // per entry) so the inspector's Appear/Disappear toggles reflect state.
+    SlideAnimationsUpdate(SlideAnimationsData),
+    // Notice
+    // A non-fatal advisory message (e.g. an add-time ordering accommodation).
+    Notice { message: String },
+
+    // ---- Presentation mode (Rust -> presentation webview) ----
+    // PresentInit
+    // One-shot config sent after the presentation webview reports Ready:
+    // built-in keyframes CSS + deck pixel dimensions for stage scaling.
+    PresentInit(present::PresentInitPayload),
+    // PresentAssets
+    // Ships every registered asset's bytes to the presentation webview so it can
+    // build its own blob-URL cache (blob URLs are not shareable across webviews).
+    // Reuses the editor's AssetsBundle shape. Sent on Ready, before PresentSlide.
+    PresentAssets(AssetsBundle),
+    // PresentSlide
+    // Mount a slide in the presentation stage (slide HTML + theme/globals CSS).
+    PresentSlide(present::PresentSlidePayload),
+    // PresentReveal
+    // Apply one step's resolved visual state (hidden / shown / animate).
+    PresentReveal(present::RevealPayload),
 }
 
 // ---------- JS -> Rust payloads ----------
@@ -156,6 +193,10 @@ pub enum InteractionEvent {
         new_position: Point,
         new_size: Size,
     },
+    // TextEditStarted
+    // Fired when a text element enters inline editing (double-click). The
+    // webview is authoritative for the text content during the session;
+    // Rust takes no action until TextEditEnded (SPEC §8.5).
     TextEditStarted {
         element_id: ElementId,
     },
@@ -163,8 +204,14 @@ pub enum InteractionEvent {
         element_id: ElementId,
         delta: RichTextDelta,
     },
+    // TextEditEnded
+    // Fired when an inline edit session commits (Enter or blur). `text`
+    // carries the element's final plain textContent so the Rust side can
+    // dispatch a single SetTextContent. An empty string is a valid edit
+    // (the user cleared the text).
     TextEditEnded {
         element_id: ElementId,
+        text: String,
     },
     BackgroundClicked {
         position: Point,
@@ -230,6 +277,23 @@ pub enum InteractionEvent {
     // Stage 10 — thumbnail "+" tile / Cmd+Shift+N. Inserts a blank
     // slide directly after the active slide and makes it active.
     AddSlideRequested,
+    // SlideTitleEditRequested
+    // Double-click a thumbnail label. The Rust side dispatches a
+    // SetSlideTitle command (manifest title) and rebroadcasts the slide
+    // list so the label refreshes.
+    SlideTitleEditRequested {
+        slide_id: SlideId,
+        new_title: String,
+    },
+    // ElementIdEditRequested
+    // Double-click an object-panel row to rename the element's id.
+    // `new_id` is the raw text the user typed; the Rust side sanitizes it
+    // (runs of whitespace collapse to a single '_') before dispatching a
+    // SetElementId command against the active slide.
+    ElementIdEditRequested {
+        element_id: ElementId,
+        new_id: String,
+    },
     // AssetImported
     // Stage — image import. Sent when the user drops a file (or pastes
     // an image) onto the viewport. `content_base64` carries the raw
@@ -249,6 +313,44 @@ pub enum InteractionEvent {
         height: u32,
         #[serde(default)]
         position: Option<Point>,
+    },
+    // ---- Stage 11: layout editor ----
+    // SetEditorMode
+    // Toolbar mode toggle. `mode` is "slide" or "layout"; anything else is
+    // ignored by the Rust handler.
+    SetEditorMode {
+        mode: String,
+    },
+    // LayoutThumbnailClicked
+    // Select / mount a layout in the layouts row (layout-mode analogue of
+    // SlideThumbnailClicked).
+    LayoutThumbnailClicked {
+        layout_id: LayoutId,
+    },
+    // AddLayoutRequested
+    // Layouts row "+" tile. Inserts a new blank layout after the active one
+    // and makes it active.
+    AddLayoutRequested,
+    // LayoutNameEditRequested
+    // Double-click a layout label to rename it (reuses the floating editor).
+    LayoutNameEditRequested {
+        layout_id: LayoutId,
+        new_name: String,
+    },
+    // GlobalsCssEditRequested
+    // Commit of the globals CSS textarea (blur). Replaces the deck-wide
+    // globals blob.
+    GlobalsCssEditRequested {
+        new_css: String,
+    },
+    // ---- Stage: animations ----
+    // SetElementAnimation
+    // Minimal Appear/Disappear toggle on the selected element. `category` is
+    // "entrance" or "exit"; `enabled` toggles add/remove of a default entry.
+    SetElementAnimation {
+        element_id: ElementId,
+        category: String,
+        enabled: bool,
     },
 }
 
@@ -316,6 +418,11 @@ pub struct MountSlideArgs {
     pub slide_id: SlideId,
     pub slide_html: String,
     pub theme_css: String,
+    // globals_css (Stage 11) — the deck-wide globals blob injected into the
+    // shadow root between theme_css and the asset-vars block. The same mount
+    // path serves both slides and layouts (the id is whichever canvas is
+    // active); JS does not need to know which kind it is.
+    pub globals_css: String,
 }
 
 // SelectionState
@@ -376,10 +483,14 @@ pub struct SetThemeArgs {
 }
 
 // EditorConfig
-// One-shot configuration the webview reads at startup. Placeholder fields.
+// One-shot configuration the webview reads at startup.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct EditorConfig {
     pub debug: bool,
+    // The immutable built-in @keyframes library (Stage: animations). JS caches
+    // it and injects it into every shadow root alongside theme/globals CSS.
+    #[serde(default)]
+    pub animation_keyframes_css: String,
 }
 
 // ThumbnailRequest
@@ -406,14 +517,14 @@ pub struct ObjectTreeData {
 // ObjectTreeNode
 // One row in the panel. `element_type` is the HTML token ("text",
 // "image", "shape", "media", "table", "group", "embed") so JS can pick
-// the matching badge icon. `display_name` is the rename-able label;
-// when an element has no `name` set, the Rust side passes the element
-// id verbatim and the JS panel renders that.
+// the matching badge icon. The panel labels each row with the element
+// `id` directly — double-clicking it edits that id (see ElementIdEdit-
+// Requested). There is no separate display name, so the row label and
+// the editable identity are always the same value.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ObjectTreeNode {
     pub id: ElementId,
     pub element_type: String,
-    pub display_name: String,
     pub children: Vec<ObjectTreeNode>,
 }
 
@@ -458,6 +569,50 @@ pub struct SlideListEntry {
     pub slide_id: SlideId,
     pub title: String,
     pub html: String,
+}
+
+// LayoutListData
+// Stage 11 payload — the layouts row + globals editor state. Mirrors
+// SlideListData but carries `globals_css` so the JS host can refresh the
+// globals textarea from the same message, and the per-entry display label
+// is `name` (layouts have an explicit display name; slides fall back to id).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct LayoutListData {
+    pub layouts: Vec<LayoutListEntry>,
+    pub active_layout_id: Option<LayoutId>,
+    pub theme_css: String,
+    pub globals_css: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+// LayoutListEntry
+// One layout thumbnail's worth of data: stable id, display name, and the
+// serialized root HTML (rendered in its own shadow root like a slide).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct LayoutListEntry {
+    pub layout_id: LayoutId,
+    pub name: String,
+    pub html: String,
+}
+
+// SlideAnimationsData
+// Stage: animations payload — the active slide's timeline, one entry per
+// animation so the inspector can reflect per-element Appear/Disappear state.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SlideAnimationsData {
+    pub slide_id: SlideId,
+    pub entries: Vec<SlideAnimationEntry>,
+}
+
+// SlideAnimationEntry
+// One timeline entry as the UI needs it: the stable animation id, its target
+// element, and the category string ("entrance" | "emphasis" | "exit").
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SlideAnimationEntry {
+    pub animation_id: String,
+    pub element_id: ElementId,
+    pub category: String,
 }
 
 // Patch
@@ -560,6 +715,7 @@ mod tests {
             slide_id: "s1".into(),
             slide_html: "<section/>".into(),
             theme_css: ".x{}".into(),
+            globals_css: "@keyframes a{}".into(),
         }));
         let parsed: IpcMessage = round_trip(&msg);
         match parsed.kind {
@@ -567,9 +723,125 @@ mod tests {
                 assert_eq!(args.slide_id, "s1");
                 assert_eq!(args.slide_html, "<section/>");
                 assert_eq!(args.theme_css, ".x{}");
+                assert_eq!(args.globals_css, "@keyframes a{}");
             }
             other => panic!("unexpected variant: {other:?}"),
         }
+    }
+
+    // ---------- Stage 11: layout editor messages ----------
+
+    #[test]
+    fn layout_editor_events_roundtrip() {
+        let events = [
+            (
+                r#"{"kind":"SetEditorMode","mode":"layout"}"#,
+                "SetEditorMode",
+            ),
+            (
+                r#"{"kind":"LayoutThumbnailClicked","layout_id":"title"}"#,
+                "LayoutThumbnailClicked",
+            ),
+            (r#"{"kind":"AddLayoutRequested"}"#, "AddLayoutRequested"),
+            (
+                r#"{"kind":"LayoutNameEditRequested","layout_id":"title","new_name":"Title"}"#,
+                "LayoutNameEditRequested",
+            ),
+            (
+                r#"{"kind":"GlobalsCssEditRequested","new_css":":root{}"}"#,
+                "GlobalsCssEditRequested",
+            ),
+        ];
+        for (raw, kind) in events {
+            let parsed: InteractionEvent = serde_json::from_str(raw).unwrap();
+            let json = serde_json::to_value(&parsed).unwrap();
+            assert_eq!(json["kind"], kind);
+        }
+    }
+
+    #[test]
+    fn layout_list_update_roundtrips_through_ipc() {
+        let data = LayoutListData {
+            layouts: vec![LayoutListEntry {
+                layout_id: "blank".into(),
+                name: "Blank".into(),
+                html: "<section/>".into(),
+            }],
+            active_layout_id: Some("blank".into()),
+            theme_css: ".x{}".into(),
+            globals_css: ":root{--a:1}".into(),
+            width: 1920,
+            height: 1080,
+        };
+        let msg = IpcMessage::new(MessageKind::LayoutListUpdate(data.clone()));
+        let back: IpcMessage =
+            serde_json::from_str(&serde_json::to_string(&msg).unwrap()).unwrap();
+        match back.kind {
+            MessageKind::LayoutListUpdate(d) => assert_eq!(d, data),
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_mode_echo_roundtrips() {
+        let msg = IpcMessage::new(MessageKind::SetMode { mode: "layout".into() });
+        let back: IpcMessage =
+            serde_json::from_str(&serde_json::to_string(&msg).unwrap()).unwrap();
+        match back.kind {
+            MessageKind::SetMode { mode } => assert_eq!(mode, "layout"),
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    // ---------- Stage: animations messages ----------
+
+    #[test]
+    fn set_element_animation_event_parses() {
+        let raw = r#"{"kind":"SetElementAnimation","element_id":"el_a","category":"entrance","enabled":true}"#;
+        let parsed: InteractionEvent = serde_json::from_str(raw).unwrap();
+        match parsed {
+            InteractionEvent::SetElementAnimation { element_id, category, enabled } => {
+                assert_eq!(element_id, "el_a");
+                assert_eq!(category, "entrance");
+                assert!(enabled);
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn slide_animations_update_and_notice_roundtrip() {
+        let data = SlideAnimationsData {
+            slide_id: "s1".into(),
+            entries: vec![SlideAnimationEntry {
+                animation_id: "anim_1".into(),
+                element_id: "el_a".into(),
+                category: "entrance".into(),
+            }],
+        };
+        let msg = IpcMessage::new(MessageKind::SlideAnimationsUpdate(data.clone()));
+        let back: IpcMessage =
+            serde_json::from_str(&serde_json::to_string(&msg).unwrap()).unwrap();
+        match back.kind {
+            MessageKind::SlideAnimationsUpdate(d) => assert_eq!(d, data),
+            other => panic!("unexpected variant: {other:?}"),
+        }
+
+        let n = IpcMessage::new(MessageKind::Notice { message: "moved".into() });
+        let back_n: IpcMessage =
+            serde_json::from_str(&serde_json::to_string(&n).unwrap()).unwrap();
+        match back_n.kind {
+            MessageKind::Notice { message } => assert_eq!(message, "moved"),
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn editor_config_carries_keyframes() {
+        let cfg = EditorConfig { debug: false, animation_keyframes_css: "@keyframes appear{}".into() };
+        let back: EditorConfig =
+            serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
+        assert_eq!(back.animation_keyframes_css, "@keyframes appear{}");
     }
 
     #[test]
@@ -718,16 +990,13 @@ mod tests {
             nodes: vec![ObjectTreeNode {
                 id: "el_a".into(),
                 element_type: "text".into(),
-                display_name: "Title".into(),
                 children: vec![],
             }, ObjectTreeNode {
                 id: "el_g".into(),
                 element_type: "group".into(),
-                display_name: "el_g".into(),
                 children: vec![ObjectTreeNode {
                     id: "el_inner".into(),
                     element_type: "shape".into(),
-                    display_name: "el_inner".into(),
                     children: vec![],
                 }],
             }],
@@ -911,6 +1180,61 @@ mod tests {
             InteractionEvent::ReparentElementRequested {
                 ref element_id, ref new_parent_id, new_position: 1,
             } if element_id == "el_a" && new_parent_id == "el_g"
+        ));
+    }
+
+    #[test]
+    fn text_edit_events_parse_from_js_envelopes() {
+        let started: InteractionEvent =
+            serde_json::from_str(r#"{"kind":"TextEditStarted","element_id":"el_t"}"#).unwrap();
+        assert!(matches!(
+            started,
+            InteractionEvent::TextEditStarted { ref element_id } if element_id == "el_t"
+        ));
+
+        // TextEditEnded now carries the committed plain text, including the
+        // empty-string case (the user cleared the element).
+        let ended: InteractionEvent = serde_json::from_str(
+            r#"{"kind":"TextEditEnded","element_id":"el_t","text":"Hello world"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            ended,
+            InteractionEvent::TextEditEnded { ref element_id, ref text }
+                if element_id == "el_t" && text == "Hello world"
+        ));
+
+        let cleared: InteractionEvent = serde_json::from_str(
+            r#"{"kind":"TextEditEnded","element_id":"el_t","text":""}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            cleared,
+            InteractionEvent::TextEditEnded { ref text, .. } if text.is_empty()
+        ));
+    }
+
+    #[test]
+    fn slide_title_and_element_id_edit_events_parse() {
+        let title: InteractionEvent = serde_json::from_str(
+            r#"{"kind":"SlideTitleEditRequested","slide_id":"s1","new_title":"Intro"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            title,
+            InteractionEvent::SlideTitleEditRequested { ref slide_id, ref new_title }
+                if slide_id == "s1" && new_title == "Intro"
+        ));
+
+        // new_id arrives raw (whitespace and all); the Rust side sanitizes.
+        let id_event: InteractionEvent = serde_json::from_str(
+            r#"{"kind":"ElementIdEditRequested","element_id":"el_a","new_id":"el b"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            id_event,
+            InteractionEvent::ElementIdEditRequested { ref element_id, ref new_id }
+                if element_id == "el_a" && new_id == "el b"
         ));
     }
 }

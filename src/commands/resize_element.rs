@@ -12,15 +12,15 @@
 // Negative or near-zero dimensions on the wire would otherwise produce
 // a degenerate element that's hard to select again.
 
-use crate::commands::{Command, CommandError, CommandOutput};
-use crate::deck::{ElementId, SlideId};
+use crate::commands::{Command, CommandError, CommandOutput, resolve_canvas_mut};
+use crate::deck::{Canvas, CanvasTarget, ElementId, SlideId};
 use crate::ipc::Patch;
 
 pub const MIN_DIMENSION_PX: f64 = 1.0;
 
 #[derive(Debug, Clone)]
 pub struct ResizeElement {
-    pub slide_id: SlideId,
+    pub target: CanvasTarget,
     pub element_id: ElementId,
     pub new_x: f64,
     pub new_y: f64,
@@ -39,13 +39,10 @@ impl Command for ResizeElement {
     // clamp width/height to MIN_DIMENSION_PX -> overwrite -> invalidate
     // index -> build the four CSS patches + inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
-        assert!(!self.slide_id.is_empty(), "ResizeElement: slide_id is empty");
+        assert!(!self.target.id().is_empty(), "ResizeElement: target id is empty");
         assert!(!self.element_id.is_empty(), "ResizeElement: element_id is empty");
-        let slide = deck
-            .slides
-            .get_mut(&self.slide_id)
-            .ok_or_else(|| CommandError::SlideNotFound(self.slide_id.clone()))?;
-        let element = slide
+        let canvas = resolve_canvas_mut(deck, &self.target)?;
+        let element = canvas
             .find_element_mut(&self.element_id)
             .ok_or_else(|| CommandError::ElementNotFound(self.element_id.clone()))?;
 
@@ -61,8 +58,8 @@ impl Command for ResizeElement {
         element.geometry.y = self.new_y;
         element.geometry.width = clamped_w;
         element.geometry.height = clamped_h;
-        slide.dirty = true;
-        slide.invalidate_index();
+        canvas.mark_dirty();
+        canvas.invalidate_index();
 
         let patches: Vec<Patch> = vec![
             Patch::SetStyle {
@@ -88,7 +85,7 @@ impl Command for ResizeElement {
         ];
 
         let inverse: ResizeElement = ResizeElement {
-            slide_id: self.slide_id.clone(),
+            target: self.target.clone(),
             element_id: self.element_id.clone(),
             new_x: prior_x,
             new_y: prior_y,
@@ -99,8 +96,9 @@ impl Command for ResizeElement {
         Ok(CommandOutput {
             patches,
             inverse: Box::new(inverse),
-            dirty_slides: vec![self.slide_id.clone()],
+            dirty_targets: vec![self.target.clone()],
             manifest_dirty: false,
+            warnings: Vec::new(),
         })
     }
 
@@ -126,7 +124,7 @@ mod tests {
     fn apply_writes_all_four_geometry_fields() {
         let (mut deck, sid, eid) = fixture();
         let cmd = ResizeElement {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             new_x: 100.0,
             new_y: 200.0,
@@ -145,7 +143,7 @@ mod tests {
     fn apply_emits_four_set_style_patches() {
         let (mut deck, sid, eid) = fixture();
         let cmd = ResizeElement {
-            slide_id: sid,
+            target: CanvasTarget::Slide(sid),
             element_id: eid.clone(),
             new_x: 1.0,
             new_y: 2.0,
@@ -175,7 +173,7 @@ mod tests {
         let (mut deck, sid, eid) = fixture();
         let before = deck.slides[&sid].find_element(&eid).unwrap().geometry.clone();
         let cmd = ResizeElement {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             new_x: 999.0,
             new_y: 888.0,
@@ -195,7 +193,7 @@ mod tests {
     fn width_height_clamped_to_min_dimension() {
         let (mut deck, sid, eid) = fixture();
         let cmd = ResizeElement {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             new_x: 0.0,
             new_y: 0.0,
@@ -211,7 +209,7 @@ mod tests {
     #[test]
     fn label_and_undoable_are_stable() {
         let cmd = ResizeElement {
-            slide_id: "s".into(),
+            target: CanvasTarget::Slide("s".into()),
             element_id: "e".into(),
             new_x: 0.0,
             new_y: 0.0,
@@ -228,7 +226,7 @@ mod tests {
     fn errors_on_missing_slide() {
         let mut deck = Deck::sample();
         let cmd = ResizeElement {
-            slide_id: "ghost".into(),
+            target: CanvasTarget::Slide("ghost".into()),
             element_id: "x".into(),
             new_x: 0.0,
             new_y: 0.0,
@@ -243,7 +241,7 @@ mod tests {
     fn errors_on_missing_element() {
         let (mut deck, sid, _) = fixture();
         let cmd = ResizeElement {
-            slide_id: sid,
+            target: CanvasTarget::Slide(sid),
             element_id: "no_such".into(),
             new_x: 0.0,
             new_y: 0.0,
@@ -258,7 +256,7 @@ mod tests {
     fn marks_slide_dirty() {
         let (mut deck, sid, eid) = fixture();
         ResizeElement {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid,
             new_x: 0.0,
             new_y: 0.0,

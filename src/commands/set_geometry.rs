@@ -12,9 +12,9 @@
 // SetGeometryProperty(Width, ...). MoveElement remains the right tool for
 // drag-end (atomic x+y update).
 
-use crate::commands::{Command, CommandError, CommandOutput};
+use crate::commands::{Command, CommandError, CommandOutput, resolve_canvas_mut};
 use crate::deck::style::Geometry;
-use crate::deck::{ElementId, SlideId};
+use crate::deck::{Canvas, CanvasTarget, ElementId, SlideId};
 use crate::ipc::Patch;
 
 // GeometryProperty
@@ -69,7 +69,7 @@ impl GeometryProperty {
 
 #[derive(Debug, Clone)]
 pub struct SetGeometryProperty {
-    pub slide_id: SlideId,
+    pub target: CanvasTarget,
     pub element_id: ElementId,
     pub property: GeometryProperty,
     pub new_value: f64,
@@ -85,20 +85,17 @@ impl Command for SetGeometryProperty {
     // Dataflow: locate slide -> locate element -> snapshot prior scalar
     // -> overwrite -> invalidate index -> build patch + inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
-        assert!(!self.slide_id.is_empty(), "SetGeometryProperty: slide_id is empty");
+        assert!(!self.target.id().is_empty(), "SetGeometryProperty: target id is empty");
         assert!(!self.element_id.is_empty(), "SetGeometryProperty: element_id is empty");
-        let slide = deck
-            .slides
-            .get_mut(&self.slide_id)
-            .ok_or_else(|| CommandError::SlideNotFound(self.slide_id.clone()))?;
-        let element = slide
+        let canvas = resolve_canvas_mut(deck, &self.target)?;
+        let element = canvas
             .find_element_mut(&self.element_id)
             .ok_or_else(|| CommandError::ElementNotFound(self.element_id.clone()))?;
 
         let prior: f64 = read_field(&element.geometry, self.property);
         write_field(&mut element.geometry, self.property, self.new_value);
-        slide.dirty = true;
-        slide.invalidate_index();
+        canvas.mark_dirty();
+        canvas.invalidate_index();
 
         let css_value: String = format_css_value(self.property, self.new_value);
         let patch: Patch = Patch::SetStyle {
@@ -108,7 +105,7 @@ impl Command for SetGeometryProperty {
         };
 
         let inverse: SetGeometryProperty = SetGeometryProperty {
-            slide_id: self.slide_id.clone(),
+            target: self.target.clone(),
             element_id: self.element_id.clone(),
             property: self.property,
             new_value: prior,
@@ -117,8 +114,9 @@ impl Command for SetGeometryProperty {
         Ok(CommandOutput {
             patches: vec![patch],
             inverse: Box::new(inverse),
-            dirty_slides: vec![self.slide_id.clone()],
+            dirty_targets: vec![self.target.clone()],
             manifest_dirty: false,
+            warnings: Vec::new(),
         })
     }
 
@@ -192,7 +190,7 @@ mod tests {
     fn run(p: GeometryProperty, v: f64) -> (Deck, SlideId, ElementId, CommandOutput) {
         let (mut deck, sid, eid) = fixture();
         let cmd = SetGeometryProperty {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             property: p,
             new_value: v,
@@ -206,7 +204,7 @@ mod tests {
         let (mut deck, sid, eid) = fixture();
         let before = deck.slides[&sid].find_element(&eid).unwrap().geometry.clone();
         let cmd = SetGeometryProperty {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             property: GeometryProperty::Width,
             new_value: 500.0,
@@ -264,7 +262,7 @@ mod tests {
         let (mut deck, sid, eid) = fixture();
         let original_h = deck.slides[&sid].find_element(&eid).unwrap().geometry.height;
         let cmd = SetGeometryProperty {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
             property: GeometryProperty::Height,
             new_value: 999.0,
@@ -278,7 +276,7 @@ mod tests {
     #[test]
     fn labels_are_stable_and_undoable() {
         let cmd = SetGeometryProperty {
-            slide_id: "s".into(),
+            target: CanvasTarget::Slide("s".into()),
             element_id: "e".into(),
             property: GeometryProperty::Width,
             new_value: 1.0,
@@ -291,7 +289,7 @@ mod tests {
     fn errors_on_missing_slide() {
         let mut deck = Deck::sample();
         let cmd = SetGeometryProperty {
-            slide_id: "ghost".into(),
+            target: CanvasTarget::Slide("ghost".into()),
             element_id: "x".into(),
             property: GeometryProperty::X,
             new_value: 0.0,
@@ -304,7 +302,7 @@ mod tests {
     fn errors_on_missing_element() {
         let (mut deck, sid, _) = fixture();
         let cmd = SetGeometryProperty {
-            slide_id: sid,
+            target: CanvasTarget::Slide(sid),
             element_id: "no_such".into(),
             property: GeometryProperty::X,
             new_value: 0.0,
@@ -333,7 +331,7 @@ mod tests {
     fn marks_slide_dirty() {
         let (mut deck, sid, eid) = fixture();
         let cmd = SetGeometryProperty {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid,
             property: GeometryProperty::X,
             new_value: 5.0,

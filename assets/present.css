@@ -1,0 +1,45 @@
+/* Presentation mode stylesheet.
+ *
+ * A black full-viewport root with one fixed-size "stage" centered inside it.
+ * The stage is sized to the deck's authored pixel dimensions and scaled to fit
+ * the window via a JS-set transform; the black root showing through provides
+ * the letterbox bars. Slides mount into a shadow root inside the stage, so the
+ * deck theme / globals / keyframes CSS stay scoped (never leaking to chrome). */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html,
+body {
+    width: 100%;
+    height: 100%;
+    background: #000;
+    overflow: hidden;
+}
+
+/* Centers the stage; the leftover space is the letterbox. */
+#stage-wrap {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Sized + scaled by present.js (width/height set from PresentInit dims). */
+#stage {
+    position: relative;
+    transform-origin: center center;
+    background: #000;
+    overflow: hidden;
+}
+
+/* The slide host + its section fill the stage exactly. */
+.present-host,
+.present-host > .slide {
+    width: 100%;
+    height: 100%;
+}

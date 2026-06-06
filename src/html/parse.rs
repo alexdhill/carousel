@@ -292,6 +292,11 @@ fn is_known_attr(key: &str) -> bool {
             | "data-shape-radius"
             | "data-shape-d"
             | "class"
+            // data-anim-ids is a derived targeting tag emitted by the
+            // serializer from the slide timeline; consume (drop) it on read
+            // so it never accumulates in element.attributes (the manifest is
+            // authoritative for animations, not the HTML).
+            | "data-anim-ids"
     )
 }
 
@@ -540,6 +545,28 @@ mod tests {
     use proptest::prelude::*;
 
     // ---------- unit tests: known-input/known-output ("red-black") ----------
+
+    #[test]
+    fn parser_drops_derived_data_anim_ids() {
+        let html = r#"<div data-element-id="el_a" data-element-type="text"
+                          data-anim-ids="anim_1 anim_2">hi</div>"#;
+        let node = parse_element(html).unwrap();
+        // The derived targeting tag must NOT be swept into the catch-all
+        // attributes map, or it would accumulate across save/load cycles.
+        assert!(!node.attributes.contains_key("data-anim-ids"));
+    }
+
+    #[test]
+    fn anim_tag_does_not_accumulate_through_html_round_trip() {
+        // A slide HTML carrying data-anim-ids, parsed back, has no animation
+        // state in the element tree (the manifest is authoritative), so a
+        // re-serialization of that parsed slide emits no tag.
+        let html = r#"<section class="slide" data-slide-id="s" data-layout="t" data-root-id="rt"><div class="slide__content"><div data-element-id="el_a" data-element-type="text" data-anim-ids="anim_1">hi</div></div></section>"#;
+        let slide = parse_slide_fragment(html).unwrap();
+        assert!(slide.animations.is_empty());
+        let again = serialize_slide(&slide);
+        assert_eq!(again.matches("data-anim-ids").count(), 0);
+    }
 
     #[test]
     fn parse_minimal_text_element() {

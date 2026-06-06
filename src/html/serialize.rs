@@ -21,6 +21,29 @@ use crate::deck::slide::SlideNode;
 use crate::deck::style::*;
 use std::collections::BTreeMap;
 
+// ANIMATION_KEYFRAMES_CSS
+// The immutable built-in @keyframes library injected into every shadow root
+// (viewport mount + thumbnails) alongside theme_css / globals_css. Inert
+// until a playback runtime exists; users cannot delete these (custom
+// @keyframes live in the editable theme.globals_css instead).
+pub const ANIMATION_KEYFRAMES_CSS: &str = r#"
+@keyframes appear { from { opacity: 0; } to { opacity: 1; } }
+@keyframes disappear { from { opacity: 1; } to { opacity: 0; } }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fade-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes fly-in-left { from { opacity: 0; transform: translateX(-40px); } to { opacity: 1; transform: none; } }
+@keyframes fly-in-right { from { opacity: 0; transform: translateX(40px); } to { opacity: 1; transform: none; } }
+@keyframes fly-in-top { from { opacity: 0; transform: translateY(-40px); } to { opacity: 1; transform: none; } }
+@keyframes fly-in-bottom { from { opacity: 0; transform: translateY(40px); } to { opacity: 1; transform: none; } }
+@keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.06); } 100% { transform: scale(1); } }
+"#;
+
+// AnimMap: element id → its animation entry ids (in timeline order). Built
+// from `SlideNode.animations` and threaded through the writers so each
+// animated element gets a `data-anim-ids` targeting tag (a forward-looking
+// hook for a future runtime; inert now, dropped by the parser on read).
+type AnimMap<'a> = BTreeMap<&'a str, Vec<&'a str>>;
+
 // serialize_element
 // Inputs: a reference to a tree-rooted ElementNode.
 // Output: an HTML fragment string containing exactly one top-level element.
@@ -30,7 +53,11 @@ use std::collections::BTreeMap;
 pub fn serialize_element(node: &ElementNode) -> String {
     assert!(node.is_consistent(), "cannot serialize inconsistent element");
     let mut out: String = String::new();
-    write_node(node, None, &mut out);
+    // Standalone elements (e.g. InsertElement patches) have no slide-level
+    // animation context, so they carry no targeting tag; the element picks
+    // one up on the next full slide mount.
+    let anim: AnimMap = AnimMap::new();
+    write_node(node, None, &anim, &mut out);
     out
 }
 
@@ -50,6 +77,11 @@ pub fn serialize_slide(slide: &SlideNode) -> String {
         slide.root.is_consistent(),
         "slide root must satisfy the element-triple invariant"
     );
+    // Build the element → animation-ids map (timeline order) for the tag.
+    let mut anim: AnimMap = AnimMap::new();
+    for e in &slide.animations {
+        anim.entry(e.element_id.as_str()).or_default().push(e.id.as_str());
+    }
     let mut out: String = String::new();
     out.push_str("<section class=\"slide\" data-slide-id=\"");
     out.push_str(&escape_attr(&slide.id));
@@ -59,7 +91,7 @@ pub fn serialize_slide(slide: &SlideNode) -> String {
     out.push_str(&escape_attr(&slide.root.id));
     out.push_str("\"><div class=\"slide__content\">");
     for (idx, child) in slide.root.children.iter().enumerate() {
-        write_node(child, Some(idx as i32), &mut out);
+        write_node(child, Some(idx as i32), &anim, &mut out);
     }
     out.push_str("</div></section>");
     out
@@ -72,11 +104,11 @@ pub fn serialize_slide(slide: &SlideNode) -> String {
 // Output: side-effect; appends `<div …>content</div>` to out.
 // Dataflow: attributes (with computed z-index in the style attr) →
 // content → recurse for groups, threading per-child sibling indices.
-fn write_node(node: &ElementNode, sibling_index: Option<i32>, out: &mut String) {
+fn write_node(node: &ElementNode, sibling_index: Option<i32>, anim: &AnimMap, out: &mut String) {
     out.push_str("<div");
-    write_attributes(node, sibling_index, out);
+    write_attributes(node, sibling_index, anim, out);
     out.push('>');
-    write_content(node, out);
+    write_content(node, anim, out);
     out.push_str("</div>");
 }
 
@@ -85,7 +117,7 @@ fn write_node(node: &ElementNode, sibling_index: Option<i32>, out: &mut String) 
 // Output: side-effect; appends ` k="v"` pairs in BTreeMap (alphabetic)
 // order. Model-owned attributes overwrite user-supplied ones of the same
 // key so the parser can rely on canonical key names.
-fn write_attributes(node: &ElementNode, sibling_index: Option<i32>, out: &mut String) {
+fn write_attributes(node: &ElementNode, sibling_index: Option<i32>, anim: &AnimMap, out: &mut String) {
     let mut attrs: BTreeMap<String, String> = node.attributes.clone();
     attrs.insert("data-element-id".into(), node.id.clone());
     attrs.insert(
@@ -100,6 +132,11 @@ fn write_attributes(node: &ElementNode, sibling_index: Option<i32>, out: &mut St
     }
     if let Some(v) = &node.placeholder_fill {
         attrs.insert("data-placeholder-fill".into(), v.clone());
+    }
+    // Animation targeting tag (derived from the slide timeline; dropped by
+    // the parser on read so it never accumulates).
+    if let Some(ids) = anim.get(node.id.as_str()) {
+        attrs.insert("data-anim-ids".into(), ids.join(" "));
     }
     add_content_attrs(node, &mut attrs);
     let style: String = build_style(node, sibling_index);
@@ -151,12 +188,12 @@ fn add_content_attrs(node: &ElementNode, attrs: &mut BTreeMap<String, String>) {
 // Text → escaped plain text; Group → recursive children threaded with
 // per-child sibling indices for z-index; Embed → raw HTML; other variants
 // emit nothing (content sits in data-* attributes).
-fn write_content(node: &ElementNode, out: &mut String) {
+fn write_content(node: &ElementNode, anim: &AnimMap, out: &mut String) {
     match &node.content {
         ElementContent::Text(rt) => out.push_str(&escape_text(&rt.plain)),
         ElementContent::Group => {
             for (idx, child) in node.children.iter().enumerate() {
-                write_node(child, Some(idx as i32), out);
+                write_node(child, Some(idx as i32), anim, out);
             }
         }
         ElementContent::Embed(html) => out.push_str(html),
@@ -296,6 +333,23 @@ mod tests {
     use super::*;
     use crate::deck::builders::*;
     use crate::deck::element::ShapeGeometry;
+
+    #[test]
+    fn serialize_emits_data_anim_ids_only_for_animated_elements() {
+        use crate::deck::animation::{
+            AnimationCategory, AnimationEntry, AnimationTiming, AnimationTrigger,
+        };
+        let root = group_element("rt", vec![text_element("el_a", "x"), text_element("el_b", "y")]);
+        let mut slide = SlideNode::new("s".into(), "title".into(), root);
+        slide.animations.push(AnimationEntry::new(
+            "anim_1".into(), "el_a".into(), "appear".into(),
+            AnimationCategory::Entrance, AnimationTrigger::OnClick, AnimationTiming::default(),
+        ));
+        let html = serialize_slide(&slide);
+        assert!(html.contains(r#"data-anim-ids="anim_1""#));
+        // el_b has no animation → exactly one tag in the whole slide.
+        assert_eq!(html.matches("data-anim-ids").count(), 1);
+    }
 
     #[test]
     fn text_serializes_with_required_attrs() {

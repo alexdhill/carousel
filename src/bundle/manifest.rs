@@ -12,7 +12,7 @@
 // cleanly into newer code.
 
 use crate::bundle::BundleError;
-use crate::deck::SlideId;
+use crate::deck::{AnimationEntry, SlideId};
 use serde::{Deserialize, Serialize};
 
 pub const SUPPORTED_FORMAT_MAJOR: u32 = 1;
@@ -87,6 +87,11 @@ pub struct SlideEntry {
     pub duration_hint: Option<u32>,
     #[serde(default)]
     pub notes_ref: Option<String>,
+    // The slide's animation timeline (Stage: animations). `SlideNode.animations`
+    // is the in-memory source of truth; this is the on-disk format, synced on
+    // save and hydrated on load. Absent in older bundles → empty.
+    #[serde(default)]
+    pub animations: Vec<AnimationEntry>,
 }
 
 // slide_path_for
@@ -321,6 +326,7 @@ mod tests {
             transition: Some("fade".into()),
             duration_hint: Some(30),
             notes_ref: None,
+            animations: Vec::new(),
         };
         let json_with = serde_json::to_string(&with).unwrap();
         let back_with: SlideEntry = serde_json::from_str(&json_with).unwrap();
@@ -335,6 +341,7 @@ mod tests {
             transition: None,
             duration_hint: None,
             notes_ref: None,
+            animations: Vec::new(),
         };
         let json_lean = serde_json::to_string(&lean).unwrap();
         let back_lean: SlideEntry = serde_json::from_str(&json_lean).unwrap();

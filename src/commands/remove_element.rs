@@ -10,14 +10,14 @@
 // the same module.
 
 use crate::commands::insert_element::InsertElement;
-use crate::commands::{Command, CommandError, CommandOutput};
-use crate::deck::slide::RemovedElement;
-use crate::deck::{ElementId, SlideId};
+use crate::commands::{Command, CommandError, CommandOutput, resolve_canvas_mut};
+use crate::deck::canvas::RemovedElement;
+use crate::deck::{Canvas, CanvasTarget, ElementId, SlideId};
 use crate::ipc::Patch;
 
 #[derive(Debug, Clone)]
 pub struct RemoveElementCommand {
-    pub slide_id: SlideId,
+    pub target: CanvasTarget,
     pub element_id: ElementId,
 }
 
@@ -33,26 +33,23 @@ impl Command for RemoveElementCommand {
     // Dataflow: locate slide -> reject root removal -> call
     // remove_non_root_element -> wrap captured subtree as InsertElement.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
-        assert!(!self.slide_id.is_empty(), "RemoveElement: slide_id is empty");
+        assert!(!self.target.id().is_empty(), "RemoveElement: target id is empty");
         assert!(!self.element_id.is_empty(), "RemoveElement: element_id is empty");
-        let slide = deck
-            .slides
-            .get_mut(&self.slide_id)
-            .ok_or_else(|| CommandError::SlideNotFound(self.slide_id.clone()))?;
-        if slide.is_root_id(&self.element_id) {
+        let canvas = resolve_canvas_mut(deck, &self.target)?;
+        if canvas.is_root_id(&self.element_id) {
             return Err(CommandError::InvalidOperation(format!(
-                "cannot remove slide root element {}",
+                "cannot remove canvas root element {}",
                 self.element_id
             )));
         }
-        let removed: RemovedElement = slide
+        let removed: RemovedElement = canvas
             .remove_non_root_element(&self.element_id)
             .ok_or_else(|| CommandError::ElementNotFound(self.element_id.clone()))?;
-        slide.dirty = true;
-        slide.invalidate_index();
+        canvas.mark_dirty();
+        canvas.invalidate_index();
 
         let inverse: InsertElement = InsertElement {
-            slide_id: self.slide_id.clone(),
+            target: self.target.clone(),
             parent_id: removed.parent_id,
             position: removed.position,
             node: removed.node,
@@ -63,8 +60,9 @@ impl Command for RemoveElementCommand {
                 element_id: self.element_id.clone(),
             }],
             inverse: Box::new(inverse),
-            dirty_slides: vec![self.slide_id.clone()],
+            dirty_targets: vec![self.target.clone()],
             manifest_dirty: false,
+            warnings: Vec::new(),
         })
     }
 
@@ -99,7 +97,7 @@ mod tests {
         let (mut deck, sid, eid) = deck_first_child();
         let count_before: usize = deck.slides[&sid].root.children.len();
         let cmd = RemoveElementCommand {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
         };
         let _ = cmd.apply(&mut deck).unwrap();
@@ -112,7 +110,7 @@ mod tests {
     fn remove_emits_one_remove_patch() {
         let (mut deck, sid, eid) = deck_first_child();
         let cmd = RemoveElementCommand {
-            slide_id: sid,
+            target: CanvasTarget::Slide(sid),
             element_id: eid.clone(),
         };
         let out = cmd.apply(&mut deck).unwrap();
@@ -128,7 +126,7 @@ mod tests {
         let (mut deck, sid, eid) = deck_first_child();
         let pos_before: usize = 0;
         let cmd = RemoveElementCommand {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
         };
         let out = cmd.apply(&mut deck).unwrap();
@@ -143,7 +141,7 @@ mod tests {
         let content_before = deck.slides[&sid].find_element(&eid).unwrap().content.clone();
 
         let cmd = RemoveElementCommand {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
         };
         let out = cmd.apply(&mut deck).unwrap();
@@ -159,7 +157,7 @@ mod tests {
     fn remove_errors_on_missing_slide() {
         let mut deck = Deck::sample();
         let cmd = RemoveElementCommand {
-            slide_id: "ghost".into(),
+            target: CanvasTarget::Slide("ghost".into()),
             element_id: "x".into(),
         };
         let err = cmd.apply(&mut deck).unwrap_err();
@@ -170,7 +168,7 @@ mod tests {
     fn remove_errors_on_missing_element() {
         let (mut deck, sid, _) = deck_first_child();
         let cmd = RemoveElementCommand {
-            slide_id: sid,
+            target: CanvasTarget::Slide(sid),
             element_id: "no_such".into(),
         };
         let err = cmd.apply(&mut deck).unwrap_err();
@@ -182,7 +180,7 @@ mod tests {
         let (mut deck, sid, _) = deck_first_child();
         let root_id: ElementId = deck.slides[&sid].root.id.clone();
         let cmd = RemoveElementCommand {
-            slide_id: sid,
+            target: CanvasTarget::Slide(sid),
             element_id: root_id,
         };
         let err = cmd.apply(&mut deck).unwrap_err();
@@ -193,7 +191,7 @@ mod tests {
     fn remove_marks_slide_dirty() {
         let (mut deck, sid, eid) = deck_first_child();
         let cmd = RemoveElementCommand {
-            slide_id: sid.clone(),
+            target: CanvasTarget::Slide(sid.clone()),
             element_id: eid,
         };
         let _ = cmd.apply(&mut deck).unwrap();
@@ -203,7 +201,7 @@ mod tests {
     #[test]
     fn remove_label_and_undoable() {
         let cmd = RemoveElementCommand {
-            slide_id: "s".into(),
+            target: CanvasTarget::Slide("s".into()),
             element_id: "e".into(),
         };
         assert_eq!(cmd.label(), "Delete Element");
