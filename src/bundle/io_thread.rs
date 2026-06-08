@@ -18,7 +18,8 @@
 #![allow(dead_code)]
 
 use crate::bundle::deck_io::{read_serialized, write_serialized};
-use crate::bundle::{BundleError, BundleReader, BundleWriter, SerializedDeck};
+use crate::bundle::theme_io::{read_theme, write_theme};
+use crate::bundle::{BundleError, BundleReader, BundleWriter, SerializedDeck, SerializedTheme};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
@@ -36,6 +37,15 @@ pub enum IoRequest {
     Load {
         path: PathBuf,
     },
+    // Theme save/load — the standalone `.slidetheme` archive. SerializedTheme
+    // holds owned String/Vec<u8> only, like SerializedDeck.
+    SaveTheme {
+        serialized: SerializedTheme,
+        target_path: PathBuf,
+    },
+    LoadTheme {
+        path: PathBuf,
+    },
 }
 
 // IoResponse
@@ -47,6 +57,13 @@ pub enum IoResponse {
     },
     Loaded {
         serialized: SerializedDeck,
+        path: PathBuf,
+    },
+    ThemeSaved {
+        path: PathBuf,
+    },
+    ThemeLoaded {
+        serialized: SerializedTheme,
         path: PathBuf,
     },
     Error {
@@ -157,7 +174,47 @@ fn handle_request(request: IoRequest) -> IoResponse {
     match request {
         IoRequest::Save { serialized, target_path } => save_blocking(serialized, target_path),
         IoRequest::Load { path } => load_blocking(path),
+        IoRequest::SaveTheme { serialized, target_path } => {
+            save_theme_blocking(serialized, target_path)
+        }
+        IoRequest::LoadTheme { path } => load_theme_blocking(path),
     }
+}
+
+// save_theme_blocking
+// Inputs: a SerializedTheme and target path.
+// Output: ThemeSaved or Error. Mirrors save_blocking using the theme writer.
+fn save_theme_blocking(serialized: SerializedTheme, target_path: PathBuf) -> IoResponse {
+    debug!(target = %target_path.display(), "io: save theme begin");
+    let mut writer: BundleWriter = match BundleWriter::create(&target_path) {
+        Ok(w) => w,
+        Err(e) => return error_response("save_theme", Some(target_path), e),
+    };
+    if let Err(e) = write_theme(&mut writer, &serialized) {
+        return error_response("save_theme", Some(target_path), e);
+    }
+    if let Err(e) = writer.finish() {
+        return error_response("save_theme", Some(target_path), e);
+    }
+    info!(target = %target_path.display(), "io: save theme committed");
+    IoResponse::ThemeSaved { path: target_path }
+}
+
+// load_theme_blocking
+// Inputs: path to a `.slidetheme` file.
+// Output: ThemeLoaded or Error. Mirrors load_blocking using the theme reader.
+fn load_theme_blocking(path: PathBuf) -> IoResponse {
+    debug!(path = %path.display(), "io: load theme begin");
+    let mut reader: BundleReader = match BundleReader::open(&path) {
+        Ok(r) => r,
+        Err(e) => return error_response("load_theme", Some(path), e),
+    };
+    let serialized: SerializedTheme = match read_theme(&mut reader) {
+        Ok(s) => s,
+        Err(e) => return error_response("load_theme", Some(path), e),
+    };
+    info!(path = %path.display(), "io: load theme complete");
+    IoResponse::ThemeLoaded { serialized, path }
 }
 
 // save_blocking
@@ -259,6 +316,33 @@ mod tests {
         }
 
         assert!(wakes.load(Ordering::SeqCst) >= 2);
+    }
+
+    #[test]
+    fn save_then_load_theme_round_trips_through_thread() {
+        use crate::bundle::{serialize_theme, AssetRegistry};
+        use crate::deck::ThemeData;
+        let (rtx, rrx) = mpsc::channel::<IoResponse>();
+        let io = IoThread::spawn(rtx, Box::new(|| {})).unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("t.slidetheme");
+        let serialized = serialize_theme(&ThemeData::default(), &AssetRegistry::new_empty()).unwrap();
+
+        io.submit(IoRequest::SaveTheme { serialized, target_path: path.clone() }).unwrap();
+        match drain_one(&rrx) {
+            IoResponse::ThemeSaved { path: p } => assert_eq!(p, path),
+            other => panic!("expected ThemeSaved, got {other:?}"),
+        }
+
+        io.submit(IoRequest::LoadTheme { path: path.clone() }).unwrap();
+        match drain_one(&rrx) {
+            IoResponse::ThemeLoaded { serialized, path: p } => {
+                assert_eq!(p, path);
+                assert!(serialized.theme_json.contains("theme_id"));
+            }
+            other => panic!("expected ThemeLoaded, got {other:?}"),
+        }
     }
 
     #[test]

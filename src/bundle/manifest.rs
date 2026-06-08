@@ -92,6 +92,15 @@ pub struct SlideEntry {
     // save and hydrated on load. Absent in older bundles → empty.
     #[serde(default)]
     pub animations: Vec<AnimationEntry>,
+    // Per-slide background (inspector Slide box). `SlideNode.metadata.background`
+    // is the in-memory source of truth (it renders); this is the on-disk format,
+    // synced on save and hydrated on load like `animations`. Absent → None.
+    #[serde(default)]
+    pub background: Option<String>,
+    // Inline speaker notes (inspector Slide box). Manifest-authoritative chrome
+    // (notes do not render), distinct from the future file-based `notes_ref`.
+    #[serde(default)]
+    pub notes: Option<String>,
 }
 
 // slide_path_for
@@ -327,6 +336,8 @@ mod tests {
             duration_hint: Some(30),
             notes_ref: None,
             animations: Vec::new(),
+            background: None,
+            notes: None,
         };
         let json_with = serde_json::to_string(&with).unwrap();
         let back_with: SlideEntry = serde_json::from_str(&json_with).unwrap();
@@ -342,6 +353,8 @@ mod tests {
             duration_hint: None,
             notes_ref: None,
             animations: Vec::new(),
+            background: None,
+            notes: None,
         };
         let json_lean = serde_json::to_string(&lean).unwrap();
         let back_lean: SlideEntry = serde_json::from_str(&json_lean).unwrap();

@@ -695,6 +695,121 @@ body[data-mode="layout"] .globals {
     display: flex;
 }
 
+/* Slide box — the no-selection, slide-mode inspector state. Hidden by default;
+   JS sets display:flex when nothing is selected in slide mode. */
+.slide-box {
+    display: none;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px 12px;
+    border-top: 1px solid #3a3a3a;
+    background: #242424;
+}
+
+.slide-box__title {
+    margin: 0;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: #b0b0b0;
+}
+
+.slide-box__field {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.slide-box__field--full {
+    flex-direction: column;
+    align-items: stretch;
+}
+
+.slide-box__label {
+    flex: 0 0 80px;
+    font-size: 11px;
+    color: #9a9a9a;
+}
+
+.slide-box__select,
+.slide-box__input {
+    flex: 1;
+    background: #1b1b1b;
+    color: #e0e0e0;
+    border: 1px solid #3a3a3a;
+    border-radius: 4px;
+    padding: 5px 7px;
+    font: inherit;
+    font-size: 12px;
+}
+
+.slide-box__swatch {
+    width: 40px;
+    height: 26px;
+    padding: 0;
+    border: 1px solid #3a3a3a;
+    border-radius: 4px;
+    background: #1b1b1b;
+    cursor: pointer;
+}
+
+.slide-box__notes {
+    width: 100%;
+    min-height: 70px;
+    resize: vertical;
+    background: #1b1b1b;
+    color: #e0e0e0;
+    border: 1px solid #3a3a3a;
+    border-radius: 4px;
+    padding: 6px 8px;
+    font: inherit;
+    font-size: 12px;
+}
+
+/* Typography select + color swatch in the element inspector. */
+.inspector__select {
+    cursor: pointer;
+}
+
+.inspector__swatch {
+    padding: 0;
+    height: 26px;
+    cursor: pointer;
+}
+
+/* Theme save/load actions — layout-mode only, like the globals editor. */
+.theme-actions {
+    display: none;
+    gap: 8px;
+    padding: 10px 12px 12px;
+    border-top: 1px solid #3a3a3a;
+    background: #242424;
+}
+
+body[data-mode="layout"] .theme-actions {
+    display: flex;
+}
+
+.theme-actions__btn {
+    flex: 1;
+    background: #1e1e1e;
+    color: #cfcfcf;
+    border: 1px solid #3a3a3a;
+    border-radius: 4px;
+    padding: 6px 8px;
+    font: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.theme-actions__btn:hover {
+    background: #0066ff;
+    color: #fff;
+    border-color: #0066ff;
+}
+
 .globals__label {
     font-size: 11px;
     font-weight: 600;

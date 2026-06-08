@@ -40,9 +40,9 @@ fn layout_path_for(id: &str) -> String {
 // id and display name, listed in canonical display order. The element tree
 // lives in the per-layout HTML file (theme/layouts/<id>.html).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-struct LayoutMeta {
-    id: String,
-    name: String,
+pub(crate) struct LayoutMeta {
+    pub(crate) id: String,
+    pub(crate) name: String,
 }
 
 // ThemeJson
@@ -119,6 +119,9 @@ pub fn serialize_deck(deck: &Deck) -> BundleResult<SerializedDeck> {
     for entry in &mut manifest.slides {
         if let Some(slide) = deck.slides.get(&entry.id) {
             entry.animations = slide.animations.clone();
+            // Background is SlideNode-authoritative (it renders); sync it into
+            // the manifest for persistence, like the animation timeline.
+            entry.background = slide.metadata.background.clone();
         }
     }
     let manifest_json: String = serde_json::to_string_pretty(&manifest)?;
@@ -347,6 +350,9 @@ pub fn deserialize_deck(serialized: SerializedDeck) -> BundleResult<Deck> {
         // The manifest is authoritative for the animation timeline (the HTML
         // carries only a derived, dropped-on-read targeting tag).
         slide.animations = entry.animations.clone();
+        // Hydrate the per-slide background from the manifest (the serializer
+        // re-derives the section inline style from it on the next save).
+        slide.metadata.background = entry.background.clone();
         // Manifest is authoritative for slide id; ensure parsed slide
         // matches so round trips are stable.
         if slide.id != entry.id {
@@ -603,6 +609,27 @@ mod tests {
         assert_eq!(title.root.children.len(), 1);
         assert_eq!(title.root.children[0].id, "el_t");
         assert_eq!(back.theme.layouts["blank"].name, "Blank");
+    }
+
+    #[test]
+    fn round_trip_preserves_slide_background_and_notes() {
+        let mut original = Deck::sample();
+        let sid = original.slide_order[0].clone();
+        original.slides.get_mut(&sid).unwrap().metadata.background = Some("#101820".into());
+        original
+            .manifest
+            .slides
+            .iter_mut()
+            .find(|e| e.id == sid)
+            .unwrap()
+            .notes = Some("speak slowly".into());
+
+        let back = deserialize_deck(serialize_deck(&original).unwrap()).unwrap();
+        // Background is SlideNode-authoritative (renders), synced via manifest.
+        assert_eq!(back.slides[&sid].metadata.background, Some("#101820".to_string()));
+        // Notes are manifest-authoritative chrome.
+        let entry = back.manifest.slides.iter().find(|e| e.id == sid).unwrap();
+        assert_eq!(entry.notes, Some("speak slowly".to_string()));
     }
 
     #[test]

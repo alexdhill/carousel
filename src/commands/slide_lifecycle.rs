@@ -152,6 +152,8 @@ impl Command for RemoveSlide {
                 duration_hint: None,
                 notes_ref: None,
                 animations: Vec::new(),
+                background: None,
+                notes: None,
             }
         };
         deck.dirty_slides.remove(&self.slide_id);
@@ -206,6 +208,8 @@ mod tests {
             duration_hint: None,
             notes_ref: None,
             animations: Vec::new(),
+            background: None,
+            notes: None,
         }
     }
 

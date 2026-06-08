@@ -15,14 +15,16 @@
 
 use crate::bundle::assets::{AssetDimensions, AssetEntry};
 use crate::bundle::{
-    IoRequest, IoResponse, IoThread, deserialize_deck, serialize_deck,
+    AssetRegistry, IoRequest, IoResponse, IoThread, deserialize_deck, deserialize_theme,
+    serialize_deck, serialize_theme,
 };
 use crate::commands::{
     Command, CommandDispatcher, CompositeCommand, EditorMode, FileAction, GeometryProperty,
     InsertAnimation, InsertElement, InsertLayout, InsertSlide, InterpretResult, MoveElement,
     RemoveAnimation, RemoveElementCommand, RemoveInlineStyle, RenameElement, ReparentElement,
     ResizeElement, SetElementId, SetGeometryProperty, SetGlobalsCss, SetInlineStyle, SetLayoutName,
-    SetSlideTitle, SetTextContent, TransactionSnapshot,
+    SetSlideBackground, SetSlideLayout, SetSlideNotes, SetSlideTitle, SetTextContent, SwapTheme,
+    TransactionSnapshot,
 };
 use crate::deck::animation::{AnimationCategory, AnimationEntry, AnimationTiming, AnimationTrigger};
 use crate::deck::element::{
@@ -43,7 +45,8 @@ use crate::present::session::{PresentationSession, PresentStep};
 use crate::ipc::{
     AssetPayload, AssetsBundle, EditorConfig, InteractionEvent, IpcMessage, LayoutListData,
     LayoutListEntry, MessageKind, MountSlideArgs, ObjectTreeData, ObjectTreeNode, Patch, Point,
-    SelectionState, Size, SlideAnimationEntry, SlideAnimationsData, SlideListData, SlideListEntry,
+    SelectionState, Size, SlideAnimationEntry, SlideAnimationsData, SlideInspectorData,
+    SlideInspectorLayout, SlideListData, SlideListEntry,
 };
 use base64::Engine;
 use std::collections::BTreeMap;
@@ -66,6 +69,7 @@ const SAVE_AS_KEY: &str = "save_as_deck";
 // Synthetic accelerator the JS host posts for ⌘↩ / the toolbar Play button.
 const PRESENT_KEY: &str = "present";
 const BUNDLE_FILE_EXTENSION: &str = "slidedeck";
+const THEME_FILE_EXTENSION: &str = "slidetheme";
 // Keys forwarded by the JS host that should trigger element deletion.
 // Both names cover the two physical keys users reach for: macOS users
 // typically press Delete (which the platform reports as "Backspace"),
@@ -274,7 +278,27 @@ impl ApplicationCore {
             globals_css: self.dispatcher.deck().theme.globals_css.clone(),
         };
         self.sender.send(MessageKind::MountSlide(args))?;
-        self.sender.send(MessageKind::ObjectTreeUpdate(tree))
+        self.sender.send(MessageKind::ObjectTreeUpdate(tree))?;
+        // Refresh the Slide box (no-op outside slide mode) so it tracks the
+        // active slide on every mount / switch.
+        self.send_slide_inspector()
+    }
+
+    // send_slide_inspector
+    // Inputs: none.
+    // Output: Ok(()) after sending one SlideInspectorUpdate for the active
+    // slide. No-op outside Slide mode (layout mode's no-selection state shows
+    // the globals editor, not the Slide box) or when there is no active slide.
+    fn send_slide_inspector(&self) -> AppResult<()> {
+        if self.dispatcher.mode() != EditorMode::Slide {
+            return Ok(());
+        }
+        let data: SlideInspectorData =
+            match build_slide_inspector_data(self.dispatcher.deck(), self.active_slide.as_ref()) {
+                Some(d) => d,
+                None => return Ok(()),
+            };
+        self.sender.send(MessageKind::SlideInspectorUpdate(data))
     }
 
     // canvas_mount_artifacts
@@ -789,6 +813,41 @@ impl ApplicationCore {
                     enabled,
                 )
             }
+            InteractionEvent::SaveThemeRequested => {
+                InterpretResult::FileAction(FileAction::SaveTheme)
+            }
+            InteractionEvent::LoadThemeRequested => {
+                InterpretResult::FileAction(FileAction::LoadTheme)
+            }
+            InteractionEvent::SetSlideBackgroundRequested { background } => {
+                match &self.active_slide {
+                    Some(sid) => InterpretResult::Command(Box::new(SetSlideBackground {
+                        slide_id: sid.clone(),
+                        background: empty_to_none(background),
+                    })),
+                    None => InterpretResult::Nothing,
+                }
+            }
+            InteractionEvent::SetSlideNotesRequested { notes } => match &self.active_slide {
+                Some(sid) => InterpretResult::Command(Box::new(SetSlideNotes {
+                    slide_id: sid.clone(),
+                    notes: empty_to_none(notes),
+                })),
+                None => InterpretResult::Nothing,
+            },
+            InteractionEvent::SetSlideLayoutRequested { layout_id } => {
+                if layout_id.is_empty() {
+                    InterpretResult::Nothing
+                } else {
+                    match &self.active_slide {
+                        Some(sid) => InterpretResult::Command(Box::new(SetSlideLayout {
+                            slide_id: sid.clone(),
+                            new_layout_id: layout_id,
+                        })),
+                        None => InterpretResult::Nothing,
+                    }
+                }
+            }
             InteractionEvent::KeyPressed { ref key, .. } if key == UNDO_KEY => {
                 InterpretResult::Undo
             }
@@ -1048,6 +1107,8 @@ impl ApplicationCore {
             FileAction::Open => self.file_open(),
             FileAction::Save => self.file_save(),
             FileAction::SaveAs => self.file_save_as(),
+            FileAction::SaveTheme => self.theme_save(),
+            FileAction::LoadTheme => self.theme_load(),
         }
     }
 
@@ -1177,6 +1238,23 @@ impl ApplicationCore {
             if let Err(e) = self.sender.send(MessageKind::Notice { message: msg.clone() }) {
                 warn!("notice send failed: {}", e);
             }
+        }
+        // Asset registry changes (e.g. a theme swap) ride alongside the
+        // structural branches below — a SwapTheme also sets affects_layout_list
+        // / requires_remount, which early-return — so resend the bundle FIRST,
+        // additively, so the JS blob cache is correct before the remount lands.
+        if outcome.affects_assets
+            && let Err(e) = self.send_assets_bundle()
+        {
+            warn!("assets broadcast after dispatch failed: {}", e);
+        }
+        // Slide-metadata changes (background / notes / layout) resync the Slide
+        // box. Additive like affects_assets: a background/layout change also sets
+        // requires_remount below, so this does not early-return.
+        if outcome.affects_slide_meta
+            && let Err(e) = self.send_slide_inspector()
+        {
+            warn!("slide inspector broadcast after dispatch failed: {}", e);
         }
         if outcome.affects_slide_list {
             self.resync_after_slide_list_change();
@@ -1502,6 +1580,57 @@ impl ApplicationCore {
         Ok(())
     }
 
+    // theme_save
+    // Inputs: none.
+    // Output: Ok(()) once the export was queued (or the dialog cancelled).
+    // Errors: serialize_theme failure (BundleError → AppError).
+    // Dataflow: show the OS Save dialog (.slidetheme) -> serialize the current
+    // theme + its referenced assets -> submit a SaveTheme IoRequest. Never
+    // touches history (export is side-effect only).
+    pub fn theme_save(&mut self) -> AppResult<()> {
+        let picked: Option<PathBuf> = prompt_save_theme();
+        let target: PathBuf = match picked {
+            Some(p) => ensure_extension(p, THEME_FILE_EXTENSION),
+            None => {
+                debug!("theme: save cancelled by user");
+                return Ok(());
+            }
+        };
+        let serialized =
+            serialize_theme(&self.dispatcher.deck().theme, &self.dispatcher.deck().assets)?;
+        info!(target = %target.display(), "theme: save queued");
+        if self
+            .io_thread
+            .submit(IoRequest::SaveTheme { serialized, target_path: target })
+            .is_err()
+        {
+            warn!("theme: save could not be queued (io thread closed)");
+        }
+        Ok(())
+    }
+
+    // theme_load
+    // Inputs: none.
+    // Output: Ok(()) regardless of whether the user picked a path.
+    // Errors: none direct (load failures arrive asynchronously as
+    // IoResponse::Error / a deserialize failure handled in handle_io_response).
+    // Dataflow: show the OS Open dialog (.slidetheme) -> submit a LoadTheme
+    // IoRequest. The theme is applied (undoably) when ThemeLoaded comes back.
+    pub fn theme_load(&mut self) -> AppResult<()> {
+        let path: PathBuf = match prompt_open_theme() {
+            Some(p) => p,
+            None => {
+                debug!("theme: load cancelled by user");
+                return Ok(());
+            }
+        };
+        info!(path = %path.display(), "theme: load requested");
+        if self.io_thread.submit(IoRequest::LoadTheme { path }).is_err() {
+            warn!("theme: load could not be queued (io thread closed)");
+        }
+        Ok(())
+    }
+
     // handle_io_response
     // Inputs: an IoResponse posted by the IoThread.
     // Output: Ok(()) on success.
@@ -1534,6 +1663,33 @@ impl ApplicationCore {
                 self.send_slide_list()?;
                 self.send_assets_bundle()?;
                 self.send_active_slide()
+            }
+            IoResponse::ThemeSaved { path } => {
+                info!(path = %path.display(), "theme: save committed");
+                Ok(())
+            }
+            IoResponse::ThemeLoaded { serialized, path } => {
+                info!(path = %path.display(), "theme: load received");
+                match deserialize_theme(serialized) {
+                    Ok((theme, assets)) => {
+                        // Apply undoably: replace the theme + merge its assets.
+                        // The SwapTheme outcome flags drive the remount + layout
+                        // list + globals + assets rebroadcast (react_to_outcome).
+                        let add_assets = collect_loaded_assets(&assets);
+                        self.dispatch_and_maybe_flush(Box::new(SwapTheme {
+                            install_theme: theme,
+                            add_assets,
+                            remove_asset_ids: Vec::new(),
+                        }));
+                        Ok(())
+                    }
+                    Err(e) => {
+                        warn!("theme: deserialize failed: {}", e);
+                        self.sender.send(MessageKind::Notice {
+                            message: format!("Failed to load theme: {e}"),
+                        })
+                    }
+                }
             }
             IoResponse::Error { operation, path, message } => {
                 warn!(operation, ?path, "file: io error: {}", message);
@@ -1606,6 +1762,42 @@ fn prompt_open() -> Option<PathBuf> {
     rfd::FileDialog::new()
         .add_filter("Slide Deck", &[BUNDLE_FILE_EXTENSION])
         .pick_file()
+}
+
+// prompt_save_theme
+// Inputs: none.
+// Output: the user's chosen export path, or None on cancel. Seeds a default
+// filename so the dialog opens ready to confirm.
+fn prompt_save_theme() -> Option<PathBuf> {
+    rfd::FileDialog::new()
+        .add_filter("Slide Theme", &[THEME_FILE_EXTENSION])
+        .set_file_name(format!("Untitled.{THEME_FILE_EXTENSION}"))
+        .save_file()
+}
+
+// prompt_open_theme
+// Inputs: none.
+// Output: the user's chosen theme path, or None on cancel.
+fn prompt_open_theme() -> Option<PathBuf> {
+    rfd::FileDialog::new()
+        .add_filter("Slide Theme", &[THEME_FILE_EXTENSION])
+        .pick_file()
+}
+
+// collect_loaded_assets
+// Inputs: the AssetRegistry returned by deserialize_theme (entries + bytes).
+// Output: the (entry, bytes) pairs to hand SwapTheme as `add_assets`. An entry
+// whose bytes are missing is skipped (defensive; read_theme pairs them).
+fn collect_loaded_assets(registry: &AssetRegistry) -> Vec<(AssetEntry, Vec<u8>)> {
+    let mut out: Vec<(AssetEntry, Vec<u8>)> = Vec::with_capacity(registry.assets.len());
+    for entry in &registry.assets {
+        if let Some(bytes) = registry.files.get(&entry.path) {
+            out.push((entry.clone(), bytes.clone()));
+        } else {
+            warn!(asset_id = %entry.id, "collect_loaded_assets: bytes missing; skipping");
+        }
+    }
+    out
 }
 
 // ensure_extension
@@ -1911,6 +2103,57 @@ fn build_slide_list_data(deck: &Deck, active_slide: Option<&SlideId>) -> SlideLi
         width: deck.manifest.dimensions.width,
         height: deck.manifest.dimensions.height,
     }
+}
+
+// build_slide_inspector_data
+// Inputs: the deck and the active slide id.
+// Output: the SlideInspectorData for the active slide — title/notes/layout_id
+// from the manifest entry, background from the SlideNode metadata, and the
+// theme's layouts (id + name) in display order for the picker. None when there
+// is no active slide.
+fn build_slide_inspector_data(
+    deck: &Deck,
+    active: Option<&SlideId>,
+) -> Option<SlideInspectorData> {
+    let sid: &SlideId = active?;
+    let entry = deck.manifest.slides.iter().find(|e| &e.id == sid);
+    let title: String = entry.map(|e| e.title.clone()).unwrap_or_default();
+    let notes: String = entry.and_then(|e| e.notes.clone()).unwrap_or_default();
+    let layout_id: String = entry
+        .map(|e| e.layout_id.clone())
+        .or_else(|| deck.slides.get(sid).map(|s| s.layout_id.clone()))
+        .unwrap_or_default();
+    let background: String = deck
+        .slides
+        .get(sid)
+        .and_then(|s| s.metadata.background.clone())
+        .unwrap_or_default();
+    let layouts: Vec<SlideInspectorLayout> = deck
+        .theme
+        .layout_order
+        .iter()
+        .filter_map(|lid| {
+            deck.theme
+                .layouts
+                .get(lid)
+                .map(|l| SlideInspectorLayout { id: lid.clone(), name: l.name.clone() })
+        })
+        .collect();
+    Some(SlideInspectorData {
+        slide_id: sid.clone(),
+        title,
+        notes,
+        background,
+        layout_id,
+        layouts,
+    })
+}
+
+// empty_to_none
+// Inputs: a string from a Slide-box field.
+// Output: None when blank (clears the field), else Some(trimmed-preserving s).
+fn empty_to_none(s: String) -> Option<String> {
+    if s.trim().is_empty() { None } else { Some(s) }
 }
 
 // build_image_element_from_asset
@@ -2254,6 +2497,8 @@ fn build_insert_slide_after_active(
         duration_hint: None,
         notes_ref: None,
         animations: Vec::new(),
+        background: None,
+        notes: None,
     };
 
     let cmd: Box<dyn Command> = Box::new(InsertSlide { position, slide, manifest_entry });
@@ -3797,6 +4042,8 @@ mod tests {
                 duration_hint: None,
                 notes_ref: None,
                 animations: Vec::new(),
+                background: None,
+                notes: None,
             },
         }
         .apply(&mut deck)
@@ -4035,6 +4282,24 @@ mod tests {
         deck.slide_order.push("slide_two".into());
         let active: Option<SlideId> = Some("slide_two".into());
         assert_eq!(present_start_index(&deck, active.as_ref()), Some(1));
+    }
+
+    #[test]
+    fn build_slide_inspector_data_reads_active_slide_and_layouts() {
+        let mut deck = Deck::sample();
+        let sid = deck.slide_order[0].clone();
+        deck.slides.get_mut(&sid).unwrap().metadata.background = Some("#222".into());
+        deck.manifest.slides.iter_mut().find(|e| e.id == sid).unwrap().notes =
+            Some("speak up".into());
+
+        let data = build_slide_inspector_data(&deck, Some(&sid)).expect("active slide");
+        assert_eq!(data.slide_id, sid);
+        assert_eq!(data.background, "#222");
+        assert_eq!(data.notes, "speak up");
+        assert_eq!(data.layout_id, "title");
+        assert!(data.layouts.iter().any(|l| l.id == "blank"));
+        // No active slide → None.
+        assert!(build_slide_inspector_data(&deck, None).is_none());
     }
 
     #[test]

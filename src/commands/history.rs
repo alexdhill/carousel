@@ -52,6 +52,8 @@ pub struct UndoOutput {
     pub affects_layout_list: bool,
     pub affects_globals: bool,
     pub affects_animations: bool,
+    pub affects_assets: bool,
+    pub affects_slide_meta: bool,
     pub warnings: Vec<String>,
 }
 
@@ -152,6 +154,8 @@ impl CommandHistory {
         let affects_layout_list: bool = entry.inverse.affects_layout_list();
         let affects_globals: bool = entry.inverse.affects_globals();
         let affects_animations: bool = entry.inverse.affects_animations();
+        let affects_assets: bool = entry.inverse.affects_assets();
+        let affects_slide_meta: bool = entry.inverse.affects_slide_meta();
         let CommandOutput { patches, inverse, dirty_targets, warnings, .. } =
             entry.inverse.apply(deck)?;
         self.redo_stack.push_back(HistoryEntry {
@@ -171,6 +175,8 @@ impl CommandHistory {
             affects_layout_list,
             affects_globals,
             affects_animations,
+            affects_assets,
+            affects_slide_meta,
             warnings,
         }))
     }
@@ -195,6 +201,8 @@ impl CommandHistory {
         let affects_layout_list: bool = entry.inverse.affects_layout_list();
         let affects_globals: bool = entry.inverse.affects_globals();
         let affects_animations: bool = entry.inverse.affects_animations();
+        let affects_assets: bool = entry.inverse.affects_assets();
+        let affects_slide_meta: bool = entry.inverse.affects_slide_meta();
         let CommandOutput { patches, inverse, dirty_targets, warnings, .. } =
             entry.inverse.apply(deck)?;
         self.undo_stack.push_back(HistoryEntry {
@@ -214,6 +222,8 @@ impl CommandHistory {
             affects_layout_list,
             affects_globals,
             affects_animations,
+            affects_assets,
+            affects_slide_meta,
             warnings,
         }))
     }

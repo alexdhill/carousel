@@ -119,6 +119,8 @@ impl Deck {
                 duration_hint: None,
                 notes_ref: None,
                 animations: Vec::new(),
+                background: None,
+                notes: None,
             }],
             ..ManifestData::default()
         };
@@ -207,6 +209,8 @@ impl Deck {
                 duration_hint: None,
                 notes_ref: None,
                 animations: Vec::new(),
+                background: None,
+                notes: None,
             }],
             ..ManifestData::default()
         };

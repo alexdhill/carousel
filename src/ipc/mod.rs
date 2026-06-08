@@ -137,6 +137,13 @@ pub enum MessageKind {
     // PresentReveal
     // Apply one step's resolved visual state (hidden / shown / animate).
     PresentReveal(present::RevealPayload),
+
+    // SlideInspectorUpdate
+    // Smart styles pane — the active slide's inspector data (title, notes,
+    // background, layout, and the available layouts for the picker). Sent on
+    // slide mount and after any slide-metadata command so the Slide box (shown
+    // when nothing is selected) stays in sync.
+    SlideInspectorUpdate(SlideInspectorData),
 }
 
 // ---------- JS -> Rust payloads ----------
@@ -352,6 +359,17 @@ pub enum InteractionEvent {
         category: String,
         enabled: bool,
     },
+    // ---- Theme save/load ----
+    // SaveThemeRequested / LoadThemeRequested — the layout-mode "Save Theme…" /
+    // "Load Theme…" buttons. Map to FileAction::SaveTheme / LoadTheme.
+    SaveThemeRequested,
+    LoadThemeRequested,
+    // ---- Smart styles pane: Slide box (no selection) ----
+    // Each targets the active slide (the Rust side supplies the id). An empty
+    // string clears the field (background/notes → None).
+    SetSlideBackgroundRequested { background: String },
+    SetSlideNotesRequested { notes: String },
+    SetSlideLayoutRequested { layout_id: LayoutId },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default)]
@@ -615,6 +633,29 @@ pub struct SlideAnimationEntry {
     pub category: String,
 }
 
+// SlideInspectorLayout
+// One entry in the Slide box's Layout picker: stable id + display name.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SlideInspectorLayout {
+    pub id: LayoutId,
+    pub name: String,
+}
+
+// SlideInspectorData
+// The active slide's inspector payload. `notes` / `background` are empty strings
+// when unset (the JS box treats "" as cleared). `layouts` is the theme's layout
+// list in display order, so the picker works in slide mode without the full
+// LayoutListUpdate.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SlideInspectorData {
+    pub slide_id: SlideId,
+    pub title: String,
+    pub notes: String,
+    pub background: String,
+    pub layout_id: LayoutId,
+    pub layouts: Vec<SlideInspectorLayout>,
+}
+
 // Patch
 // Tagged on `op`. Patches are idempotent DOM mutations applied to the
 // element matched by `element_id` inside the active slide's shadow root.
@@ -794,6 +835,45 @@ mod tests {
     }
 
     // ---------- Stage: animations messages ----------
+
+    #[test]
+    fn slide_inspector_payload_and_events_roundtrip() {
+        let data = SlideInspectorData {
+            slide_id: "s1".into(),
+            title: "Intro".into(),
+            notes: "speak up".into(),
+            background: "#222".into(),
+            layout_id: "title".into(),
+            layouts: vec![SlideInspectorLayout { id: "blank".into(), name: "Blank".into() }],
+        };
+        let msg = IpcMessage::new(MessageKind::SlideInspectorUpdate(data.clone()));
+        let back: IpcMessage =
+            serde_json::from_str(&serde_json::to_string(&msg).unwrap()).unwrap();
+        match back.kind {
+            MessageKind::SlideInspectorUpdate(d) => assert_eq!(d, data),
+            other => panic!("unexpected variant: {other:?}"),
+        }
+
+        for raw in [
+            r##"{"kind":"SetSlideBackgroundRequested","background":"#222"}"##,
+            r#"{"kind":"SetSlideNotesRequested","notes":"hi"}"#,
+            r#"{"kind":"SetSlideLayoutRequested","layout_id":"blank"}"#,
+        ] {
+            let _e: InteractionEvent = serde_json::from_str(raw).unwrap();
+        }
+    }
+
+    #[test]
+    fn theme_action_events_roundtrip() {
+        for (raw, kind) in [
+            (r#"{"kind":"SaveThemeRequested"}"#, "SaveThemeRequested"),
+            (r#"{"kind":"LoadThemeRequested"}"#, "LoadThemeRequested"),
+        ] {
+            let parsed: InteractionEvent = serde_json::from_str(raw).unwrap();
+            let json = serde_json::to_value(&parsed).unwrap();
+            assert_eq!(json["kind"], kind);
+        }
+    }
 
     #[test]
     fn set_element_animation_event_parses() {

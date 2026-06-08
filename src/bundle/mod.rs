@@ -25,10 +25,12 @@ pub mod deck_io;
 pub mod io_thread;
 pub mod manifest;
 pub mod reader;
+pub mod theme_io;
 pub mod writer;
 
 pub use assets::AssetRegistry;
 pub use deck_io::{SerializedDeck, deserialize_deck, serialize_deck};
+pub use theme_io::{SerializedTheme, deserialize_theme, serialize_theme};
 pub use io_thread::{IoRequest, IoResponse, IoThread};
 pub use manifest::{
     Dimensions, ManifestData, Metadata, SUPPORTED_FORMAT_MAJOR, SlideEntry, ThemeRef,

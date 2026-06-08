@@ -22,6 +22,11 @@ pub use crate::deck::canvas::{InsertError, RemovedElement};
 pub struct SlideMetadata {
     pub title: Option<String>,
     pub notes: Option<String>,
+    // Per-slide background (Option = inherit the theme's .slide background).
+    // Rendered as an inline style on the slide <section> by the serializer, and
+    // persisted via the manifest SlideEntry (synced like `animations`).
+    #[serde(default)]
+    pub background: Option<String>,
 }
 
 // SlideNode

@@ -59,6 +59,26 @@
                 <button type="submit" class="inspector__apply">Apply</button>
             </div>
         </form>
+        <section id="slide-box" class="slide-box">
+            <h3 class="slide-box__title">Slide</h3>
+            <label class="slide-box__field">
+                <span class="slide-box__label">Background</span>
+                <input type="color" id="slide-bg" class="slide-box__swatch">
+            </label>
+            <label class="slide-box__field">
+                <span class="slide-box__label">Layout</span>
+                <select id="slide-layout" class="slide-box__select"></select>
+            </label>
+            <label class="slide-box__field">
+                <span class="slide-box__label">Title</span>
+                <input type="text" id="slide-title" class="slide-box__input" spellcheck="false">
+            </label>
+            <label class="slide-box__field slide-box__field--full">
+                <span class="slide-box__label">Notes</span>
+                <textarea id="slide-notes" class="slide-box__notes" spellcheck="false"
+                          placeholder="Speaker notes…"></textarea>
+            </label>
+        </section>
         <section id="animations-section" class="animations">
             <h3 class="animations__title">Animations</h3>
             <label class="animations__row">
@@ -72,6 +92,16 @@
             <label class="globals__label" for="globals-css">Globals CSS</label>
             <textarea id="globals-css" class="globals__textarea" spellcheck="false"
                       placeholder="/* deck-wide CSS: @keyframes, :root custom properties… */"></textarea>
+        </section>
+        <section id="theme-actions" class="theme-actions">
+            <button type="button" id="theme-save-btn" class="theme-actions__btn"
+                    title="Export this theme (layouts + globals + styling) to a file">
+                Save Theme…
+            </button>
+            <button type="button" id="theme-load-btn" class="theme-actions__btn"
+                    title="Load a theme file (replaces layouts + globals + styling; undoable)">
+                Load Theme…
+            </button>
         </section>
     </aside>
     <nav id="thumbnail-row" class="panel panel--thumbs" aria-label="Slides"></nav>

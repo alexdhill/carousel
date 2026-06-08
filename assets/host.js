@@ -58,6 +58,9 @@
     // The active slide's animation timeline (from SlideAnimationsUpdate); the
     // inspector's Appear/Disappear toggles filter this by the selected id.
     let slideAnimations = [];
+    // The active slide's inspector data (from SlideInspectorUpdate); rendered in
+    // the Slide box when nothing is selected in slide mode.
+    let slideInspectorData = null;
 
     // ---------- envelope id ----------
     function newId() {
@@ -831,6 +834,9 @@
             const mode = (payload && payload.mode) || "slide";
             currentMode = mode;
             document.body.dataset.mode = mode;
+            // The no-selection pane differs by mode (Slide box vs globals), so
+            // re-evaluate inspector visibility on a mode switch.
+            refreshInspector();
         },
         Configure: function (payload) {
             builtinKeyframesCss = (payload && payload.animation_keyframes_css) || "";
@@ -838,6 +844,14 @@
         SlideAnimationsUpdate: function (payload) {
             slideAnimations = (payload && payload.entries) || [];
             refreshAnimationsSection();
+        },
+        SlideInspectorUpdate: function (payload) {
+            slideInspectorData = payload || null;
+            // Refresh the Slide box if it is the visible state (no selection,
+            // slide mode). refreshInspector decides whether to render it.
+            if (currentSelectionIds.length === 0) {
+                refreshInspector();
+            }
         },
         Notice: function (payload) {
             showNotice((payload && payload.message) || "");
@@ -1164,10 +1178,19 @@
     // plain numeric string, "rotation-deg" converts degrees → radians on
     // send and radians → degrees on display, "css" sends the raw string.
     // `readonly` sections (z-index) render disabled inputs.
+    // Element types an inspector section applies to. Shared geometry sections
+    // (Position/Size/Transform) apply to every type; Appearance to boxy element
+    // types; Typography to text only. Shared sections are listed first so
+    // switching selection only changes the tail of the pane.
+    const ALL_TYPES = ["text", "image", "shape", "media", "group", "table", "embed"];
+    const BOXY_TYPES = ["text", "image", "shape", "media"];
+    const TEXT_TYPES = ["text"];
+
     const INSPECTOR_SECTIONS = [
         {
             id: "position",
             label: "Position",
+            appliesTo: ALL_TYPES,
             fields: [
                 { prop: "x", label: "X", kind: "number", suffix: "px" },
                 { prop: "y", label: "Y", kind: "number", suffix: "px" },
@@ -1176,6 +1199,7 @@
         {
             id: "size",
             label: "Size",
+            appliesTo: ALL_TYPES,
             fields: [
                 { prop: "width", label: "Width", kind: "number", suffix: "px" },
                 { prop: "height", label: "Height", kind: "number", suffix: "px" },
@@ -1184,6 +1208,7 @@
         {
             id: "transform",
             label: "Transform",
+            appliesTo: ALL_TYPES,
             fields: [
                 { prop: "rotation", label: "Rotation", kind: "rotation-deg", suffix: "°" },
                 { prop: "opacity", label: "Opacity", kind: "number", suffix: "" },
@@ -1192,6 +1217,7 @@
         {
             id: "appearance",
             label: "Appearance",
+            appliesTo: BOXY_TYPES,
             fields: [
                 { prop: "background-color", label: "Fill", kind: "css", full: true },
                 { prop: "border", label: "Border", kind: "css", full: true },
@@ -1200,10 +1226,33 @@
             ],
         },
         {
-            id: "arrangement",
-            label: "Arrangement",
+            id: "typography",
+            label: "Typography",
+            appliesTo: TEXT_TYPES,
             fields: [
-                { prop: "z-index", label: "Z-Index", kind: "css", readonly: true },
+                { prop: "font-family", label: "Font", kind: "css", full: true },
+                { prop: "font-size", label: "Size", kind: "number", suffix: "px" },
+                { prop: "font-weight", label: "Weight", kind: "number", suffix: "" },
+                { prop: "color", label: "Color", kind: "color" },
+                {
+                    prop: "text-align", label: "Justify", kind: "select",
+                    options: [
+                        { value: "left", label: "Left" },
+                        { value: "center", label: "Center" },
+                        { value: "right", label: "Right" },
+                        { value: "justify", label: "Full" },
+                    ],
+                },
+                {
+                    prop: "justify-content", label: "Vertical", kind: "select",
+                    options: [
+                        { value: "flex-start", label: "Top" },
+                        { value: "center", label: "Middle" },
+                        { value: "flex-end", label: "Bottom" },
+                    ],
+                },
+                { prop: "line-height", label: "Line Height", kind: "number", suffix: "" },
+                { prop: "letter-spacing", label: "Letter Spacing", kind: "number", suffix: "px" },
             ],
         },
     ];
@@ -1272,8 +1321,8 @@
 
     // buildField
     // Inputs: a field definition.
-    // Output: a labelled <input> DOM node, registered in inspectorInputs
-    // and wired with the change handler.
+    // Output: a labelled control (text input, number input, color swatch, or
+    // select) registered in inspectorInputs and wired with the change handler.
     function buildField(field) {
         const wrap = document.createElement("div");
         wrap.className = "inspector__field";
@@ -1283,16 +1332,52 @@
         const label = document.createElement("label");
         label.className = "inspector__field-label";
         label.textContent = field.label + (field.suffix ? " (" + field.suffix.trim() + ")" : "");
+        const control = buildFieldControl(field);
+        control.dataset.prop = field.prop;
+        control.dataset.kind = field.kind;
+        if (!field.readonly) {
+            control.addEventListener("change", onInspectorFieldCommit);
+        }
+        const id = "inspector-input-" + field.prop.replace(/[^a-z0-9]/gi, "-");
+        control.id = id;
+        label.setAttribute("for", id);
+        wrap.appendChild(label);
+        wrap.appendChild(control);
+        inspectorInputs[field.prop] = control;
+        return wrap;
+    }
+
+    // buildFieldControl
+    // Inputs: a field definition.
+    // Output: the bare control element for the field's kind — a <select> for
+    // "select", a color swatch for "color", otherwise a text <input> (the
+    // Enter-to-blur affordance is wired for text inputs only).
+    function buildFieldControl(field) {
+        if (field.kind === "select") {
+            const sel = document.createElement("select");
+            sel.className = "inspector__input inspector__select";
+            const opts = field.options || [];
+            for (let i = 0; i < opts.length; i++) {
+                const o = document.createElement("option");
+                o.value = opts[i].value;
+                o.textContent = opts[i].label;
+                sel.appendChild(o);
+            }
+            return sel;
+        }
+        if (field.kind === "color") {
+            const swatch = document.createElement("input");
+            swatch.type = "color";
+            swatch.className = "inspector__input inspector__swatch";
+            return swatch;
+        }
         const input = document.createElement("input");
         input.className = "inspector__input";
-        input.dataset.prop = field.prop;
-        input.dataset.kind = field.kind;
         input.spellcheck = false;
         if (field.readonly) {
             input.readOnly = true;
             input.tabIndex = -1;
         } else {
-            input.addEventListener("change", onInspectorFieldCommit);
             input.addEventListener("keydown", function (e) {
                 if (e.key === "Enter") {
                     e.preventDefault();
@@ -1300,13 +1385,7 @@
                 }
             });
         }
-        const id = "inspector-input-" + field.prop.replace(/[^a-z0-9]/gi, "-");
-        input.id = id;
-        label.setAttribute("for", id);
-        wrap.appendChild(label);
-        wrap.appendChild(input);
-        inspectorInputs[field.prop] = input;
-        return wrap;
+        return input;
     }
 
     // onInspectorFieldCommit
@@ -1340,7 +1419,8 @@
     // pass through verbatim (empty → clear, see interpret_property_changed
     // on the Rust side).
     function encodeForWire(kind, raw) {
-        if (kind === "css") {
+        // CSS strings, select tokens, and color hexes pass through verbatim.
+        if (kind === "css" || kind === "select" || kind === "color") {
             return String(raw);
         }
         const trimmed = String(raw).trim();
@@ -1412,14 +1492,24 @@
         if (!subtitle) {
             return;
         }
+        // No selection: in slide mode the pane targets the slide (Slide box);
+        // otherwise (layout mode) just blank the element controls.
         if (currentSelectionIds.length === 0) {
-            subtitle.textContent = "No selection";
             clearInspectorInputs();
+            const slideMode = currentMode === "slide";
+            subtitle.textContent = slideMode ? "Slide" : "No selection";
+            setSlideBoxVisible(slideMode);
+            setElementInspectorVisible(false, null);
+            if (slideMode) {
+                renderSlideBox();
+            }
             return;
         }
+        setSlideBoxVisible(false);
         if (currentSelectionIds.length > 1) {
             subtitle.textContent = currentSelectionIds.length + " selected";
             clearInspectorInputs();
+            setElementInspectorVisible(false, null);
             return;
         }
         const id = currentSelectionIds[0];
@@ -1427,11 +1517,145 @@
         const el = findElement(id);
         if (!el) {
             clearInspectorInputs();
+            setElementInspectorVisible(false, null);
             return;
         }
+        const type = el.dataset.elementType || "";
+        setElementInspectorVisible(true, type);
         const decls = parseStyleAttr(el.getAttribute("style") || "");
         populateInspector(decls);
         inspectorPending.clear();
+    }
+
+    // setSectionVisible / setElementInspectorVisible
+    // Toggle inspector sections by the selected element's type, plus the
+    // custom-CSS form and Animations section (single-element chrome). When
+    // `show` is false (no/multi selection) everything element-specific hides.
+    function setElementInspectorVisible(show, type) {
+        const root = document.getElementById("inspector-scroll");
+        if (root) {
+            const sections = root.querySelectorAll("[data-section-id]");
+            for (let i = 0; i < sections.length; i++) {
+                const sec = sections[i];
+                const def = sectionDefById(sec.dataset.sectionId);
+                const applies = show && def && def.appliesTo.indexOf(type) >= 0;
+                sec.style.display = applies ? "" : "none";
+            }
+        }
+        toggleDisplay("inspector-custom", show);
+        toggleDisplay("animations-section", show);
+    }
+
+    function sectionDefById(id) {
+        for (let i = 0; i < INSPECTOR_SECTIONS.length; i++) {
+            if (INSPECTOR_SECTIONS[i].id === id) {
+                return INSPECTOR_SECTIONS[i];
+            }
+        }
+        return null;
+    }
+
+    function toggleDisplay(elementId, show) {
+        const el = document.getElementById(elementId);
+        if (el) {
+            el.style.display = show ? "" : "none";
+        }
+    }
+
+    // setSlideBoxVisible
+    // Show/hide the Slide box (#slide-box), the no-selection slide-mode pane.
+    // Uses an explicit display (the box's stylesheet default is hidden).
+    function setSlideBoxVisible(show) {
+        const el = document.getElementById("slide-box");
+        if (el) {
+            el.style.display = show ? "flex" : "none";
+        }
+    }
+
+    // renderSlideBox
+    // Inputs: none (reads slideInspectorData).
+    // Output: side-effect; fills the Slide box controls from the latest
+    // SlideInspectorUpdate and (once) wires their commit handlers.
+    function renderSlideBox() {
+        wireSlideBox();
+        const data = slideInspectorData;
+        const bg = document.getElementById("slide-bg");
+        const layout = document.getElementById("slide-layout");
+        const title = document.getElementById("slide-title");
+        const notes = document.getElementById("slide-notes");
+        if (bg && document.activeElement !== bg) {
+            bg.value = isHexColor((data && data.background) || "") ? data.background : "#000000";
+        }
+        if (title && document.activeElement !== title) {
+            title.value = (data && data.title) || "";
+        }
+        if (notes && document.activeElement !== notes) {
+            notes.value = (data && data.notes) || "";
+        }
+        if (layout && document.activeElement !== layout) {
+            const layouts = (data && data.layouts) || [];
+            layout.replaceChildren();
+            for (let i = 0; i < layouts.length; i++) {
+                const o = document.createElement("option");
+                o.value = layouts[i].id;
+                o.textContent = layouts[i].name || layouts[i].id;
+                layout.appendChild(o);
+            }
+            layout.value = (data && data.layout_id) || "";
+        }
+    }
+
+    function isHexColor(s) {
+        return /^#[0-9a-f]{6}$/i.test(String(s));
+    }
+
+    // wireSlideBox
+    // Wire the Slide box controls once. Each posts an Interaction targeting the
+    // active slide (the Rust side supplies the id, except the title which reuses
+    // the thumbnail-rename event carrying the slide id from the cached data).
+    function wireSlideBox() {
+        const box = document.getElementById("slide-box");
+        if (!box || box.dataset.wired) {
+            return;
+        }
+        box.dataset.wired = "1";
+        const bg = document.getElementById("slide-bg");
+        if (bg) {
+            bg.addEventListener("change", function () {
+                window.__deck.send("Interaction", {
+                    kind: "SetSlideBackgroundRequested", background: bg.value,
+                });
+            });
+        }
+        const layout = document.getElementById("slide-layout");
+        if (layout) {
+            layout.addEventListener("change", function () {
+                window.__deck.send("Interaction", {
+                    kind: "SetSlideLayoutRequested", layout_id: layout.value,
+                });
+            });
+        }
+        const title = document.getElementById("slide-title");
+        if (title) {
+            title.addEventListener("blur", function () {
+                if (!slideInspectorData) {
+                    return;
+                }
+                window.__deck.send("Interaction", {
+                    kind: "SlideTitleEditRequested",
+                    slide_id: slideInspectorData.slide_id,
+                    new_title: title.value,
+                });
+            });
+        }
+        const notes = document.getElementById("slide-notes");
+        if (notes) {
+            notes.addEventListener("blur", function () {
+                window.__deck.send("Interaction", {
+                    kind: "SetSlideNotesRequested", notes: notes.value,
+                });
+            });
+        }
     }
 
     // clearInspectorInputs
@@ -1468,11 +1692,18 @@
         setIfNotPending("z-index", decls["z-index"] || "");
         const cssOnly = [
             "background-color", "border", "border-radius", "box-shadow",
+            // Typography props whose inspector name IS the CSS property, set
+            // verbatim (select tokens, color hex, family string, unitless nums).
+            "font-family", "font-weight", "color", "text-align",
+            "justify-content", "line-height",
         ];
         for (let i = 0; i < cssOnly.length; i++) {
             const key = cssOnly[i];
             setIfNotPending(key, decls[key] || "");
         }
+        // Typography numeric-with-px fields strip the unit for the number input.
+        setIfNotPending("font-size", stripPx(decls["font-size"]));
+        setIfNotPending("letter-spacing", stripPx(decls["letter-spacing"]));
     }
 
     function setIfNotPending(prop, value) {
@@ -2737,6 +2968,18 @@
                     kind: "GlobalsCssEditRequested",
                     new_css: globals.value,
                 });
+            });
+        }
+        const themeSave = document.getElementById("theme-save-btn");
+        if (themeSave) {
+            themeSave.addEventListener("click", function () {
+                window.__deck.send("Interaction", { kind: "SaveThemeRequested" });
+            });
+        }
+        const themeLoad = document.getElementById("theme-load-btn");
+        if (themeLoad) {
+            themeLoad.addEventListener("click", function () {
+                window.__deck.send("Interaction", { kind: "LoadThemeRequested" });
             });
         }
     }

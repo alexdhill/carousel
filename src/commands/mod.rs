@@ -33,6 +33,8 @@ pub mod set_element_id;
 pub mod set_text;
 pub mod slide_lifecycle;
 pub mod slide_metadata;
+pub mod slide_style;
+pub mod swap_theme;
 pub mod theme_globals;
 pub mod transactions;
 
@@ -59,6 +61,8 @@ pub use set_element_id::SetElementId;
 pub use set_text::SetTextContent;
 pub use slide_lifecycle::{InsertSlide, RemoveSlide};
 pub use slide_metadata::SetSlideTitle;
+pub use slide_style::{SetSlideBackground, SetSlideLayout, SetSlideNotes};
+pub use swap_theme::SwapTheme;
 pub use theme_globals::SetGlobalsCss;
 pub use transactions::{Transaction, TransactionSnapshot};
 
@@ -111,6 +115,20 @@ pub trait Command: Send + Sync + std::fmt::Debug {
     // animation timeline. The editor reacts by rebroadcasting
     // SlideAnimationsUpdate for the active slide.
     fn affects_animations(&self) -> bool {
+        false
+    }
+    // affects_assets (theme save/load) — the command changed the deck's asset
+    // registry (e.g. a theme swap merged in or removed assets). The editor
+    // reacts by rebroadcasting the asset bundle so the JS blob cache stays
+    // correct on apply, undo, and redo.
+    fn affects_assets(&self) -> bool {
+        false
+    }
+    // affects_slide_meta (smart styles pane) — the command changed a slide's
+    // inspector-visible metadata (background / notes / layout). The editor
+    // reacts by rebroadcasting SlideInspectorUpdate so the Slide box resyncs on
+    // apply, undo, and redo.
+    fn affects_slide_meta(&self) -> bool {
         false
     }
 }
@@ -202,6 +220,8 @@ pub struct DispatchOutcome {
     pub affects_layout_list: bool,
     pub affects_globals: bool,
     pub affects_animations: bool,
+    pub affects_assets: bool,
+    pub affects_slide_meta: bool,
     pub warnings: Vec<String>,
 }
 
@@ -214,6 +234,9 @@ pub enum FileAction {
     Open,
     Save,
     SaveAs,
+    // Theme save/load — export the current theme / import a theme file.
+    SaveTheme,
+    LoadTheme,
 }
 
 // InterpretResult
@@ -461,6 +484,8 @@ impl CommandDispatcher {
         let affects_layout_list: bool = command.affects_layout_list();
         let affects_globals: bool = command.affects_globals();
         let affects_animations: bool = command.affects_animations();
+        let affects_assets: bool = command.affects_assets();
+        let affects_slide_meta: bool = command.affects_slide_meta();
         debug!("dispatching: {}", label);
         let output: CommandOutput = command.apply(&mut self.deck)?;
         // Reparent emits no patches yet still touches the tree, so the
@@ -492,6 +517,8 @@ impl CommandDispatcher {
             affects_layout_list,
             affects_globals,
             affects_animations,
+            affects_assets,
+            affects_slide_meta,
             warnings,
         })
     }
@@ -525,6 +552,8 @@ impl CommandDispatcher {
             affects_layout_list: out.affects_layout_list,
             affects_globals: out.affects_globals,
             affects_animations: out.affects_animations,
+            affects_assets: out.affects_assets,
+            affects_slide_meta: out.affects_slide_meta,
             warnings: out.warnings,
         }))
     }
@@ -555,6 +584,8 @@ impl CommandDispatcher {
             affects_layout_list: out.affects_layout_list,
             affects_globals: out.affects_globals,
             affects_animations: out.affects_animations,
+            affects_assets: out.affects_assets,
+            affects_slide_meta: out.affects_slide_meta,
             warnings: out.warnings,
         }))
     }

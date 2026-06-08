@@ -56,6 +56,11 @@ const DEFAULT_THEME_CSS: &str = r#"
        what the user typed while editing it (WYSIWYG between the inline
        contenteditable session and the committed render). */
     white-space: pre-wrap;
+    /* Flex column so the inspector's vertical-align control can map
+       Top/Middle/Bottom to justify-content: flex-start/center/flex-end.
+       Default flex-start keeps text at the top (unchanged from a plain box). */
+    display: flex;
+    flex-direction: column;
 }
 "#;
 

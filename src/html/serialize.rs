@@ -89,7 +89,18 @@ pub fn serialize_slide(slide: &SlideNode) -> String {
     out.push_str(&escape_attr(&slide.layout_id));
     out.push_str("\" data-root-id=\"");
     out.push_str(&escape_attr(&slide.root.id));
-    out.push_str("\"><div class=\"slide__content\">");
+    out.push('"');
+    // Per-slide background overrides the theme's .slide background via an inline
+    // style (inline beats the class rule). Omitted when None so the slide
+    // inherits the theme background.
+    if let Some(bg) = &slide.metadata.background {
+        if !bg.is_empty() {
+            out.push_str(" style=\"background:");
+            out.push_str(&escape_attr(bg));
+            out.push('"');
+        }
+    }
+    out.push_str("><div class=\"slide__content\">");
     for (idx, child) in slide.root.children.iter().enumerate() {
         write_node(child, Some(idx as i32), &anim, &mut out);
     }
@@ -333,6 +344,16 @@ mod tests {
     use super::*;
     use crate::deck::builders::*;
     use crate::deck::element::ShapeGeometry;
+
+    #[test]
+    fn slide_background_emitted_on_section_only_when_set() {
+        let mut slide = SlideNode::new("s".into(), "title".into(), group_element("rt", vec![]));
+        // None → no inline background on the section.
+        assert!(!serialize_slide(&slide).contains("background:"));
+        slide.metadata.background = Some("#101820".into());
+        let html = serialize_slide(&slide);
+        assert!(html.contains("style=\"background:#101820\""));
+    }
 
     #[test]
     fn serialize_emits_data_anim_ids_only_for_animated_elements() {
