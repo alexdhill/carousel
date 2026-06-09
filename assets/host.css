@@ -588,6 +588,68 @@ body {
     pointer-events: none;
 }
 
+#snap-guides {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 5;
+}
+
+.snap-guide {
+    position: absolute;
+    pointer-events: none;
+}
+
+.snap-guide--line {
+    background: #ff2d55;
+}
+
+/* Equal-spacing bars are 1px thick along the snap axis with a short
+   perpendicular tick at each end (the classic double-tick). */
+.snap-guide--space {
+    background: #ff2d55;
+}
+
+.snap-guide--space-h {
+    height: 1px;
+}
+
+.snap-guide--space-v {
+    width: 1px;
+}
+
+.snap-guide--space::before,
+.snap-guide--space::after {
+    content: "";
+    position: absolute;
+    background: #ff2d55;
+}
+
+.snap-guide--space-h::before,
+.snap-guide--space-h::after {
+    top: -3px;
+    width: 1px;
+    height: 7px;
+}
+
+.snap-guide--space-h::before { left: 0; }
+.snap-guide--space-h::after { right: 0; }
+
+.snap-guide--space-v::before,
+.snap-guide--space-v::after {
+    left: -3px;
+    height: 1px;
+    width: 7px;
+}
+
+.snap-guide--space-v::before { top: 0; }
+.snap-guide--space-v::after { bottom: 0; }
+
+.objects__grid.is-active {
+    background: #ff2d55;
+    color: #fff;
+}
+
 .selection-handle {
     position: absolute;
     width: 9px;

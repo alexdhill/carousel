@@ -23,6 +23,7 @@ use wry::{WebView, WebViewBuilder};
 const HOST_HTML_TEMPLATE: &str = include_str!("../assets/host.html");
 const HOST_CSS: &str = include_str!("../assets/host.css");
 const HOST_JS: &str = include_str!("../assets/host.js");
+const SNAP_JS: &str = include_str!("../assets/snap.js");
 const PRESENT_HTML_TEMPLATE: &str = include_str!("../assets/present.html");
 const PRESENT_CSS: &str = include_str!("../assets/present.css");
 const PRESENT_JS: &str = include_str!("../assets/present.js");
@@ -154,14 +155,17 @@ fn install_main_menu() {
 }
 
 // assemble_host_html
-// Inputs: template (must contain CSS + JS placeholders), css and js bodies.
+// Inputs: template (must contain CSS + snap-JS + host-JS placeholders), css,
+// host js, and the pure snap-engine js (injected before host js).
 // Output: assembled HTML string ready for the webview.
-// Errors: asserts both placeholders are present.
-fn assemble_host_html(template: &str, css: &str, js: &str) -> String {
+// Errors: asserts all three placeholders are present.
+fn assemble_host_html(template: &str, css: &str, js: &str, snap: &str) -> String {
     assert!(template.contains("__HOST_CSS__"), "template missing CSS marker");
     assert!(template.contains("__HOST_JS__"), "template missing JS marker");
+    assert!(template.contains("__SNAP_JS__"), "template missing snap JS marker");
     template
         .replace("__HOST_CSS__", css)
+        .replace("__SNAP_JS__", snap)
         .replace("__HOST_JS__", js)
 }
 
@@ -248,7 +252,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_inner_size(tao::dpi::LogicalSize::new(1400.0, 900.0))
         .build(&event_loop)?;
 
-    let html: String = assemble_host_html(HOST_HTML_TEMPLATE, HOST_CSS, HOST_JS);
+    let html: String = assemble_host_html(HOST_HTML_TEMPLATE, HOST_CSS, HOST_JS, SNAP_JS);
     assert!(!html.is_empty(), "assembled host html is empty");
 
     let webview = WebViewBuilder::new(&window)

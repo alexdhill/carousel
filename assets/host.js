@@ -18,6 +18,9 @@
     // ---------- state ----------
     let currentShadow = null;
     let currentSlideHost = null;
+    // Pixel-grid snapping: session-only, never persisted or sent to Rust.
+    // Read into the snap engine's opts.gridEnabled each gesture move.
+    let gridEnabled = false;
     let dragState = null;
     let pendingDrag = null;
     let dragRafScheduled = false;
@@ -443,6 +446,153 @@
         }
     }
 
+    // ---------- snap guides ----------
+    // ensureGuideLayer
+    // Inputs: none. Output: the #snap-guides element, created once as a
+    // SIBLING of #selection-overlay inside #viewport-container. It must not
+    // live inside #selection-overlay because updateSelectionOverlay() calls
+    // overlay.replaceChildren() each frame, which would wipe the guides.
+    function ensureGuideLayer() {
+        const container = document.getElementById("viewport-container");
+        if (!container) {
+            return null;
+        }
+        let layer = document.getElementById("snap-guides");
+        if (!layer) {
+            layer = document.createElement("div");
+            layer.id = "snap-guides";
+            container.appendChild(layer);
+        }
+        return layer;
+    }
+
+    // slideToScreen
+    // Inputs: the guide layer element. Output: { ox, oy, scale } mapping slide
+    // coordinates to layer-local px: screen = origin + coord*scale. Reads the
+    // slide-host rect once; returns null when unavailable. The slide-host is
+    // the shadow HOST (light-DOM div), cached as currentSlideHost — it is not
+    // a descendant of its own shadow root, so a shadow-internal query would
+    // never find it.
+    function slideToScreen(layer) {
+        const host = currentSlideHost;
+        if (!host || !layer) {
+            return null;
+        }
+        const hr = host.getBoundingClientRect();
+        const lr = layer.getBoundingClientRect();
+        return { ox: hr.left - lr.left, oy: hr.top - lr.top, scale: hr.width / 1920 };
+    }
+
+    // drawAlignLine
+    // Inputs: the layer, an align/center guide { axis, pos }, the mapping.
+    // Output: side-effect; one full-length 1px line over the slide surface.
+    function drawAlignLine(layer, g, m) {
+        const line = document.createElement("div");
+        line.className = "snap-guide snap-guide--line";
+        if (g.axis === "x") {
+            line.style.left = (m.ox + g.pos * m.scale) + "px";
+            line.style.top = m.oy + "px";
+            line.style.width = "1px";
+            line.style.height = (1080 * m.scale) + "px";
+        } else {
+            line.style.top = (m.oy + g.pos * m.scale) + "px";
+            line.style.left = m.ox + "px";
+            line.style.height = "1px";
+            line.style.width = (1920 * m.scale) + "px";
+        }
+        layer.appendChild(line);
+    }
+
+    // drawSpacing
+    // Inputs: the layer, a spacing guide { axis, gaps }, the mapping. Output:
+    // side-effect; a thin bar with end ticks for each equal gap.
+    function drawSpacing(layer, g, m) {
+        let i = 0;
+        for (i = 0; i < g.gaps.length; i = i + 1) {
+            const gap = g.gaps[i];
+            const bar = document.createElement("div");
+            bar.className = "snap-guide snap-guide--space snap-guide--space-"
+                + (g.axis === "x" ? "h" : "v");
+            if (g.axis === "x") {
+                bar.style.left = (m.ox + gap.start * m.scale) + "px";
+                bar.style.width = ((gap.end - gap.start) * m.scale) + "px";
+                bar.style.top = (m.oy + gap.perp * m.scale) + "px";
+            } else {
+                bar.style.top = (m.oy + gap.start * m.scale) + "px";
+                bar.style.height = ((gap.end - gap.start) * m.scale) + "px";
+                bar.style.left = (m.ox + gap.perp * m.scale) + "px";
+            }
+            layer.appendChild(bar);
+        }
+    }
+
+    // renderGuides
+    // Inputs: guide descriptors from the snap engine. Output: side-effect;
+    // draws magenta lines/ticks into #snap-guides. Clears first each frame.
+    function renderGuides(guides) {
+        const layer = ensureGuideLayer();
+        if (!layer) {
+            return;
+        }
+        layer.replaceChildren();
+        const m = slideToScreen(layer);
+        if (!m || !guides) {
+            return;
+        }
+        let i = 0;
+        for (i = 0; i < guides.length; i = i + 1) {
+            if (guides[i].kind === "spacing") {
+                drawSpacing(layer, guides[i], m);
+            } else {
+                drawAlignLine(layer, guides[i], m);
+            }
+        }
+    }
+
+    // clearGuides
+    // Inputs: none. Output: empties the #snap-guides layer.
+    function clearGuides() {
+        const layer = document.getElementById("snap-guides");
+        if (layer) {
+            layer.replaceChildren();
+        }
+    }
+
+    // buildSnapTargets
+    // Inputs: the element id to EXCLUDE (the one being manipulated). Output:
+    // { xLines, yLines, rects } from __snap.__build_targets, built from every
+    // other element's inline rect plus the slide pseudo-rect. Read once per
+    // gesture (siblings do not move mid-gesture).
+    function buildSnapTargets(excludeId) {
+        const rects = [{ x: 0, y: 0, w: 1920, h: 1080 }];
+        if (currentShadow) {
+            const nodes = currentShadow.querySelectorAll("[data-element-id]");
+            let i = 0;
+            for (i = 0; i < nodes.length && rects.length < 256; i = i + 1) {
+                if (nodes[i].dataset.elementId === excludeId) {
+                    continue;
+                }
+                const r = movingRectFromStyle(nodes[i]);
+                if (r.w > 0 && r.h > 0) {
+                    rects.push(r);
+                }
+            }
+        }
+        return window.__snap.__build_targets(rects);
+    }
+
+    // movingRectFromStyle
+    // Inputs: a target element. Output: its current inline rect in slide px.
+    function movingRectFromStyle(el) {
+        const d = parseStyleAttr(el.getAttribute("style") || "");
+        return {
+            x: parseFloat(stripPx(d.left)) || 0,
+            y: parseFloat(stripPx(d.top)) || 0,
+            w: parseFloat(stripPx(d.width)) || 0,
+            h: parseFloat(stripPx(d.height)) || 0,
+        };
+    }
+
     // ---------- interaction capture ----------
     // findInteractionTarget
     // Inputs: a DOM Event.
@@ -678,6 +828,8 @@
                 return;
             }
             dragState.started = true;
+            dragState.snapTargets = buildSnapTargets(dragState.element_id);
+            dragState.baseRect = movingRectFromStyle(dragState.target);
             window.__deck.send("Interaction", {
                 kind: "ElementDragStarted",
                 element_id: dragState.element_id,
@@ -685,10 +837,40 @@
             });
         }
         const scale = getViewportScale();
-        const dxSlide = dx / scale;
-        const dySlide = dy / scale;
-        optimisticTransform(dragState.target, dxSlide, dySlide);
-        reportDragThrottled(dragState.element_id, { x: dxSlide, y: dySlide }, { x: e.clientX, y: e.clientY });
+        const snapped = snappedDragDelta(dx / scale, dy / scale, scale, e, true);
+        optimisticTransform(dragState.target, snapped.x, snapped.y);
+        reportDragThrottled(dragState.element_id, { x: snapped.x, y: snapped.y }, { x: e.clientX, y: e.clientY });
+    }
+
+    // snappedDragDelta
+    // Inputs: the raw slide-space delta (dxSlide, dySlide), the viewport
+    // scale, the source MouseEvent (for the Cmd suppress flag), and whether to
+    // draw guides. Output: { x, y } snapped slide-space delta. Feeds the raw
+    // target rect through the snap engine and returns the corrected delta;
+    // renders guides as a side-effect when draw is true. Falls back to the raw
+    // delta when no snapshot exists.
+    function snappedDragDelta(dxSlide, dySlide, scale, e, draw) {
+        if (!dragState || !dragState.snapTargets || !dragState.baseRect) {
+            return { x: dxSlide, y: dySlide };
+        }
+        const want = {
+            x: dragState.baseRect.x + dxSlide,
+            y: dragState.baseRect.y + dySlide,
+            w: dragState.baseRect.w,
+            h: dragState.baseRect.h,
+        };
+        const out = window.__snap.forDrag(want, dragState.snapTargets, {
+            threshold: 3 / scale,
+            gridEnabled: gridEnabled,
+            suppress: !!e.metaKey,
+        });
+        if (draw) {
+            renderGuides(out.guides);
+        }
+        return {
+            x: out.rect.x - dragState.baseRect.x,
+            y: out.rect.y - dragState.baseRect.y,
+        };
     }
 
     // onMouseUp
@@ -708,10 +890,11 @@
             const dx = e.clientX - dragState.start.x;
             const dy = e.clientY - dragState.start.y;
             const scale = getViewportScale();
+            const snapped = snappedDragDelta(dx / scale, dy / scale, scale, e, false);
             window.__deck.send("Interaction", {
                 kind: "ElementDragEnded",
                 element_id: dragState.element_id,
-                delta: { x: dx / scale, y: dy / scale },
+                delta: { x: snapped.x, y: snapped.y },
             });
             // Hold the optimistic transform so there is no flash between
             // transform clear and the absolute-position patch landing.
@@ -731,6 +914,7 @@
         }
         // Restore text selectability now that the gesture is over.
         document.body.style.userSelect = "";
+        clearGuides();
         dragState = null;
     }
 
@@ -972,6 +1156,7 @@
             startRect: startRect,
             aspect: startRect.w / startRect.h,
             savedTransform: target.style.transform || "",
+            snapTargets: buildSnapTargets(elementId),
         };
         // Clear any optimistic transform from a prior drag so the
         // resize math operates on the inline left/top/width/height.
@@ -1004,6 +1189,45 @@
             case "w":  return "Left";
             default:   return "BottomRight";
         }
+    }
+
+    // handleEdges
+    // Inputs: a handle name ("nw".."e"). Output: { west, east, north, south }
+    // booleans for the edges that move under that handle.
+    function handleEdges(name) {
+        return {
+            west: name.indexOf("w") >= 0,
+            east: name.indexOf("e") >= 0,
+            north: name.indexOf("n") >= 0,
+            south: name.indexOf("s") >= 0,
+        };
+    }
+
+    // snappedResizeRect
+    // Inputs: the rect from computeResizeRect, the source MouseEvent, the
+    // viewport scale, and whether to draw guides. Output: the snapped rect.
+    // Feeds active edges through the snap engine (alignment + dimension-match
+    // + grid) and renders guides as a side-effect when draw is true. Falls
+    // back to the input rect when no snapshot exists.
+    function snappedResizeRect(rect, e, scale, draw) {
+        if (!resizeState || !resizeState.snapTargets) {
+            return rect;
+        }
+        const out = window.__snap.forResize(
+            rect, handleEdges(resizeState.handle), resizeState.snapTargets,
+            {
+                threshold: 3 / scale,
+                gridEnabled: gridEnabled,
+                suppress: !!e.metaKey,
+                shift: !!e.shiftKey,
+                alt: !!e.altKey,
+                aspect: resizeState.aspect,
+            },
+        );
+        if (draw) {
+            renderGuides(out.guides);
+        }
+        return out.rect;
     }
 
     // computeResizeRect
@@ -1092,9 +1316,9 @@
         const scale = getViewportScale();
         const dx = (e.clientX - resizeState.startMouse.x) / scale;
         const dy = (e.clientY - resizeState.startMouse.y) / scale;
-        const rect = computeResizeRect(
+        const rect = snappedResizeRect(computeResizeRect(
             resizeState, dx, dy, !!e.shiftKey, !!e.altKey,
-        );
+        ), e, scale, true);
         applyOptimisticRect(resizeState.target, rect);
         updateSelectionOverlay();
         scheduleResizeReport(rect, e);
@@ -1148,9 +1372,9 @@
         const scale = getViewportScale();
         const dx = (e.clientX - resizeState.startMouse.x) / scale;
         const dy = (e.clientY - resizeState.startMouse.y) / scale;
-        const rect = computeResizeRect(
+        const rect = snappedResizeRect(computeResizeRect(
             resizeState, dx, dy, !!e.shiftKey, !!e.altKey,
-        );
+        ), e, scale, false);
         applyOptimisticRect(resizeState.target, rect);
         window.__deck.send("Interaction", {
             kind: "ElementResizeEnded",
@@ -1158,6 +1382,7 @@
             new_position: { x: rect.x, y: rect.y },
             new_size: { width: rect.w, height: rect.h },
         });
+        clearGuides();
         if (resizeState.savedTransform === "") {
             resizeState.target.style.removeProperty("transform");
         } else {
@@ -2853,6 +3078,12 @@
                 e.preventDefault();
             }
         });
+        const gridBtn = document.getElementById("grid-toggle");
+        if (gridBtn) {
+            gridBtn.addEventListener("click", function () {
+                setGridEnabled(!gridEnabled);
+            });
+        }
         buildInspectorSections();
         refreshInspector();
         wireObjectsToolbar();
@@ -2992,6 +3223,27 @@
     // when the event does not match either.
     // Dataflow: lowercase the key, check meta-or-ctrl, branch on shift +
     // the specific letter. Pure function; no IPC, no DOM.
+    // matchGridToggleShortcut
+    // Inputs: a KeyboardEvent. Output: true for Cmd/Ctrl + ' (apostrophe),
+    // the pixel-grid toggle accelerator. Pure; no DOM, no IPC.
+    function matchGridToggleShortcut(e) {
+        const meta = !!(e.metaKey || e.ctrlKey);
+        return meta && !e.shiftKey && e.key === "'";
+    }
+
+    // setGridEnabled
+    // Inputs: a boolean. Output: side-effect; updates module state and the
+    // toolbar button's pressed styling. Single source both the shortcut and
+    // the button call so UI and state never drift.
+    function setGridEnabled(on) {
+        gridEnabled = !!on;
+        const btn = document.getElementById("grid-toggle");
+        if (btn) {
+            btn.setAttribute("aria-pressed", gridEnabled ? "true" : "false");
+            btn.classList.toggle("is-active", gridEnabled);
+        }
+    }
+
     function matchUndoRedoShortcut(e) {
         const meta = !!(e.metaKey || e.ctrlKey);
         if (!meta) {
@@ -3133,6 +3385,11 @@
     // accelerator-keyed shortcuts (Cmd/Ctrl-…) still fire so that
     // Save / Undo / Redo remain available everywhere.
     document.addEventListener("keydown", function (e) {
+        if (matchGridToggleShortcut(e)) {
+            e.preventDefault();
+            setGridEnabled(!gridEnabled);
+            return;
+        }
         if (matchAddSlideShortcut(e)) {
             e.preventDefault();
             window.__deck.send("Interaction", { kind: "AddSlideRequested" });
