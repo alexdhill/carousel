@@ -21,6 +21,12 @@
     // Pixel-grid snapping: session-only, never persisted or sent to Rust.
     // Read into the snap engine's opts.gridEnabled each gesture move.
     let gridEnabled = false;
+    // Crop mode: holds { elementId, assetId, mask, natural, state, preStyle }
+    // while an image is being cropped. null outside crop mode. The committed
+    // element is never mutated during the session — cancel is a clean teardown.
+    let cropState = null;
+    let cropPan = null;
+    let cropResize = null;
     let dragState = null;
     let pendingDrag = null;
     let dragRafScheduled = false;
@@ -396,6 +402,11 @@
             return;
         }
         overlay.replaceChildren();
+        // While cropping, the crop overlay owns the element's chrome; drawing
+        // selection handles here would overlap and steal resize gestures.
+        if (cropState) {
+            return;
+        }
         if (!currentShadow || !currentSlideHost) {
             return;
         }
@@ -593,6 +604,509 @@
         };
     }
 
+    // ---------- crop mode ----------
+    // ensureCropLayer
+    // Inputs: none. Output: the #crop-overlay element, created once as a
+    // SIBLING of #selection-overlay inside #viewport-container (NOT inside it,
+    // which updateSelectionOverlay wipes via replaceChildren).
+    function ensureCropLayer() {
+        const container = document.getElementById("viewport-container");
+        if (!container) {
+            return null;
+        }
+        let layer = document.getElementById("crop-overlay");
+        if (!layer) {
+            layer = document.createElement("div");
+            layer.id = "crop-overlay";
+            container.appendChild(layer);
+        }
+        return layer;
+    }
+
+    // cropImageUrl
+    // Inputs: an asset id. Output: the cached blob URL, or "".
+    function cropImageUrl(assetId) {
+        const entry = assetBlobCache[assetId];
+        return (entry && entry.url) ? entry.url : "";
+    }
+
+    // clearCropOverlay
+    // Inputs: none. Output: empties #crop-overlay.
+    function clearCropOverlay() {
+        const layer = document.getElementById("crop-overlay");
+        if (layer) {
+            layer.replaceChildren();
+        }
+    }
+
+    // cropPlaceImg
+    // Inputs: a div, blob url, and a screen rect. Output: side-effect; styles
+    // it as a background image filling that rect.
+    function cropPlaceImg(el, url, x, y, w, h) {
+        el.style.position = "absolute";
+        el.style.left = x + "px";
+        el.style.top = y + "px";
+        el.style.width = w + "px";
+        el.style.height = h + "px";
+        el.style.backgroundImage = "url(" + url + ")";
+        el.style.backgroundSize = "100% 100%";
+        el.style.backgroundRepeat = "no-repeat";
+    }
+
+    // cropDrawMaskFrame
+    // Inputs: layer + mask screen rect. Output: side-effect; outline div + the
+    // 8 resize handles (reusing the SELECTION_HANDLES fraction table).
+    function cropDrawMaskFrame(layer, x, y, w, h) {
+        const box = document.createElement("div");
+        box.className = "crop-mask-box";
+        box.style.left = x + "px";
+        box.style.top = y + "px";
+        box.style.width = w + "px";
+        box.style.height = h + "px";
+        layer.appendChild(box);
+        let i = 0;
+        for (i = 0; i < SELECTION_HANDLES.length; i = i + 1) {
+            const s = SELECTION_HANDLES[i];
+            const handle = document.createElement("div");
+            handle.className = "crop-handle";
+            handle.dataset.handle = s.name;
+            handle.style.left = (x + s.fx * w) + "px";
+            handle.style.top = (y + s.fy * h) + "px";
+            handle.addEventListener("mousedown", onCropHandleMouseDown);
+            layer.appendChild(handle);
+        }
+    }
+
+    // cropDrawToolbar
+    // Inputs: layer + the mask's top-right screen point. Output: side-effect;
+    // the floating toolbar (zoom slider, %, Reset, ✕ cancel, ✓ confirm).
+    function cropDrawToolbar(layer, rightX, topY) {
+        const bar = document.createElement("div");
+        bar.className = "crop-toolbar";
+        bar.style.left = rightX + "px";
+        bar.style.top = topY + "px";
+        const pct = Math.round(window.__crop.zoomPercent(
+            cropState.state, cropState.mask, cropState.natural));
+        bar.innerHTML =
+            '<input type="range" class="crop-zoom" min="100" max="400" value="' + pct + '">'
+            + '<span class="crop-zoom-pct">' + pct + '%</span>'
+            + '<button type="button" class="crop-btn crop-reset" title="Reset crop">Reset</button>'
+            + '<button type="button" class="crop-btn crop-cancel" title="Cancel (Esc)">✕</button>'
+            + '<button type="button" class="crop-btn crop-confirm" title="Done (Enter)">✓</button>';
+        bar.querySelector(".crop-zoom").addEventListener("input", onCropZoomInput);
+        bar.querySelector(".crop-reset").addEventListener("click", resetCrop);
+        bar.querySelector(".crop-cancel").addEventListener("click", cancelCrop);
+        bar.querySelector(".crop-confirm").addEventListener("click", commitCrop);
+        layer.appendChild(bar);
+    }
+
+    // renderCropOverlay
+    // Inputs: none (reads cropState). Output: side-effect; draws the dimmed
+    // full image, the bright in-mask region, a pan catcher, the mask frame +
+    // handles, and the toolbar. Cleared and redrawn each interaction.
+    function renderCropOverlay() {
+        const layer = ensureCropLayer();
+        if (!layer || !cropState) {
+            return;
+        }
+        layer.replaceChildren();
+        const m = slideToScreen(layer);
+        if (!m) {
+            return;
+        }
+        const mask = cropState.mask;
+        const st = cropState.state;
+        const url = cropImageUrl(cropState.assetId);
+        const imgX = m.ox + (mask.x + st.dx) * m.scale;
+        const imgY = m.oy + (mask.y + st.dy) * m.scale;
+        const imgW = st.iw * m.scale;
+        const imgH = st.ih * m.scale;
+        const mX = m.ox + mask.x * m.scale;
+        const mY = m.oy + mask.y * m.scale;
+        const mW = mask.w * m.scale;
+        const mH = mask.h * m.scale;
+        // (1) dimmed full image
+        const dim = document.createElement("div");
+        dim.className = "crop-img crop-img--dim";
+        cropPlaceImg(dim, url, imgX, imgY, imgW, imgH);
+        layer.appendChild(dim);
+        // (2) bright in-mask region: same image, clipped to the mask box
+        const bright = document.createElement("div");
+        bright.className = "crop-img crop-img--bright";
+        cropPlaceImg(bright, url, imgX, imgY, imgW, imgH);
+        bright.style.clipPath = "inset(" + (mY - imgY) + "px "
+            + (imgX + imgW - (mX + mW)) + "px "
+            + (imgY + imgH - (mY + mH)) + "px " + (mX - imgX) + "px)";
+        layer.appendChild(bright);
+        // (3) transparent catcher for pan + scroll-zoom over the mask
+        const catcher = document.createElement("div");
+        catcher.className = "crop-catcher";
+        catcher.style.position = "absolute";
+        catcher.style.left = mX + "px";
+        catcher.style.top = mY + "px";
+        catcher.style.width = mW + "px";
+        catcher.style.height = mH + "px";
+        catcher.style.pointerEvents = "auto";
+        catcher.style.cursor = "move";
+        catcher.addEventListener("mousedown", onCropPanMouseDown);
+        catcher.addEventListener("wheel", onCropWheel, { passive: false });
+        layer.appendChild(catcher);
+        // (4) mask outline + handles, then (5) toolbar pinned top-right
+        cropDrawMaskFrame(layer, mX, mY, mW, mH);
+        cropDrawToolbar(layer, mX + mW, mY);
+    }
+
+    // enterCropMode
+    // Inputs: an image element id. Output: side-effect; loads natural dims,
+    // seeds cropState from existing crop styles or the cover baseline, and
+    // renders the overlay. No IPC (fully optimistic until commit).
+    function enterCropMode(elementId) {
+        const el = findElement(elementId);
+        if (!el || el.dataset.elementType !== "image") {
+            return;
+        }
+        const assetId = el.dataset.assetId || "";
+        const url = cropImageUrl(assetId);
+        if (!url) {
+            return;
+        }
+        const rect = movingRectFromStyle(el);
+        const mask = { x: rect.x, y: rect.y, w: rect.w, h: rect.h };
+        const decls = parseStyleAttr(el.getAttribute("style") || "");
+        const img = new Image();
+        img.onload = function () {
+            const natural = { w: img.naturalWidth, h: img.naturalHeight };
+            if (!(natural.w > 0 && natural.h > 0)) {
+                return;
+            }
+            let state = window.__crop.fromStyles(
+                decls["background-size"], decls["background-position"]);
+            if (!state) {
+                state = window.__crop.fromCover(mask, natural);
+            }
+            cropState = {
+                elementId: elementId,
+                assetId: assetId,
+                el: el,
+                mask: mask,
+                natural: natural,
+                state: state,
+                preStyle: el.getAttribute("style") || "",
+            };
+            // Hide the real element so the overlay is the sole image source —
+            // otherwise its full-opacity render defeats the dim preview.
+            el.style.visibility = "hidden";
+            document.body.dataset.crop = "1";
+            updateSelectionOverlay();
+            renderCropOverlay();
+        };
+        img.src = url;
+    }
+
+    // onCropPanMouseDown / Move / Up — drag inside the mask pans the image.
+    function onCropPanMouseDown(e) {
+        if (!cropState || e.button !== 0) {
+            return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        cropPan = { x: e.clientX, y: e.clientY };
+        window.addEventListener("mousemove", onCropPanMouseMove);
+        window.addEventListener("mouseup", onCropPanMouseUp);
+    }
+    function onCropPanMouseMove(e) {
+        if (!cropPan || !cropState) {
+            return;
+        }
+        const scale = getViewportScale();
+        const ddx = (e.clientX - cropPan.x) / scale;
+        const ddy = (e.clientY - cropPan.y) / scale;
+        cropPan = { x: e.clientX, y: e.clientY };
+        cropState.state = window.__crop.pan(cropState.state, cropState.mask, ddx, ddy);
+        renderCropOverlay();
+    }
+    function onCropPanMouseUp() {
+        cropPan = null;
+        window.removeEventListener("mousemove", onCropPanMouseMove);
+        window.removeEventListener("mouseup", onCropPanMouseUp);
+    }
+
+    // onCropWheel — scroll zooms about the mask center.
+    function onCropWheel(e) {
+        if (!cropState) {
+            return;
+        }
+        e.preventDefault();
+        const factor = e.deltaY < 0 ? 1.05 : (1 / 1.05);
+        cropState.state = window.__crop.zoom(
+            cropState.state, cropState.mask, cropState.natural, factor);
+        renderCropOverlay();
+    }
+
+    // onCropZoomInput — slider sets an absolute zoom percent.
+    function onCropZoomInput(e) {
+        if (!cropState) {
+            return;
+        }
+        const pct = parseFloat(e.currentTarget.value) || 100;
+        cropState.state = window.__crop.setZoomPercent(
+            pct, cropState.state, cropState.mask, cropState.natural);
+        renderCropOverlay();
+    }
+
+    // onCropHandleMouseDown / Move / Up — resize the mask window (reveal/clip),
+    // reusing the snap engine for the box and re-clamping the image to cover.
+    function onCropHandleMouseDown(e) {
+        if (!cropState || e.button !== 0) {
+            return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        cropResize = {
+            handle: e.currentTarget.dataset.handle,
+            startMouse: { x: e.clientX, y: e.clientY },
+            startMask: {
+                x: cropState.mask.x, y: cropState.mask.y,
+                w: cropState.mask.w, h: cropState.mask.h,
+            },
+            // The image's top-left in canvas/slide coords, captured so the
+            // image stays put while the mask window is resized around it.
+            imgOrigin: {
+                x: cropState.mask.x + cropState.state.dx,
+                y: cropState.mask.y + cropState.state.dy,
+            },
+            snapTargets: buildSnapTargets(cropState.elementId),
+        };
+        window.addEventListener("mousemove", onCropHandleMouseMove);
+        window.addEventListener("mouseup", onCropHandleMouseUp);
+    }
+    function onCropHandleMouseMove(e) {
+        if (!cropResize || !cropState) {
+            return;
+        }
+        const scale = getViewportScale();
+        const dx = (e.clientX - cropResize.startMouse.x) / scale;
+        const dy = (e.clientY - cropResize.startMouse.y) / scale;
+        const raw = cropResizeRect(cropResize.startMask, cropResize.handle, dx, dy);
+        const snapped = window.__snap.forResize(
+            raw, handleEdges(cropResize.handle), cropResize.snapTargets,
+            {
+                threshold: 3 / scale, gridEnabled: gridEnabled, suppress: !!e.metaKey,
+                shift: false, alt: false, aspect: cropResize.startMask.w / cropResize.startMask.h,
+            });
+        cropState.mask = {
+            x: snapped.rect.x, y: snapped.rect.y, w: snapped.rect.w, h: snapped.rect.h,
+        };
+        // Hold the image fixed in canvas space — only the mask window moves.
+        cropState.state = window.__crop.placeImage(
+            cropState.state, cropState.mask,
+            cropResize.imgOrigin.x, cropResize.imgOrigin.y, cropState.natural);
+        renderCropOverlay();
+        renderGuides(snapped.guides);
+    }
+    function onCropHandleMouseUp() {
+        cropResize = null;
+        clearGuides();
+        window.removeEventListener("mousemove", onCropHandleMouseMove);
+        window.removeEventListener("mouseup", onCropHandleMouseUp);
+    }
+
+    // cropResizeRect
+    // Inputs: the start mask rect, a handle name, and slide-px deltas. Output:
+    // the resized rect (mask reveal/clip; no aspect/center modes). Mirrors
+    // computeResizeRect's edge math with a 1px floor.
+    function cropResizeRect(start, handle, dx, dy) {
+        let x = start.x;
+        let y = start.y;
+        let w = start.w;
+        let h = start.h;
+        if (handle.indexOf("w") >= 0) { x = start.x + dx; w = start.w - dx; }
+        if (handle.indexOf("e") >= 0) { w = start.w + dx; }
+        if (handle.indexOf("n") >= 0) { y = start.y + dy; h = start.h - dy; }
+        if (handle.indexOf("s") >= 0) { h = start.h + dy; }
+        if (w < 1) { w = 1; }
+        if (h < 1) { h = 1; }
+        return { x: x, y: y, w: w, h: h };
+    }
+
+    // resetCrop — back to the seamless cover baseline (live, in crop mode).
+    function resetCrop() {
+        if (!cropState) {
+            return;
+        }
+        cropState.state = window.__crop.fromCover(cropState.mask, cropState.natural);
+        renderCropOverlay();
+    }
+
+    // commitCrop — send ElementCropCommitted and tear down the overlay.
+    function commitCrop() {
+        if (!cropState) {
+            return;
+        }
+        const css = window.__crop.toStyles(cropState.state);
+        window.__deck.send("Interaction", {
+            kind: "ElementCropCommitted",
+            element_id: cropState.elementId,
+            new_position: { x: cropState.mask.x, y: cropState.mask.y },
+            new_size: { width: cropState.mask.w, height: cropState.mask.h },
+            background_size: css.backgroundSize,
+            background_position: css.backgroundPosition,
+        });
+        exitCropMode();
+    }
+
+    // cancelCrop — discard the session; no IPC (element was never mutated).
+    function cancelCrop() {
+        exitCropMode();
+    }
+
+    // exitCropMode — restore the hidden element, clear crop state, guides,
+    // and the overlay.
+    function exitCropMode() {
+        if (cropState && cropState.el) {
+            cropState.el.style.removeProperty("visibility");
+        }
+        cropState = null;
+        cropPan = null;
+        cropResize = null;
+        delete document.body.dataset.crop;
+        clearGuides();
+        clearCropOverlay();
+        updateSelectionOverlay();
+    }
+
+    // refreshCropBox
+    // Inputs: none (reads currentSelectionIds + shadow). Output: side-effect;
+    // shows the Inspector crop section and syncs Offset X/Y for a single
+    // selected image, else hides it. Zoom % is left for the user to type (it
+    // needs natural dims, loaded on edit).
+    function refreshCropBox() {
+        const box = document.getElementById("crop-box");
+        if (!box) {
+            return;
+        }
+        const el = (currentSelectionIds.length === 1)
+            ? findElement(currentSelectionIds[0]) : null;
+        if (!el || el.dataset.elementType !== "image") {
+            box.hidden = true;
+            return;
+        }
+        box.hidden = false;
+        const decls = parseStyleAttr(el.getAttribute("style") || "");
+        const state = window.__crop.fromStyles(
+            decls["background-size"], decls["background-position"]);
+        const x = document.getElementById("crop-offset-x");
+        const y = document.getElementById("crop-offset-y");
+        if (state) {
+            x.value = Math.round(state.dx);
+            y.value = Math.round(state.dy);
+        } else {
+            x.value = "";
+            y.value = "";
+        }
+        document.getElementById("crop-zoom-pct").value = "";
+    }
+
+    // withImageNatural
+    // Inputs: an image element id and a callback (el, mask, natural, decls).
+    // Output: loads the asset's natural dims via an Image, then invokes the
+    // callback. No-op when the element is not a loadable image.
+    function withImageNatural(id, cb) {
+        const el = findElement(id);
+        if (!el || el.dataset.elementType !== "image") {
+            return;
+        }
+        const url = cropImageUrl(el.dataset.assetId || "");
+        if (!url) {
+            return;
+        }
+        const rect = movingRectFromStyle(el);
+        const mask = { x: rect.x, y: rect.y, w: rect.w, h: rect.h };
+        const decls = parseStyleAttr(el.getAttribute("style") || "");
+        const img = new Image();
+        img.onload = function () {
+            if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+                cb(el, mask, { w: img.naturalWidth, h: img.naturalHeight }, decls);
+            }
+        };
+        img.src = url;
+    }
+
+    // onCropInspectorEdit — recompute crop from the edited fields and commit
+    // background-size + background-position via PropertyChanged.
+    function onCropInspectorEdit() {
+        if (currentSelectionIds.length !== 1) {
+            return;
+        }
+        const id = currentSelectionIds[0];
+        withImageNatural(id, function (el, mask, natural, decls) {
+            let state = window.__crop.fromStyles(
+                decls["background-size"], decls["background-position"])
+                || window.__crop.fromCover(mask, natural);
+            const pct = parseFloat(document.getElementById("crop-zoom-pct").value);
+            if (isFinite(pct) && pct >= 100) {
+                state = window.__crop.setZoomPercent(pct, state, mask, natural);
+            }
+            const ox = parseFloat(document.getElementById("crop-offset-x").value);
+            const oy = parseFloat(document.getElementById("crop-offset-y").value);
+            const tx = isFinite(ox) ? ox - state.dx : 0;
+            const ty = isFinite(oy) ? oy - state.dy : 0;
+            if (tx !== 0 || ty !== 0) {
+                state = window.__crop.pan(state, mask, tx, ty);
+            }
+            sendCropStyleEdits(id, window.__crop.toStyles(state));
+        });
+    }
+
+    // inspectorResetCrop — reset to the cover baseline and commit.
+    function inspectorResetCrop(id) {
+        withImageNatural(id, function (el, mask, natural) {
+            sendCropStyleEdits(id, window.__crop.toStyles(
+                window.__crop.fromCover(mask, natural)));
+        });
+    }
+
+    // sendCropStyleEdits — commit background-size + background-position via the
+    // existing PropertyChanged → SetInlineStyle path.
+    function sendCropStyleEdits(id, css) {
+        window.__deck.send("Interaction", {
+            kind: "PropertyChanged", element_id: id,
+            property: "background-size", value: css.backgroundSize,
+        });
+        window.__deck.send("Interaction", {
+            kind: "PropertyChanged", element_id: id,
+            property: "background-position", value: css.backgroundPosition,
+        });
+    }
+
+    // bindCropInspectorControls — wire the crop section's buttons + fields.
+    function bindCropInspectorControls() {
+        const enterBtn = document.getElementById("crop-enter");
+        if (enterBtn) {
+            enterBtn.addEventListener("click", function () {
+                if (currentSelectionIds.length === 1) {
+                    enterCropMode(currentSelectionIds[0]);
+                }
+            });
+        }
+        const resetBtn = document.getElementById("crop-reset");
+        if (resetBtn) {
+            resetBtn.addEventListener("click", function () {
+                if (currentSelectionIds.length === 1) {
+                    inspectorResetCrop(currentSelectionIds[0]);
+                }
+            });
+        }
+        const ids = ["crop-offset-x", "crop-offset-y", "crop-zoom-pct"];
+        let i = 0;
+        for (i = 0; i < ids.length; i = i + 1) {
+            const input = document.getElementById(ids[i]);
+            if (input) {
+                input.addEventListener("change", onCropInspectorEdit);
+            }
+        }
+    }
+
     // ---------- interaction capture ----------
     // findInteractionTarget
     // Inputs: a DOM Event.
@@ -636,7 +1150,15 @@
     // ignored (double-click has no meaning for them yet).
     function onViewportDblClick(e) {
         const target = findInteractionTarget(e);
-        if (!target || target.dataset.elementType !== "text") {
+        if (!target) {
+            return;
+        }
+        if (target.dataset.elementType === "image") {
+            e.preventDefault();
+            enterCropMode(target.dataset.elementId);
+            return;
+        }
+        if (target.dataset.elementType !== "text") {
             return;
         }
         e.preventDefault();
@@ -768,6 +1290,17 @@
         if (e.button !== 0) {
             return;
         }
+        // While cropping, a press on the overlay (catcher / handles / toolbar)
+        // is handled by the overlay's own listeners; a press anywhere else
+        // commits the crop. Either way we stop here so no drag/select arms.
+        if (cropState) {
+            const inOverlay = e.target && e.target.closest
+                && e.target.closest("#crop-overlay");
+            if (!inOverlay) {
+                commitCrop();
+            }
+            return;
+        }
         // While a text element is being edited, let the contenteditable
         // own pointer interactions (caret placement, text selection). A
         // click inside the editor is left alone; a click anywhere else
@@ -779,8 +1312,15 @@
             }
             commitTextEdit();
         }
+        // A press in the canvas area but outside the slide deselects, just
+        // like clicking the slide's own background. The handler is bound to
+        // #viewport-container, so this never fires for the side panels.
         const slideHost = e.target.closest && e.target.closest(".slide-host");
         if (!slideHost) {
+            window.__deck.send("Interaction", {
+                kind: "BackgroundClicked",
+                position: { x: e.clientX, y: e.clientY },
+            });
             return;
         }
         const target = findInteractionTarget(e);
@@ -1148,6 +1688,12 @@
         e.stopPropagation();
         e.preventDefault();
 
+        // A cropped image (explicit px background-size) scales its picture
+        // proportionally with the box (B-proportional); capture its crop
+        // state so each move can rescale the background.
+        const cropStart = (target.dataset.elementType === "image")
+            ? window.__crop.fromStyles(decls["background-size"], decls["background-position"])
+            : null;
         resizeState = {
             target: target,
             elementId: elementId,
@@ -1157,6 +1703,7 @@
             aspect: startRect.w / startRect.h,
             savedTransform: target.style.transform || "",
             snapTargets: buildSnapTargets(elementId),
+            cropStart: cropStart,
         };
         // Clear any optimistic transform from a prior drag so the
         // resize math operates on the inline left/top/width/height.
@@ -1320,8 +1867,36 @@
             resizeState, dx, dy, !!e.shiftKey, !!e.altKey,
         ), e, scale, true);
         applyOptimisticRect(resizeState.target, rect);
+        applyOptimisticCropScale(rect);
         updateSelectionOverlay();
         scheduleResizeReport(rect, e);
+    }
+
+    // croppedResizeStyles
+    // Inputs: the new box rect. Output: { backgroundSize, backgroundPosition }
+    // scaled proportionally with the box for a cropped image, or null when the
+    // element being resized is not a cropped image.
+    function croppedResizeStyles(rect) {
+        if (!resizeState || !resizeState.cropStart) {
+            return null;
+        }
+        const scaled = window.__crop.scaleForBox(
+            resizeState.cropStart,
+            resizeState.startRect.w, resizeState.startRect.h,
+            rect.w, rect.h);
+        return window.__crop.toStyles(scaled);
+    }
+
+    // applyOptimisticCropScale
+    // Inputs: the new box rect. Output: side-effect; writes the scaled
+    // background-size/position on a cropped image so the picture scales with
+    // the box during the gesture. No-op otherwise.
+    function applyOptimisticCropScale(rect) {
+        const css = croppedResizeStyles(rect);
+        if (css && resizeState) {
+            resizeState.target.style.backgroundSize = css.backgroundSize;
+            resizeState.target.style.backgroundPosition = css.backgroundPosition;
+        }
     }
 
     function applyOptimisticRect(target, rect) {
@@ -1376,12 +1951,19 @@
             resizeState, dx, dy, !!e.shiftKey, !!e.altKey,
         ), e, scale, false);
         applyOptimisticRect(resizeState.target, rect);
-        window.__deck.send("Interaction", {
+        const cropCss = croppedResizeStyles(rect);
+        applyOptimisticCropScale(rect);
+        const msg = {
             kind: "ElementResizeEnded",
             element_id: resizeState.elementId,
             new_position: { x: rect.x, y: rect.y },
             new_size: { width: rect.w, height: rect.h },
-        });
+        };
+        if (cropCss) {
+            msg.background_size = cropCss.backgroundSize;
+            msg.background_position = cropCss.backgroundPosition;
+        }
+        window.__deck.send("Interaction", msg);
         clearGuides();
         if (resizeState.savedTransform === "") {
             resizeState.target.style.removeProperty("transform");
@@ -1717,6 +2299,7 @@
         if (!subtitle) {
             return;
         }
+        refreshCropBox();
         // No selection: in slide mode the pane targets the slide (Slide box);
         // otherwise (layout mode) just blank the element controls.
         if (currentSelectionIds.length === 0) {
@@ -3084,6 +3667,7 @@
                 setGridEnabled(!gridEnabled);
             });
         }
+        bindCropInspectorControls();
         buildInspectorSections();
         refreshInspector();
         wireObjectsToolbar();
@@ -3385,6 +3969,11 @@
     // accelerator-keyed shortcuts (Cmd/Ctrl-…) still fire so that
     // Save / Undo / Redo remain available everywhere.
     document.addEventListener("keydown", function (e) {
+        if (cropState) {
+            if (e.key === "Enter") { e.preventDefault(); commitCrop(); return; }
+            if (e.key === "Escape") { e.preventDefault(); cancelCrop(); return; }
+            return;
+        }
         if (matchGridToggleShortcut(e)) {
             e.preventDefault();
             setGridEnabled(!gridEnabled);

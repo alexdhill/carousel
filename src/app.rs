@@ -57,6 +57,7 @@ const DEBUG_KEY: &str = "d";
 const DEBUG_NUDGE_PX: f64 = 50.0;
 const DRAG_TRANSACTION_LABEL: &str = "Move Element";
 const RESIZE_TRANSACTION_LABEL: &str = "Resize Element";
+const CROP_TRANSACTION_LABEL: &str = "Crop Image";
 // Synthetic key names the JS host posts for accelerator shortcuts. Kept as
 // constants so both interpret() and any future platform-specific shortcut
 // layer reference the same strings.
@@ -634,6 +635,8 @@ impl ApplicationCore {
                 element_id,
                 new_position,
                 new_size,
+                background_size,
+                background_position,
             } => {
                 let target: CanvasTarget = match self.active_canvas() {
                     Some(t) => t,
@@ -650,15 +653,29 @@ impl ApplicationCore {
                 {
                     return InterpretResult::Nothing;
                 }
-                InterpretResult::CommitTransactionWith(Box::new(ResizeElement {
+                InterpretResult::CommitTransactionWith(resize_commit_command(
                     target,
                     element_id,
-                    new_x: new_position.x,
-                    new_y: new_position.y,
-                    new_width: new_size.width,
-                    new_height: new_size.height,
-                }))
+                    new_position,
+                    new_size,
+                    background_size,
+                    background_position,
+                ))
             }
+            InteractionEvent::ElementCropCommitted {
+                element_id,
+                new_position,
+                new_size,
+                background_size,
+                background_position,
+            } => interpret_crop_committed(
+                self.active_canvas(),
+                element_id,
+                new_position,
+                new_size,
+                background_size,
+                background_position,
+            ),
             // Inline text editing (SPEC §8.5). The webview owns the text
             // during the session, so Started / Edited are no-ops on the
             // Rust side; only the commit produces a mutation.
@@ -1879,6 +1896,114 @@ fn present_start_index(deck: &Deck, active: Option<&SlideId>) -> Option<usize> {
 //     string passed through verbatim (CSS is the contract; we do not
 //     validate the value here — the parser would reject malformed CSS
 //     in a later pass).
+// interpret_crop_committed
+// Inputs: the active canvas, the image element id, the committed mask geometry
+// (position + size), and the two background-* values the webview computed for
+// the crop.
+// Output: an InterpretResult::Command wrapping one CompositeCommand that sets
+// background-size / background-position / background-repeat / overflow and the
+// mask geometry, so the whole crop session reverses in a single undo. Returns
+// Nothing when there is no active canvas.
+// Errors: asserts a non-empty element id.
+// A free function so both ApplicationCore (production) and the test mirror
+// `interpret_inline` call the identical logic.
+fn interpret_crop_committed(
+    active: Option<CanvasTarget>,
+    element_id: ElementId,
+    new_position: Point,
+    new_size: Size,
+    background_size: String,
+    background_position: String,
+) -> InterpretResult {
+    assert!(!element_id.is_empty(), "interpret_crop_committed: empty element_id");
+    let target: CanvasTarget = match active {
+        Some(t) => t,
+        None => return InterpretResult::Nothing,
+    };
+    let cmds: Vec<Box<dyn Command>> = vec![
+        Box::new(SetInlineStyle {
+            target: target.clone(),
+            element_id: element_id.clone(),
+            property: "background-size".to_string(),
+            new_value: background_size,
+        }),
+        Box::new(SetInlineStyle {
+            target: target.clone(),
+            element_id: element_id.clone(),
+            property: "background-position".to_string(),
+            new_value: background_position,
+        }),
+        Box::new(SetInlineStyle {
+            target: target.clone(),
+            element_id: element_id.clone(),
+            property: "background-repeat".to_string(),
+            new_value: "no-repeat".to_string(),
+        }),
+        Box::new(SetInlineStyle {
+            target: target.clone(),
+            element_id: element_id.clone(),
+            property: "overflow".to_string(),
+            new_value: "hidden".to_string(),
+        }),
+        Box::new(ResizeElement {
+            target,
+            element_id,
+            new_x: new_position.x,
+            new_y: new_position.y,
+            new_width: new_size.width,
+            new_height: new_size.height,
+        }),
+    ];
+    InterpretResult::Command(Box::new(CompositeCommand::new(cmds, CROP_TRANSACTION_LABEL)))
+}
+
+// resize_commit_command
+// Inputs: the canvas target, element id, committed geometry, and the optional
+// proportionally-scaled background values (Some only when resizing a cropped
+// image).
+// Output: a ResizeElement alone, or — when the background pair is present — a
+// CompositeCommand bundling the two SetInlineStyle writes with the resize so
+// the picture scales with the box and the whole gesture is one undo step.
+// A free function so production and the test mirror build identical commands.
+fn resize_commit_command(
+    target: CanvasTarget,
+    element_id: ElementId,
+    new_position: Point,
+    new_size: Size,
+    background_size: Option<String>,
+    background_position: Option<String>,
+) -> Box<dyn Command> {
+    let resize = ResizeElement {
+        target: target.clone(),
+        element_id: element_id.clone(),
+        new_x: new_position.x,
+        new_y: new_position.y,
+        new_width: new_size.width,
+        new_height: new_size.height,
+    };
+    match (background_size, background_position) {
+        (Some(bs), Some(bp)) => {
+            let cmds: Vec<Box<dyn Command>> = vec![
+                Box::new(SetInlineStyle {
+                    target: target.clone(),
+                    element_id: element_id.clone(),
+                    property: "background-size".to_string(),
+                    new_value: bs,
+                }),
+                Box::new(SetInlineStyle {
+                    target,
+                    element_id,
+                    property: "background-position".to_string(),
+                    new_value: bp,
+                }),
+                Box::new(resize),
+            ];
+            Box::new(CompositeCommand::new(cmds, RESIZE_TRANSACTION_LABEL))
+        }
+        _ => Box::new(resize),
+    }
+}
+
 // The function is intentionally a free function so both ApplicationCore
 // (production) and the test mirror `interpret_inline` can call it.
 fn interpret_property_changed(
@@ -2787,6 +2912,8 @@ mod tests {
                 element_id,
                 new_position,
                 new_size,
+                background_size,
+                background_position,
             } => {
                 let sid = match active_slide.clone() {
                     Some(s) => s,
@@ -2799,15 +2926,29 @@ mod tests {
                 {
                     return InterpretResult::Nothing;
                 }
-                InterpretResult::CommitTransactionWith(Box::new(ResizeElement {
-                    target: CanvasTarget::Slide(sid),
+                InterpretResult::CommitTransactionWith(resize_commit_command(
+                    CanvasTarget::Slide(sid),
                     element_id,
-                    new_x: new_position.x,
-                    new_y: new_position.y,
-                    new_width: new_size.width,
-                    new_height: new_size.height,
-                }))
+                    new_position,
+                    new_size,
+                    background_size,
+                    background_position,
+                ))
             }
+            InteractionEvent::ElementCropCommitted {
+                element_id,
+                new_position,
+                new_size,
+                background_size,
+                background_position,
+            } => interpret_crop_committed(
+                active_slide.clone().map(CanvasTarget::Slide),
+                element_id,
+                new_position,
+                new_size,
+                background_size,
+                background_position,
+            ),
             InteractionEvent::BackgroundClicked { .. } => {
                 InterpretResult::Selection(SelectionState::empty())
             }
@@ -3303,6 +3444,84 @@ mod tests {
                     deck.slides[&sid].find_element(&eid).unwrap().geometry.opacity,
                     0.5
                 );
+            }
+            other => panic!("expected Command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resize_commit_with_background_bundles_styles_and_geometry() {
+        let (_d, _sel, sid, eid) = fixture();
+        let cmd = resize_commit_command(
+            CanvasTarget::Slide(sid.clone()),
+            eid.clone(),
+            Point { x: 5.0, y: 6.0 },
+            Size { width: 800.0, height: 600.0 },
+            Some("1200px 600px".to_string()),
+            Some("-200px 0px".to_string()),
+        );
+        let mut deck = Deck::sample();
+        cmd.apply(&mut deck).unwrap();
+        let el = deck.slides[&sid].find_element(&eid).unwrap();
+        assert_eq!(el.geometry.width, 800.0);
+        assert_eq!(
+            el.inline_styles.get("background-size").map(String::as_str),
+            Some("1200px 600px")
+        );
+        assert_eq!(
+            el.inline_styles.get("background-position").map(String::as_str),
+            Some("-200px 0px")
+        );
+    }
+
+    #[test]
+    fn resize_commit_without_background_is_plain_resize() {
+        let (_d, _sel, sid, eid) = fixture();
+        let cmd = resize_commit_command(
+            CanvasTarget::Slide(sid.clone()),
+            eid.clone(),
+            Point { x: 5.0, y: 6.0 },
+            Size { width: 800.0, height: 600.0 },
+            None,
+            None,
+        );
+        assert_eq!(cmd.label(), "Resize Element");
+    }
+
+    #[test]
+    fn crop_committed_builds_composite_with_styles_and_geometry() {
+        let (_d, _sel, sid, eid) = fixture();
+        let result = interpret_crop_committed(
+            Some(CanvasTarget::Slide(sid.clone())),
+            eid.clone(),
+            Point { x: 10.0, y: 20.0 },
+            Size { width: 400.0, height: 300.0 },
+            "600px 300px".to_string(),
+            "-100px 0px".to_string(),
+        );
+        match result {
+            InterpretResult::Command(cmd) => {
+                let mut deck = Deck::sample();
+                cmd.apply(&mut deck).unwrap();
+                let el = deck.slides[&sid].find_element(&eid).unwrap();
+                assert_eq!(
+                    el.inline_styles.get("background-size").map(String::as_str),
+                    Some("600px 300px")
+                );
+                assert_eq!(
+                    el.inline_styles.get("background-position").map(String::as_str),
+                    Some("-100px 0px")
+                );
+                assert_eq!(
+                    el.inline_styles.get("overflow").map(String::as_str),
+                    Some("hidden")
+                );
+                assert_eq!(
+                    el.inline_styles.get("background-repeat").map(String::as_str),
+                    Some("no-repeat")
+                );
+                assert_eq!(el.geometry.width, 400.0);
+                assert_eq!(el.geometry.height, 300.0);
             }
             other => panic!("expected Command, got {other:?}"),
         }
@@ -3850,6 +4069,8 @@ mod tests {
             element_id: eid.clone(),
             new_position: Point { x: 50.0, y: 60.0 },
             new_size: Size { width: 300.0, height: 200.0 },
+            background_size: None,
+            background_position: None,
         };
         match interpret_inline(&d, &sel, &Some(sid.clone()), event) {
             InterpretResult::CommitTransactionWith(cmd) => {
@@ -3875,6 +4096,8 @@ mod tests {
             element_id: eid,
             new_position: Point { x: 0.0, y: 0.0 },
             new_size: Size { width: 1.0, height: 1.0 },
+            background_size: None,
+            background_position: None,
         };
         match interpret_inline(&d, &sel, &Some(sid), event) {
             InterpretResult::Nothing => {}

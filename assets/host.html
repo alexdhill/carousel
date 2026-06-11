@@ -54,6 +54,23 @@
             <p class="inspector__subtitle" id="inspector-target">No selection</p>
         </header>
         <div class="inspector__scroll" id="inspector-scroll"></div>
+        <section id="crop-box" class="crop-box" hidden>
+            <h3 class="crop-box__title">Crop</h3>
+            <button type="button" id="crop-enter" class="crop-box__enter">Crop image</button>
+            <label class="crop-box__field">
+                <span>Zoom %</span>
+                <input type="number" id="crop-zoom-pct" min="100" step="1">
+            </label>
+            <label class="crop-box__field">
+                <span>Offset X</span>
+                <input type="number" id="crop-offset-x" step="1">
+            </label>
+            <label class="crop-box__field">
+                <span>Offset Y</span>
+                <input type="number" id="crop-offset-y" step="1">
+            </label>
+            <button type="button" id="crop-reset" class="crop-box__reset">Reset crop</button>
+        </section>
         <form class="inspector__custom" id="inspector-custom" autocomplete="off">
             <label class="inspector__custom-label" for="inspector-custom-key">Custom CSS</label>
             <div class="inspector__custom-row">
@@ -111,6 +128,7 @@
     </aside>
     <nav id="thumbnail-row" class="panel panel--thumbs" aria-label="Slides"></nav>
     <div id="notice-banner"></div>
+    <script>__CROP_JS__</script>
     <script>__SNAP_JS__</script>
     <script>__HOST_JS__</script>
 </body>

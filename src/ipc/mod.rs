@@ -199,6 +199,24 @@ pub enum InteractionEvent {
         element_id: ElementId,
         new_position: Point,
         new_size: Size,
+        // Present only when resizing a cropped image: the proportionally
+        // scaled background values so the picture scales with the box
+        // (B-proportional). Absent for every other resize.
+        #[serde(default)]
+        background_size: Option<String>,
+        #[serde(default)]
+        background_position: Option<String>,
+    },
+    // ElementCropCommitted
+    // Final commit of a crop session. Carries the mask geometry plus the two
+    // background-* values the webview computed. Interpreted into one
+    // CompositeCommand so the whole crop is a single undo step.
+    ElementCropCommitted {
+        element_id: ElementId,
+        new_position: Point,
+        new_size: Size,
+        background_size: String,
+        background_position: String,
     },
     // TextEditStarted
     // Fired when a text element enters inline editing (double-click). The
