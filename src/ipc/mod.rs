@@ -218,6 +218,11 @@ pub enum InteractionEvent {
         background_size: String,
         background_position: String,
     },
+    // Clipboard accelerators. Payload-free: copy/cut/paste resolve entirely
+    // from the server-side selection + clipboard buffer.
+    CopyRequested,
+    CutRequested,
+    PasteRequested,
     // TextEditStarted
     // Fired when a text element enters inline editing (double-click). The
     // webview is authoritative for the text content during the session;

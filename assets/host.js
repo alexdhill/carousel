@@ -3828,6 +3828,21 @@
         }
     }
 
+    // matchClipboardShortcut
+    // Inputs: a KeyboardEvent. Output: "copy" | "cut" | "paste" for
+    // Cmd/Ctrl + C / X / V (no Shift), else null. Pure; no DOM, no IPC.
+    function matchClipboardShortcut(e) {
+        const meta = !!(e.metaKey || e.ctrlKey);
+        if (!meta || e.shiftKey) {
+            return null;
+        }
+        const key = (typeof e.key === "string") ? e.key.toLowerCase() : "";
+        if (key === "c") { return "copy"; }
+        if (key === "x") { return "cut"; }
+        if (key === "v") { return "paste"; }
+        return null;
+    }
+
     function matchUndoRedoShortcut(e) {
         const meta = !!(e.metaKey || e.ctrlKey);
         if (!meta) {
@@ -4004,6 +4019,16 @@
         if (isEditableFocus()) {
             // Let the focused control handle its own keystroke. We do
             // not preventDefault — inputs need their default behavior.
+            return;
+        }
+        // Element/slide clipboard accelerators. Placed AFTER the editable
+        // bail so Cmd+C/V inside a text edit or input keeps native behavior.
+        const clip = matchClipboardShortcut(e);
+        if (clip) {
+            e.preventDefault();
+            const kind = clip === "copy" ? "CopyRequested"
+                : (clip === "cut" ? "CutRequested" : "PasteRequested");
+            window.__deck.send("Interaction", { kind: kind });
             return;
         }
         const isSingleChar = (typeof e.key === "string" && e.key.length === 1);

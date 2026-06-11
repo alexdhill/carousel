@@ -21,7 +21,7 @@ use crate::bundle::{
 use crate::commands::{
     Command, CommandDispatcher, CompositeCommand, EditorMode, FileAction, GeometryProperty,
     InsertAnimation, InsertElement, InsertLayout, InsertSlide, InterpretResult, MoveElement,
-    RemoveAnimation, RemoveElementCommand, RemoveInlineStyle, RenameElement, ReparentElement,
+    RemoveAnimation, RemoveElementCommand, RemoveInlineStyle, RemoveSlide, RenameElement, ReparentElement,
     ResizeElement, SetElementId, SetGeometryProperty, SetGlobalsCss, SetInlineStyle, SetLayoutName,
     SetSlideBackground, SetSlideLayout, SetSlideNotes, SetSlideTitle, SetTextContent, SwapTheme,
     TransactionSnapshot,
@@ -58,6 +58,21 @@ const DEBUG_NUDGE_PX: f64 = 50.0;
 const DRAG_TRANSACTION_LABEL: &str = "Move Element";
 const RESIZE_TRANSACTION_LABEL: &str = "Resize Element";
 const CROP_TRANSACTION_LABEL: &str = "Crop Image";
+const PASTE_LABEL: &str = "Paste";
+const CUT_LABEL: &str = "Cut";
+
+// Clipboard: the in-app copy buffer. Holds typed clones (no serde round-trip;
+// serialization would only matter for a future OS clipboard).
+enum Clipboard {
+    Elements(Vec<ElementNode>),
+    Slide(SlideNode),
+}
+
+// PasteOutcome: what build_paste_command wants selected/activated afterward.
+enum PasteOutcome {
+    Elements(Vec<ElementId>),
+    Slide(SlideId),
+}
 // Synthetic key names the JS host posts for accelerator shortcuts. Kept as
 // constants so both interpret() and any future platform-specific shortcut
 // layer reference the same strings.
@@ -127,6 +142,11 @@ pub struct ApplicationCore {
     // AddLayoutRequested arm so react_to_outcome switches to the freshly
     // created layout once InsertLayout has applied.
     pending_new_active_layout: Option<LayoutId>,
+    // Session-lived copy/cut buffer (None until first copy).
+    clipboard: Option<Clipboard>,
+    // Set by the Paste arm to the freshly-inserted element ids; consumed by
+    // react_to_outcome to select them once the insert has applied.
+    pending_paste_selection: Option<Vec<ElementId>>,
 }
 
 impl ApplicationCore {
@@ -162,6 +182,8 @@ impl ApplicationCore {
             pending_asset_broadcast: None,
             pending_new_active_slide: None,
             pending_new_active_layout: None,
+            clipboard: None,
+            pending_paste_selection: None,
         }
     }
 
@@ -676,6 +698,48 @@ impl ApplicationCore {
                 background_size,
                 background_position,
             ),
+            InteractionEvent::CopyRequested => {
+                self.clipboard = collect_copy(
+                    self.active_canvas(),
+                    &self.selection,
+                    self.active_slide.as_ref(),
+                    self.dispatcher.deck(),
+                );
+                InterpretResult::Nothing
+            }
+            InteractionEvent::CutRequested => {
+                self.clipboard = collect_copy(
+                    self.active_canvas(),
+                    &self.selection,
+                    self.active_slide.as_ref(),
+                    self.dispatcher.deck(),
+                );
+                match build_cut_removal(
+                    self.active_canvas(),
+                    &self.selection,
+                    self.active_slide.as_ref(),
+                    self.dispatcher.deck(),
+                ) {
+                    Some(cmd) => InterpretResult::Command(cmd),
+                    None => InterpretResult::Nothing,
+                }
+            }
+            InteractionEvent::PasteRequested => {
+                let built = self.clipboard.as_ref().and_then(|clip| {
+                    build_paste_command(self.active_canvas(), clip, self.dispatcher.deck())
+                });
+                match built {
+                    Some((cmd, PasteOutcome::Elements(ids))) => {
+                        self.pending_paste_selection = Some(ids);
+                        InterpretResult::Command(cmd)
+                    }
+                    Some((cmd, PasteOutcome::Slide(new_id))) => {
+                        self.pending_new_active_slide = Some(new_id);
+                        InterpretResult::Command(cmd)
+                    }
+                    None => InterpretResult::Nothing,
+                }
+            }
             // Inline text editing (SPEC §8.5). The webview owns the text
             // during the session, so Started / Edited are no-ops on the
             // Rust side; only the commit produces a mutation.
@@ -1310,6 +1374,16 @@ impl ApplicationCore {
         } else if outcome.affects_object_tree {
             if let Err(e) = self.send_object_tree() {
                 warn!("object tree broadcast after dispatch failed: {}", e);
+            }
+        }
+        // Paste selects the freshly-inserted elements once the insert applied.
+        if let Some(ids) = self.pending_paste_selection.take() {
+            let mut sel = SelectionState::empty();
+            sel.slide_id = self.active_slide.clone();
+            sel.element_ids = ids;
+            self.selection = sel.clone();
+            if let Err(e) = self.sender.send(MessageKind::SetSelection(sel)) {
+                warn!("paste selection broadcast failed: {}", e);
             }
         }
     }
@@ -2002,6 +2076,153 @@ fn resize_commit_command(
         }
         _ => Box::new(resize),
     }
+}
+
+// collect_copy
+// Inputs: the active canvas, the current selection, the active slide id, and
+// the deck. Output: clipboard contents — Elements(clones) when one or more
+// elements are selected, else Slide(clone of the active slide); None when
+// neither is resolvable. Pure: no App, no IPC.
+fn collect_copy(
+    active: Option<CanvasTarget>,
+    selection: &SelectionState,
+    active_slide: Option<&SlideId>,
+    deck: &Deck,
+) -> Option<Clipboard> {
+    if !selection.element_ids.is_empty() {
+        let target = active?;
+        let canvas = deck.canvas(&target)?;
+        let mut out: Vec<ElementNode> = Vec::new();
+        for id in &selection.element_ids {
+            if let Some(node) = canvas.find_element(id) {
+                out.push(node.clone());
+            }
+        }
+        if out.is_empty() {
+            return None;
+        }
+        return Some(Clipboard::Elements(out));
+    }
+    let sid = active_slide?;
+    let slide = deck.slides.get(sid)?;
+    Some(Clipboard::Slide(slide.clone()))
+}
+
+// build_paste_command
+// Inputs: the active canvas, the clipboard contents, and the deck.
+// Output: the insertion command (one undo step) plus a PasteOutcome describing
+// what to select/activate afterward; None when nothing can be pasted (no
+// canvas / empty buffer). IDs are regenerated so a paste never collides with
+// its source or a prior paste. Elements paste at exact original geometry.
+fn build_paste_command(
+    active: Option<CanvasTarget>,
+    clipboard: &Clipboard,
+    deck: &Deck,
+) -> Option<(Box<dyn Command>, PasteOutcome)> {
+    match clipboard {
+        Clipboard::Elements(nodes) => {
+            let target = active?;
+            let canvas = deck.canvas(&target)?;
+            let parent_id: ElementId = canvas.root().id.clone();
+            let base: usize = canvas.root().children.len();
+            let mut cmds: Vec<Box<dyn Command>> = Vec::new();
+            let mut ids: Vec<ElementId> = Vec::new();
+            for (i, node) in nodes.iter().enumerate() {
+                let mut copy = node.clone();
+                crate::deck::element::regenerate_ids(&mut copy);
+                ids.push(copy.id.clone());
+                cmds.push(Box::new(InsertElement {
+                    target: target.clone(),
+                    parent_id: parent_id.clone(),
+                    position: base + i,
+                    node: copy,
+                }));
+            }
+            if cmds.is_empty() {
+                return None;
+            }
+            let cmd: Box<dyn Command> = Box::new(CompositeCommand::new(cmds, PASTE_LABEL));
+            Some((cmd, PasteOutcome::Elements(ids)))
+        }
+        Clipboard::Slide(slide) => {
+            let position: usize = match active {
+                Some(CanvasTarget::Slide(sid)) => deck
+                    .slide_order
+                    .iter()
+                    .position(|s| *s == sid)
+                    .map(|i| i + 1)
+                    .unwrap_or(deck.slide_order.len()),
+                _ => deck.slide_order.len(),
+            };
+            let mut copy = slide.clone();
+            let new_id = crate::deck::new_slide_id();
+            let id_map = crate::deck::element::regenerate_ids(&mut copy.root);
+            for anim in copy.animations.iter_mut() {
+                if let Some(new) = id_map.get(&anim.element_id) {
+                    anim.element_id = new.clone();
+                }
+            }
+            copy.id = new_id.clone();
+            let manifest_entry = crate::bundle::SlideEntry {
+                id: new_id.clone(),
+                path: crate::bundle::manifest::slide_path_for(&new_id),
+                layout_id: copy.layout_id.clone(),
+                title: String::new(),
+                thumbnail: None,
+                transition: None,
+                duration_hint: None,
+                notes_ref: None,
+                animations: copy.animations.clone(),
+                background: copy.metadata.background.clone(),
+                notes: None,
+            };
+            let cmd: Box<dyn Command> = Box::new(InsertSlide {
+                position,
+                slide: copy,
+                manifest_entry,
+            });
+            Some((cmd, PasteOutcome::Slide(new_id)))
+        }
+    }
+}
+
+// build_cut_removal
+// Inputs: the active canvas, selection, active slide id, and deck.
+// Output: the removal half of a cut — a CompositeCommand of RemoveElementCommand
+// for each selected element (label "Cut"), or a RemoveSlide for the active
+// slide. Returns None when nothing is removable, including the guard that the
+// last remaining slide is never removed. The copy half is collect_copy.
+fn build_cut_removal(
+    active: Option<CanvasTarget>,
+    selection: &SelectionState,
+    active_slide: Option<&SlideId>,
+    deck: &Deck,
+) -> Option<Box<dyn Command>> {
+    if !selection.element_ids.is_empty() {
+        let target = active?;
+        let canvas = deck.canvas(&target)?;
+        let mut cmds: Vec<Box<dyn Command>> = Vec::new();
+        for id in &selection.element_ids {
+            if canvas.find_element(id).is_some() {
+                cmds.push(Box::new(RemoveElementCommand {
+                    target: target.clone(),
+                    element_id: id.clone(),
+                }));
+            }
+        }
+        if cmds.is_empty() {
+            return None;
+        }
+        return Some(Box::new(CompositeCommand::new(cmds, CUT_LABEL)));
+    }
+    if deck.slide_order.len() <= 1 {
+        return None;
+    }
+    let sid = active_slide?;
+    if !deck.slides.contains_key(sid) {
+        return None;
+    }
+    Some(Box::new(RemoveSlide { slide_id: sid.clone() }))
 }
 
 // The function is intentionally a free function so both ApplicationCore
@@ -2949,6 +3170,12 @@ mod tests {
                 background_size,
                 background_position,
             ),
+            // Clipboard ops are App-stateful (need the clipboard buffer); the
+            // production arms own them and the free helpers are tested directly.
+            // The mirror stays a no-op so the match remains exhaustive.
+            InteractionEvent::CopyRequested
+            | InteractionEvent::CutRequested
+            | InteractionEvent::PasteRequested => InterpretResult::Nothing,
             InteractionEvent::BackgroundClicked { .. } => {
                 InterpretResult::Selection(SelectionState::empty())
             }
@@ -3447,6 +3674,97 @@ mod tests {
             }
             other => panic!("expected Command, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn collect_copy_returns_elements_when_selected_else_slide() {
+        let (d, _sel, sid, eid) = fixture();
+        let target = CanvasTarget::Slide(sid.clone());
+        let mut sel = SelectionState::empty();
+        sel.slide_id = Some(sid.clone());
+        sel.element_ids = vec![eid.clone()];
+        match collect_copy(Some(target.clone()), &sel, Some(&sid), d.deck()) {
+            Some(Clipboard::Elements(v)) => {
+                assert_eq!(v.len(), 1);
+                assert_eq!(v[0].id, eid);
+            }
+            _ => panic!("expected Elements"),
+        }
+        let empty = SelectionState::empty();
+        match collect_copy(Some(target), &empty, Some(&sid), d.deck()) {
+            Some(Clipboard::Slide(s)) => assert_eq!(s.id, sid),
+            _ => panic!("expected Slide"),
+        }
+    }
+
+    #[test]
+    fn paste_elements_inserts_clones_with_fresh_ids_same_geometry() {
+        let (d, _sel, sid, eid) = fixture();
+        let target = CanvasTarget::Slide(sid.clone());
+        let source = d.deck().canvas(&target).unwrap().find_element(&eid).unwrap().clone();
+        let clip = Clipboard::Elements(vec![source.clone()]);
+        let (cmd, outcome) = build_paste_command(Some(target.clone()), &clip, d.deck()).unwrap();
+        let mut deck = d.deck().clone();
+        cmd.apply(&mut deck).unwrap();
+        let root = deck.canvas(&target).unwrap().root();
+        let pasted = root.children.last().unwrap();
+        assert_ne!(pasted.id, eid);
+        assert_eq!(pasted.geometry, source.geometry);
+        match outcome {
+            PasteOutcome::Elements(ids) => assert_eq!(ids, vec![pasted.id.clone()]),
+            _ => panic!("expected Elements outcome"),
+        }
+    }
+
+    #[test]
+    fn paste_slide_inserts_after_active_with_fresh_ids() {
+        let (d, _sel, sid, _eid) = fixture();
+        let slide = d.deck().slides.get(&sid).unwrap().clone();
+        let clip = Clipboard::Slide(slide.clone());
+        let (cmd, outcome) =
+            build_paste_command(Some(CanvasTarget::Slide(sid.clone())), &clip, d.deck()).unwrap();
+        let mut deck = d.deck().clone();
+        let before = deck.slide_order.len();
+        cmd.apply(&mut deck).unwrap();
+        assert_eq!(deck.slide_order.len(), before + 1);
+        match outcome {
+            PasteOutcome::Slide(new_id) => {
+                assert!(deck.slides.contains_key(&new_id));
+                assert_ne!(new_id, sid);
+                assert_ne!(deck.slides[&new_id].root.id, slide.root.id);
+            }
+            _ => panic!("expected Slide outcome"),
+        }
+    }
+
+    #[test]
+    fn cut_removal_removes_selected_elements() {
+        let (d, _sel, sid, eid) = fixture();
+        let mut sel = SelectionState::empty();
+        sel.slide_id = Some(sid.clone());
+        sel.element_ids = vec![eid.clone()];
+        let cmd =
+            build_cut_removal(Some(CanvasTarget::Slide(sid.clone())), &sel, Some(&sid), d.deck())
+                .unwrap();
+        assert_eq!(cmd.label(), "Cut");
+        let mut deck = d.deck().clone();
+        cmd.apply(&mut deck).unwrap();
+        assert!(deck
+            .canvas(&CanvasTarget::Slide(sid.clone()))
+            .unwrap()
+            .find_element(&eid)
+            .is_none());
+    }
+
+    #[test]
+    fn cut_removal_guards_the_last_slide() {
+        let (d, _sel, sid, _eid) = fixture();
+        let empty = SelectionState::empty();
+        // Deck::sample has a single slide; cutting it must yield no removal.
+        assert!(
+            build_cut_removal(Some(CanvasTarget::Slide(sid.clone())), &empty, Some(&sid), d.deck())
+                .is_none()
+        );
     }
 
     #[test]

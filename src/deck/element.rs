@@ -5,7 +5,7 @@
 // surface in `builders.rs` enforces the invariant that all three agree
 // (a Text element carries TextStyle and TextContent, etc.).
 
-use crate::deck::ids::ElementId;
+use crate::deck::ids::{ElementId, new_element_id};
 use crate::deck::style::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -179,11 +179,62 @@ impl ElementNode {
     }
 }
 
+// regenerate_ids
+// Inputs: the root of an element subtree.
+// Output: assigns a fresh el_… id to the root and every descendant, returning
+// a map of old id -> new id (callers use it to remap external references such
+// as slide animation targets). Iterative with an explicit stack (no recursion)
+// and a fixed node ceiling per the code-structure rules.
+// Errors: asserts the node count stays under the ceiling.
+pub fn regenerate_ids(root: &mut ElementNode) -> std::collections::HashMap<ElementId, ElementId> {
+    const MAX_NODES: usize = 1_000_000;
+    let mut map: std::collections::HashMap<ElementId, ElementId> = std::collections::HashMap::new();
+    let mut stack: Vec<&mut ElementNode> = vec![root];
+    let mut seen: usize = 0;
+    while let Some(node) = stack.pop() {
+        seen += 1;
+        assert!(seen <= MAX_NODES, "regenerate_ids: node ceiling exceeded");
+        let fresh: ElementId = new_element_id();
+        map.insert(node.id.clone(), fresh.clone());
+        node.id = fresh;
+        for child in node.children.iter_mut() {
+            stack.push(child);
+        }
+    }
+    map
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
     use crate::deck::builders::{group_element, text_element};
+
+    #[test]
+    fn regenerate_ids_changes_every_id_and_preserves_structure() {
+        use std::collections::HashSet;
+        let mut root = group_element(
+            "el_root".to_string(),
+            vec![group_element("el_a".to_string(), vec![
+                group_element("el_b".to_string(), vec![]),
+            ])],
+        );
+        let map = regenerate_ids(&mut root);
+        assert_eq!(map.len(), 3);
+        let ids: HashSet<&String> = [
+            &root.id,
+            &root.children[0].id,
+            &root.children[0].children[0].id,
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(ids.len(), 3);
+        assert!(root.id.starts_with("el_"));
+        assert_ne!(root.id, "el_root");
+        assert_eq!(map.get("el_root").map(String::as_str), Some(root.id.as_str()));
+        assert_eq!(root.children.len(), 1);
+        assert_eq!(root.children[0].children.len(), 1);
+    }
 
     #[test]
     fn type_html_roundtrips() {
