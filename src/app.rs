@@ -698,8 +698,9 @@ impl ApplicationCore {
                 background_size,
                 background_position,
             ),
-            InteractionEvent::CopyRequested => {
+            InteractionEvent::CopyRequested { scope } => {
                 self.clipboard = collect_copy(
+                    scope,
                     self.active_canvas(),
                     &self.selection,
                     self.active_slide.as_ref(),
@@ -707,14 +708,16 @@ impl ApplicationCore {
                 );
                 InterpretResult::Nothing
             }
-            InteractionEvent::CutRequested => {
+            InteractionEvent::CutRequested { scope } => {
                 self.clipboard = collect_copy(
+                    scope,
                     self.active_canvas(),
                     &self.selection,
                     self.active_slide.as_ref(),
                     self.dispatcher.deck(),
                 );
                 match build_cut_removal(
+                    scope,
                     self.active_canvas(),
                     &self.selection,
                     self.active_slide.as_ref(),
@@ -723,6 +726,9 @@ impl ApplicationCore {
                     Some(cmd) => InterpretResult::Command(cmd),
                     None => InterpretResult::Nothing,
                 }
+            }
+            InteractionEvent::RemoveSlideRequested { slide_id } => {
+                interpret_remove_slide(self.dispatcher.deck(), &slide_id)
             }
             InteractionEvent::PasteRequested => {
                 let built = self.clipboard.as_ref().and_then(|clip| {
@@ -2078,34 +2084,51 @@ fn resize_commit_command(
     }
 }
 
+// interpret_remove_slide
+// Inputs: the deck and a slide id. Output: a RemoveSlide command when the slide
+// exists and is not the last remaining one, else Nothing (guard so no dispatch
+// error). react_to_outcome's affects_slide_list path re-establishes a valid
+// active slide afterward.
+fn interpret_remove_slide(deck: &Deck, slide_id: &SlideId) -> InterpretResult {
+    if deck.slide_order.len() <= 1 || !deck.slides.contains_key(slide_id) {
+        return InterpretResult::Nothing;
+    }
+    InterpretResult::Command(Box::new(RemoveSlide { slide_id: slide_id.clone() }))
+}
+
 // collect_copy
-// Inputs: the active canvas, the current selection, the active slide id, and
-// the deck. Output: clipboard contents — Elements(clones) when one or more
-// elements are selected, else Slide(clone of the active slide); None when
-// neither is resolvable. Pure: no App, no IPC.
+// Inputs: the focus-derived scope, the active canvas, the current selection,
+// the active slide id, and the deck. Output: clipboard contents per scope —
+// Elements(clones of the selection) or Slide(clone of the active slide); None
+// when nothing is resolvable. Pure: no App, no IPC.
 fn collect_copy(
+    scope: crate::ipc::ClipboardScope,
     active: Option<CanvasTarget>,
     selection: &SelectionState,
     active_slide: Option<&SlideId>,
     deck: &Deck,
 ) -> Option<Clipboard> {
-    if !selection.element_ids.is_empty() {
-        let target = active?;
-        let canvas = deck.canvas(&target)?;
-        let mut out: Vec<ElementNode> = Vec::new();
-        for id in &selection.element_ids {
-            if let Some(node) = canvas.find_element(id) {
-                out.push(node.clone());
+    match scope {
+        crate::ipc::ClipboardScope::Elements => {
+            let target = active?;
+            let canvas = deck.canvas(&target)?;
+            let mut out: Vec<ElementNode> = Vec::new();
+            for id in &selection.element_ids {
+                if let Some(node) = canvas.find_element(id) {
+                    out.push(node.clone());
+                }
             }
+            if out.is_empty() {
+                return None;
+            }
+            Some(Clipboard::Elements(out))
         }
-        if out.is_empty() {
-            return None;
+        crate::ipc::ClipboardScope::Slide => {
+            let sid = active_slide?;
+            let slide = deck.slides.get(sid)?;
+            Some(Clipboard::Slide(slide.clone()))
         }
-        return Some(Clipboard::Elements(out));
     }
-    let sid = active_slide?;
-    let slide = deck.slides.get(sid)?;
-    Some(Clipboard::Slide(slide.clone()))
 }
 
 // build_paste_command
@@ -2187,42 +2210,48 @@ fn build_paste_command(
 }
 
 // build_cut_removal
-// Inputs: the active canvas, selection, active slide id, and deck.
-// Output: the removal half of a cut — a CompositeCommand of RemoveElementCommand
-// for each selected element (label "Cut"), or a RemoveSlide for the active
-// slide. Returns None when nothing is removable, including the guard that the
-// last remaining slide is never removed. The copy half is collect_copy.
+// Inputs: the focus-derived scope, the active canvas, selection, active slide
+// id, and deck. Output: the removal half of a cut per scope — a CompositeCommand
+// of RemoveElementCommand for each selected element (label "Cut"), or a
+// RemoveSlide for the active slide. Returns None when nothing is removable,
+// including the guard that the last remaining slide is never removed. The copy
+// half is collect_copy.
 fn build_cut_removal(
+    scope: crate::ipc::ClipboardScope,
     active: Option<CanvasTarget>,
     selection: &SelectionState,
     active_slide: Option<&SlideId>,
     deck: &Deck,
 ) -> Option<Box<dyn Command>> {
-    if !selection.element_ids.is_empty() {
-        let target = active?;
-        let canvas = deck.canvas(&target)?;
-        let mut cmds: Vec<Box<dyn Command>> = Vec::new();
-        for id in &selection.element_ids {
-            if canvas.find_element(id).is_some() {
-                cmds.push(Box::new(RemoveElementCommand {
-                    target: target.clone(),
-                    element_id: id.clone(),
-                }));
+    match scope {
+        crate::ipc::ClipboardScope::Elements => {
+            let target = active?;
+            let canvas = deck.canvas(&target)?;
+            let mut cmds: Vec<Box<dyn Command>> = Vec::new();
+            for id in &selection.element_ids {
+                if canvas.find_element(id).is_some() {
+                    cmds.push(Box::new(RemoveElementCommand {
+                        target: target.clone(),
+                        element_id: id.clone(),
+                    }));
+                }
             }
+            if cmds.is_empty() {
+                return None;
+            }
+            Some(Box::new(CompositeCommand::new(cmds, CUT_LABEL)))
         }
-        if cmds.is_empty() {
-            return None;
+        crate::ipc::ClipboardScope::Slide => {
+            if deck.slide_order.len() <= 1 {
+                return None;
+            }
+            let sid = active_slide?;
+            if !deck.slides.contains_key(sid) {
+                return None;
+            }
+            Some(Box::new(RemoveSlide { slide_id: sid.clone() }))
         }
-        return Some(Box::new(CompositeCommand::new(cmds, CUT_LABEL)));
     }
-    if deck.slide_order.len() <= 1 {
-        return None;
-    }
-    let sid = active_slide?;
-    if !deck.slides.contains_key(sid) {
-        return None;
-    }
-    Some(Box::new(RemoveSlide { slide_id: sid.clone() }))
 }
 
 // The function is intentionally a free function so both ApplicationCore
@@ -3173,9 +3202,10 @@ mod tests {
             // Clipboard ops are App-stateful (need the clipboard buffer); the
             // production arms own them and the free helpers are tested directly.
             // The mirror stays a no-op so the match remains exhaustive.
-            InteractionEvent::CopyRequested
-            | InteractionEvent::CutRequested
-            | InteractionEvent::PasteRequested => InterpretResult::Nothing,
+            InteractionEvent::CopyRequested { .. }
+            | InteractionEvent::CutRequested { .. }
+            | InteractionEvent::PasteRequested
+            | InteractionEvent::RemoveSlideRequested { .. } => InterpretResult::Nothing,
             InteractionEvent::BackgroundClicked { .. } => {
                 InterpretResult::Selection(SelectionState::empty())
             }
@@ -3683,7 +3713,9 @@ mod tests {
         let mut sel = SelectionState::empty();
         sel.slide_id = Some(sid.clone());
         sel.element_ids = vec![eid.clone()];
-        match collect_copy(Some(target.clone()), &sel, Some(&sid), d.deck()) {
+        match collect_copy(
+            crate::ipc::ClipboardScope::Elements, Some(target.clone()), &sel, Some(&sid), d.deck(),
+        ) {
             Some(Clipboard::Elements(v)) => {
                 assert_eq!(v.len(), 1);
                 assert_eq!(v[0].id, eid);
@@ -3691,7 +3723,9 @@ mod tests {
             _ => panic!("expected Elements"),
         }
         let empty = SelectionState::empty();
-        match collect_copy(Some(target), &empty, Some(&sid), d.deck()) {
+        match collect_copy(
+            crate::ipc::ClipboardScope::Slide, Some(target), &empty, Some(&sid), d.deck(),
+        ) {
             Some(Clipboard::Slide(s)) => assert_eq!(s.id, sid),
             _ => panic!("expected Slide"),
         }
@@ -3743,9 +3777,14 @@ mod tests {
         let mut sel = SelectionState::empty();
         sel.slide_id = Some(sid.clone());
         sel.element_ids = vec![eid.clone()];
-        let cmd =
-            build_cut_removal(Some(CanvasTarget::Slide(sid.clone())), &sel, Some(&sid), d.deck())
-                .unwrap();
+        let cmd = build_cut_removal(
+            crate::ipc::ClipboardScope::Elements,
+            Some(CanvasTarget::Slide(sid.clone())),
+            &sel,
+            Some(&sid),
+            d.deck(),
+        )
+        .unwrap();
         assert_eq!(cmd.label(), "Cut");
         let mut deck = d.deck().clone();
         cmd.apply(&mut deck).unwrap();
@@ -3761,10 +3800,42 @@ mod tests {
         let (d, _sel, sid, _eid) = fixture();
         let empty = SelectionState::empty();
         // Deck::sample has a single slide; cutting it must yield no removal.
-        assert!(
-            build_cut_removal(Some(CanvasTarget::Slide(sid.clone())), &empty, Some(&sid), d.deck())
-                .is_none()
-        );
+        assert!(build_cut_removal(
+            crate::ipc::ClipboardScope::Slide,
+            Some(CanvasTarget::Slide(sid.clone())),
+            &empty,
+            Some(&sid),
+            d.deck(),
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn remove_slide_guards_last_slide_and_unknown() {
+        let (d, _sel, sid, _eid) = fixture();
+        match interpret_remove_slide(d.deck(), &sid) {
+            InterpretResult::Nothing => {}
+            _ => panic!("expected Nothing for last slide"),
+        }
+        match interpret_remove_slide(d.deck(), &"nope".to_string()) {
+            InterpretResult::Nothing => {}
+            _ => panic!("expected Nothing for unknown slide"),
+        }
+    }
+
+    #[test]
+    fn remove_slide_drops_slide_when_more_than_one() {
+        let (mut d, _sel, sid, _eid) = fixture();
+        let (add_cmd, new_id) = build_insert_slide_after_active(&d, Some(&sid)).unwrap();
+        d.dispatch(add_cmd).unwrap();
+        match interpret_remove_slide(d.deck(), &new_id) {
+            InterpretResult::Command(cmd) => {
+                cmd.apply(d.deck_mut()).unwrap();
+                assert!(!d.deck().slides.contains_key(&new_id));
+                assert!(!d.deck().slide_order.contains(&new_id));
+            }
+            _ => panic!("expected Command"),
+        }
     }
 
     #[test]

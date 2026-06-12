@@ -218,11 +218,13 @@ pub enum InteractionEvent {
         background_size: String,
         background_position: String,
     },
-    // Clipboard accelerators. Payload-free: copy/cut/paste resolve entirely
-    // from the server-side selection + clipboard buffer.
-    CopyRequested,
-    CutRequested,
+    // Clipboard accelerators. Copy/Cut carry a focus-derived scope; paste
+    // dispatches by the typed clipboard buffer (focus-independent).
+    CopyRequested { scope: ClipboardScope },
+    CutRequested { scope: ClipboardScope },
     PasteRequested,
+    // Delete a specific slide (navigator focus + Delete, or the thumbnail "×").
+    RemoveSlideRequested { slide_id: SlideId },
     // TextEditStarted
     // Fired when a text element enters inline editing (double-click). The
     // webview is authoritative for the text content during the session;
@@ -419,6 +421,14 @@ pub struct Vec2 {
 pub struct Size {
     pub width: f64,
     pub height: f64,
+}
+
+// ClipboardScope: what a copy/cut acts on, derived from the webview's focused
+// region (navigator -> Slide, else Elements).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardScope {
+    Elements,
+    Slide,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]

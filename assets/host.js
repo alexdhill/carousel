@@ -21,6 +21,14 @@
     // Pixel-grid snapping: session-only, never persisted or sent to Rust.
     // Read into the snap engine's opts.gridEnabled each gesture move.
     let gridEnabled = false;
+    // Which editor region last received interaction; drives delete/copy/cut
+    // targeting. One of "objects" | "preview" | "navigator". Default preview.
+    let focusRegion = "preview";
+    const FOCUS_CONTAINERS = {
+        objects: "object-panel",
+        preview: "viewport-container",
+        navigator: "thumbnail-row",
+    };
     // Crop mode: holds { elementId, assetId, mask, natural, state, preStyle }
     // while an image is being cropped. null outside crop mode. The committed
     // element is never mutated during the session — cancel is a clean teardown.
@@ -3296,6 +3304,28 @@
         btn.appendChild(preview);
         btn.appendChild(label);
 
+        // Per-slide delete affordance (slides only). stopPropagation on
+        // mousedown/click so it never switches the active slide.
+        if (spec.clickKind === "SlideThumbnailClicked") {
+            const del = document.createElement("button");
+            del.type = "button";
+            del.className = "thumb__delete";
+            del.title = "Delete slide";
+            del.textContent = "×";
+            del.addEventListener("mousedown", function (e) {
+                e.stopPropagation();
+            });
+            del.addEventListener("click", function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                window.__deck.send("Interaction", {
+                    kind: "RemoveSlideRequested",
+                    slide_id: itemId,
+                });
+            });
+            btn.appendChild(del);
+        }
+
         // Defer the scale to next frame so getBoundingClientRect on
         // .thumb__preview is reliable even before the row is in the DOM.
         window.requestAnimationFrame(function () {
@@ -3642,6 +3672,29 @@
             viewport.addEventListener("dragleave", onViewportDragLeave);
             viewport.addEventListener("drop", onViewportDrop);
         }
+        // Focus-region tracking: a mousedown anywhere in a region focuses it
+        // (capture phase so it runs before the region's own handlers).
+        const objectsPanel = document.getElementById("object-panel");
+        if (objectsPanel) {
+            objectsPanel.addEventListener("mousedown", function () {
+                setFocusRegion("objects");
+            }, true);
+        }
+        if (viewport) {
+            viewport.addEventListener("mousedown", function () {
+                setFocusRegion("preview");
+            }, true);
+        }
+        const thumbRow = document.getElementById("thumbnail-row");
+        if (thumbRow) {
+            thumbRow.addEventListener("mousedown", function () {
+                setFocusRegion("navigator");
+            }, true);
+        }
+        // Seed the initial ring on the default (preview) region.
+        if (viewport) {
+            viewport.classList.add("is-focused");
+        }
         window.addEventListener("mousemove", onMouseMove);
         window.addEventListener("mouseup", onMouseUp);
         window.addEventListener("resize", function () {
@@ -3813,6 +3866,26 @@
     function matchGridToggleShortcut(e) {
         const meta = !!(e.metaKey || e.ctrlKey);
         return meta && !e.shiftKey && e.key === "'";
+    }
+
+    // setFocusRegion
+    // Inputs: "objects" | "preview" | "navigator". Output: side-effect; updates
+    // focusRegion and moves the faint .is-focused ring to that pane. No-op when
+    // unchanged or unknown.
+    function setFocusRegion(region) {
+        if (!FOCUS_CONTAINERS[region] || region === focusRegion) {
+            return;
+        }
+        focusRegion = region;
+        let key;
+        for (key in FOCUS_CONTAINERS) {
+            if (Object.prototype.hasOwnProperty.call(FOCUS_CONTAINERS, key)) {
+                const el = document.getElementById(FOCUS_CONTAINERS[key]);
+                if (el) {
+                    el.classList.toggle("is-focused", key === region);
+                }
+            }
+        }
     }
 
     // setGridEnabled
@@ -4026,9 +4099,24 @@
         const clip = matchClipboardShortcut(e);
         if (clip) {
             e.preventDefault();
-            const kind = clip === "copy" ? "CopyRequested"
-                : (clip === "cut" ? "CutRequested" : "PasteRequested");
-            window.__deck.send("Interaction", { kind: kind });
+            if (clip === "paste") {
+                window.__deck.send("Interaction", { kind: "PasteRequested" });
+            } else {
+                const scope = (focusRegion === "navigator") ? "Slide" : "Elements";
+                const kind = (clip === "copy") ? "CopyRequested" : "CutRequested";
+                window.__deck.send("Interaction", { kind: kind, scope: scope });
+            }
+            return;
+        }
+        // Delete in the navigator removes the active slide; elsewhere it falls
+        // through to the element-delete path below.
+        if ((e.key === "Delete" || e.key === "Backspace")
+                && focusRegion === "navigator" && activeSlideId) {
+            e.preventDefault();
+            window.__deck.send("Interaction", {
+                kind: "RemoveSlideRequested",
+                slide_id: activeSlideId,
+            });
             return;
         }
         const isSingleChar = (typeof e.key === "string" && e.key.length === 1);

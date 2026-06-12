@@ -461,6 +461,7 @@ body {
 }
 
 .thumb {
+    position: relative;
     flex: 0 0 auto;
     display: flex;
     flex-direction: column;
@@ -593,6 +594,34 @@ body {
     inset: 0;
     pointer-events: none;
     z-index: 5;
+}
+
+.panel.is-focused {
+    /* Inset so the ring sits inside the pane and never clips where panels
+       meet; light grey for a quiet, consistent cue. */
+    box-shadow: inset 0 0 0 2px rgba(200, 200, 200, 0.4);
+}
+
+.thumb__delete {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 18px;
+    height: 18px;
+    line-height: 16px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.1s;
+}
+
+.thumb:hover .thumb__delete,
+.thumb__delete:focus {
+    opacity: 1;
 }
 
 #crop-overlay {
