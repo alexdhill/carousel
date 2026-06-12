@@ -1586,7 +1586,7 @@
             }
         },
         Notice: function (payload) {
-            showNotice((payload && payload.message) || "");
+            showToast((payload && payload.message) || "", payload && payload.detail);
         },
         AssetsUpdate: function (payload) {
             const assets = (payload && Array.isArray(payload.assets))
@@ -2222,6 +2222,10 @@
             refreshInspector();
             return;
         }
+        if (kind === "css" && cssValueRejected(prop, wire)) {
+            refreshInspector();
+            return;
+        }
         sendPropertyChanged(prop, wire);
     }
 
@@ -2271,9 +2275,31 @@
         if (prop === "") {
             return;
         }
+        if (cssValueRejected(prop, value)) {
+            return;
+        }
         sendPropertyChanged(prop, value);
         keyInput.value = "";
         valInput.value = "";
+    }
+
+    // cssValueRejected
+    // Inputs: a CSS property name and a value. Output: true when the value is
+    // non-empty AND the browser rejects it for that property (so applying it
+    // would silently no-op); raises an error toast as a side-effect. Empty
+    // values are allowed (they clear the property).
+    function cssValueRejected(property, value) {
+        const v = String(value).trim();
+        if (v === "") {
+            return false;
+        }
+        if (window.CSS && typeof window.CSS.supports === "function"
+                && !window.CSS.supports(property, v)) {
+            showToast("Invalid value for " + property,
+                property + ": '" + v + "' was rejected");
+            return true;
+        }
+        return false;
     }
 
     // sendPropertyChanged
@@ -3780,23 +3806,107 @@
         }
     }
 
-    // showNotice
-    // Inputs: a message string.
-    // Output: side-effect; flashes the #notice-banner for ~2.5s.
-    let noticeTimer = null;
-    function showNotice(message) {
-        const banner = document.getElementById("notice-banner");
-        if (!banner || !message) {
+    // ---------- toasts ----------
+    // The live toast stack, newest first. Each entry: { el, timer, detail,
+    // expanded, offClick, removed }. Capped at TOAST_MAX; a new toast beyond the
+    // cap force-dismisses the oldest.
+    const toasts = [];
+    const TOAST_MAX = 3;
+    const TOAST_TTL_MS = 3000;
+
+    // showToast
+    // Inputs: a short message (bold) and an optional longer detail. Output:
+    // side-effect; drops a frosted toast in at the top of #toast-stack, starts
+    // a 3s auto-dismiss timer, and evicts the oldest beyond TOAST_MAX.
+    function showToast(message, detail) {
+        const stack = document.getElementById("toast-stack");
+        if (!stack || !message) {
             return;
         }
-        banner.textContent = message;
-        banner.classList.add("show");
-        if (noticeTimer) {
-            window.clearTimeout(noticeTimer);
+        const el = document.createElement("div");
+        el.className = "toast";
+        el.dataset.msg = String(message);
+        const msgSpan = document.createElement("span");
+        msgSpan.className = "toast__message";
+        msgSpan.textContent = String(message);
+        el.appendChild(msgSpan);
+        stack.insertBefore(el, stack.firstChild);
+        const entry = {
+            el: el, timer: null, detail: detail || "", expanded: false,
+            offClick: null, removed: false,
+        };
+        entry.timer = window.setTimeout(function () { dismissToast(entry); }, TOAST_TTL_MS);
+        el.addEventListener("click", function (e) {
+            e.stopPropagation();
+            onToastClick(entry);
+        });
+        toasts.unshift(entry);
+        while (toasts.length > TOAST_MAX) {
+            dismissToast(toasts[toasts.length - 1]);
         }
-        noticeTimer = window.setTimeout(function () {
-            banner.classList.remove("show");
-        }, 2500);
+    }
+
+    // onToastClick
+    // Inputs: a toast entry. Output: side-effect; expands to show the detail
+    // (cancelling the auto-dismiss + arming a click-off listener) when a detail
+    // exists and it is collapsed; otherwise dismisses.
+    function onToastClick(entry) {
+        if (!entry.detail || entry.expanded) {
+            dismissToast(entry);
+            return;
+        }
+        entry.expanded = true;
+        if (entry.timer) {
+            window.clearTimeout(entry.timer);
+            entry.timer = null;
+        }
+        entry.el.classList.add("toast--expanded");
+        entry.el.replaceChildren();
+        const msgSpan = document.createElement("span");
+        msgSpan.className = "toast__message";
+        msgSpan.textContent = entry.el.dataset.msg || "";
+        const detailSpan = document.createElement("span");
+        detailSpan.className = "toast__detail";
+        detailSpan.textContent = ": " + entry.detail;
+        entry.el.appendChild(msgSpan);
+        entry.el.appendChild(detailSpan);
+        entry.offClick = function (e) {
+            if (!entry.el.contains(e.target)) {
+                dismissToast(entry);
+            }
+        };
+        // Defer so the click that expanded it does not immediately dismiss.
+        window.setTimeout(function () {
+            document.addEventListener("click", entry.offClick, true);
+        }, 0);
+    }
+
+    // dismissToast
+    // Inputs: a toast entry. Output: side-effect; fades it out, removes it from
+    // the DOM + the stack, and clears its timer / click-off listener.
+    function dismissToast(entry) {
+        if (!entry || entry.removed) {
+            return;
+        }
+        entry.removed = true;
+        if (entry.timer) {
+            window.clearTimeout(entry.timer);
+            entry.timer = null;
+        }
+        if (entry.offClick) {
+            document.removeEventListener("click", entry.offClick, true);
+            entry.offClick = null;
+        }
+        const idx = toasts.indexOf(entry);
+        if (idx >= 0) {
+            toasts.splice(idx, 1);
+        }
+        entry.el.classList.add("is-leaving");
+        window.setTimeout(function () {
+            if (entry.el.parentNode) {
+                entry.el.parentNode.removeChild(entry.el);
+            }
+        }, 200);
     }
 
     // wireLayoutEditorControls

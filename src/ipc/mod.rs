@@ -119,7 +119,12 @@ pub enum MessageKind {
     SlideAnimationsUpdate(SlideAnimationsData),
     // Notice
     // A non-fatal advisory message (e.g. an add-time ordering accommodation).
-    Notice { message: String },
+    // `detail` is an optional longer description the toast reveals on click.
+    Notice {
+        message: String,
+        #[serde(default)]
+        detail: Option<String>,
+    },
 
     // ---- Presentation mode (Rust -> presentation webview) ----
     // PresentInit
@@ -940,11 +945,26 @@ mod tests {
             other => panic!("unexpected variant: {other:?}"),
         }
 
-        let n = IpcMessage::new(MessageKind::Notice { message: "moved".into() });
+        let n = IpcMessage::new(MessageKind::Notice {
+            message: "moved".into(),
+            detail: Some("the element was clamped into view".into()),
+        });
         let back_n: IpcMessage =
             serde_json::from_str(&serde_json::to_string(&n).unwrap()).unwrap();
         match back_n.kind {
-            MessageKind::Notice { message } => assert_eq!(message, "moved"),
+            MessageKind::Notice { message, detail } => {
+                assert_eq!(message, "moved");
+                assert_eq!(detail.as_deref(), Some("the element was clamped into view"));
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+        // A payload omitting `detail` still deserializes (serde default → None).
+        let legacy: IpcMessage = serde_json::from_str(
+            r#"{"id":"x","timestamp":0,"type":"Notice","payload":{"message":"hi"}}"#,
+        )
+        .unwrap();
+        match legacy.kind {
+            MessageKind::Notice { detail, .. } => assert_eq!(detail, None),
             other => panic!("unexpected variant: {other:?}"),
         }
     }

@@ -1322,7 +1322,10 @@ impl ApplicationCore {
         // still applied the command), regardless of which structural branch
         // the outcome takes below.
         for msg in &outcome.warnings {
-            if let Err(e) = self.sender.send(MessageKind::Notice { message: msg.clone() }) {
+            if let Err(e) = self.sender.send(MessageKind::Notice {
+                message: msg.clone(),
+                detail: None,
+            }) {
                 warn!("notice send failed: {}", e);
             }
         }
@@ -1784,6 +1787,7 @@ impl ApplicationCore {
                         warn!("theme: deserialize failed: {}", e);
                         self.sender.send(MessageKind::Notice {
                             message: format!("Failed to load theme: {e}"),
+                            detail: None,
                         })
                     }
                 }
