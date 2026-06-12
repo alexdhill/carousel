@@ -1378,26 +1378,26 @@
             dragState.started = true;
             dragState.snapTargets = buildSnapTargets(dragState.element_id);
             dragState.baseRect = movingRectFromStyle(dragState.target);
+            // Track Shift press/release during the drag so axis-lock toggles
+            // live even when the mouse is stationary.
+            window.addEventListener("keydown", onDragKeyChange);
+            window.addEventListener("keyup", onDragKeyChange);
             window.__deck.send("Interaction", {
                 kind: "ElementDragStarted",
                 element_id: dragState.element_id,
                 position: { x: dragState.start.x, y: dragState.start.y },
             });
         }
-        const scale = getViewportScale();
-        const snapped = snappedDragDelta(dx / scale, dy / scale, scale, e, true);
-        optimisticTransform(dragState.target, snapped.x, snapped.y);
-        reportDragThrottled(dragState.element_id, { x: snapped.x, y: snapped.y }, { x: e.clientX, y: e.clientY });
+        renderDrag(e.clientX, e.clientY, e.shiftKey, e.metaKey);
     }
 
     // snappedDragDelta
-    // Inputs: the raw slide-space delta (dxSlide, dySlide), the viewport
-    // scale, the source MouseEvent (for the Cmd suppress flag), and whether to
-    // draw guides. Output: { x, y } snapped slide-space delta. Feeds the raw
-    // target rect through the snap engine and returns the corrected delta;
-    // renders guides as a side-effect when draw is true. Falls back to the raw
-    // delta when no snapshot exists.
-    function snappedDragDelta(dxSlide, dySlide, scale, e, draw) {
+    // Inputs: the raw slide-space delta (dxSlide, dySlide), the viewport scale,
+    // the Cmd suppress flag, and whether to draw guides. Output: { x, y }
+    // snapped slide-space delta. Feeds the raw target rect through the snap
+    // engine and returns the corrected delta; renders guides as a side-effect
+    // when draw is true. Falls back to the raw delta when no snapshot exists.
+    function snappedDragDelta(dxSlide, dySlide, scale, suppress, draw) {
         if (!dragState || !dragState.snapTargets || !dragState.baseRect) {
             return { x: dxSlide, y: dySlide };
         }
@@ -1410,7 +1410,7 @@
         const out = window.__snap.forDrag(want, dragState.snapTargets, {
             threshold: 3 / scale,
             gridEnabled: gridEnabled,
-            suppress: !!e.metaKey,
+            suppress: !!suppress,
         });
         if (draw) {
             renderGuides(out.guides);
@@ -1419,6 +1419,52 @@
             x: out.rect.x - dragState.baseRect.x,
             y: out.rect.y - dragState.baseRect.y,
         };
+    }
+
+    // computeDragDelta
+    // Inputs: the pointer position (screen px), viewport scale, and the live
+    // Shift/Cmd state, plus whether to draw guides. Output: the final
+    // slide-space { x, y } delta after axis-lock (Shift), snapping, and a
+    // re-zero of the locked axis so snapping can't nudge it off the line.
+    function computeDragDelta(clientX, clientY, scale, shiftHeld, metaHeld, draw) {
+        const dxSlide = (clientX - dragState.start.x) / scale;
+        const dySlide = (clientY - dragState.start.y) / scale;
+        const locked = window.__snap.axisLock(dxSlide, dySlide, shiftHeld);
+        const snapped = snappedDragDelta(locked.dx, locked.dy, scale, metaHeld, draw);
+        if (locked.lockedAxis === "x") {
+            snapped.x = 0;
+        } else if (locked.lockedAxis === "y") {
+            snapped.y = 0;
+        }
+        return snapped;
+    }
+
+    // renderDrag
+    // Inputs: the pointer position and live Shift/Cmd state. Output: side-effect;
+    // records lastMouse, applies the optimistic transform for the computed
+    // delta, and posts a throttled ElementDragged. Shared by onMouseMove and the
+    // drag-scoped Shift key handler (so a Shift press/release with a stationary
+    // mouse still updates the preview).
+    function renderDrag(clientX, clientY, shiftHeld, metaHeld) {
+        if (!dragState || !dragState.started) {
+            return;
+        }
+        const scale = getViewportScale();
+        dragState.lastMouse = { x: clientX, y: clientY };
+        const d = computeDragDelta(clientX, clientY, scale, shiftHeld, metaHeld, true);
+        optimisticTransform(dragState.target, d.x, d.y);
+        reportDragThrottled(dragState.element_id, { x: d.x, y: d.y }, { x: clientX, y: clientY });
+    }
+
+    // onDragKeyChange
+    // Inputs: a Shift keydown/keyup during a drag. Output: side-effect; re-runs
+    // the drag render at the last mouse position so the element snaps to / leaves
+    // the locked axis the instant Shift changes, without any mouse movement.
+    function onDragKeyChange(e) {
+        if (e.key !== "Shift" || !dragState || !dragState.started || !dragState.lastMouse) {
+            return;
+        }
+        renderDrag(dragState.lastMouse.x, dragState.lastMouse.y, e.shiftKey, e.metaKey);
     }
 
     // onMouseUp
@@ -1434,11 +1480,12 @@
         if (!dragState) {
             return;
         }
+        window.removeEventListener("keydown", onDragKeyChange);
+        window.removeEventListener("keyup", onDragKeyChange);
         if (dragState.started) {
-            const dx = e.clientX - dragState.start.x;
-            const dy = e.clientY - dragState.start.y;
             const scale = getViewportScale();
-            const snapped = snappedDragDelta(dx / scale, dy / scale, scale, e, false);
+            const snapped = computeDragDelta(
+                e.clientX, e.clientY, scale, e.shiftKey, e.metaKey, false);
             window.__deck.send("Interaction", {
                 kind: "ElementDragEnded",
                 element_id: dragState.element_id,

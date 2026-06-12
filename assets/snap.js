@@ -304,9 +304,25 @@
         return { rect: rect, guides: guides };
     }
 
+    // axisLock
+    // Inputs: a slide-space drag delta (dx, dy) and whether Shift is held.
+    // Output: the delta constrained to a single axis when Shift is held —
+    // horizontal (dy=0) when |dx| >= |dy|, else vertical (dx=0) — plus
+    // `lockedAxis` (the axis forced to 0, or null). Ties lock horizontal.
+    function axisLock(dx, dy, shiftHeld) {
+        if (!shiftHeld) {
+            return { dx: dx, dy: dy, lockedAxis: null };
+        }
+        if (Math.abs(dx) >= Math.abs(dy)) {
+            return { dx: dx, dy: 0, lockedAxis: "y" };
+        }
+        return { dx: 0, dy: dy, lockedAxis: "x" };
+    }
+
     var snap = {
         forDrag: forDrag,
         forResize: forResize,
+        axisLock: axisLock,
         __build_targets: build_targets,
     };
 
