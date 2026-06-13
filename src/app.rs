@@ -1511,8 +1511,8 @@ impl ApplicationCore {
     // method (deduping by content hash) BEFORE the command is built;
     // the `AssetAdded` IPC broadcast is fired by handle_interaction
     // after a successful dispatch so JS can resolve the new asset id.
-    // Errors: returns Nothing on base64 decode failure or when no
-    // active slide is present.
+    // Errors: returns Nothing on base64 decode failure or when there is no
+    // active canvas (slide or layout).
     // Dataflow:
     //   1. Decode base64 → bytes. Bail on error.
     //   2. registry.insert_blob → AssetEntry (deduped).
@@ -1520,7 +1520,7 @@ impl ApplicationCore {
     //   4. Build an Image ElementNode (natural dimensions, centered or
     //      at the drop point, inline-style background-size:cover so the
     //      object-fit semantic carries through the <div> render path).
-    //   5. Construct InsertElement targeting the active slide's root.
+    //   5. Construct InsertElement targeting the active canvas's root.
     fn interpret_asset_imported(
         &mut self,
         content_base64: String,
@@ -1530,8 +1530,10 @@ impl ApplicationCore {
         height: u32,
         position: Option<Point>,
     ) -> InterpretResult {
-        let slide_id: SlideId = match &self.active_slide {
-            Some(id) => id.clone(),
+        // Target the active canvas (slide OR layout) so media drops into the
+        // layout being edited in layout mode, not the hidden active slide.
+        let target: CanvasTarget = match self.active_canvas() {
+            Some(t) => t,
             None => return InterpretResult::Nothing,
         };
         let bytes: Vec<u8> =
@@ -1566,11 +1568,14 @@ impl ApplicationCore {
         );
         let node: ElementNode =
             build_image_element_from_asset(&entry, width, height, position, slide_dims);
-        let parent_id: ElementId = self.dispatcher.deck().slides[&slide_id].root.id.clone();
-        let position_in_parent: usize =
-            self.dispatcher.deck().slides[&slide_id].root.children.len();
+        let canvas = match self.dispatcher.deck().canvas(&target) {
+            Some(c) => c,
+            None => return InterpretResult::Nothing,
+        };
+        let parent_id: ElementId = canvas.root().id.clone();
+        let position_in_parent: usize = canvas.root().children.len();
         InterpretResult::Command(Box::new(InsertElement {
-            target: CanvasTarget::Slide(slide_id),
+            target,
             parent_id,
             position: position_in_parent,
             node,

@@ -895,12 +895,17 @@
         const scale = getViewportScale();
         const dx = (e.clientX - cropResize.startMouse.x) / scale;
         const dy = (e.clientY - cropResize.startMouse.y) / scale;
-        const raw = cropResizeRect(cropResize.startMask, cropResize.handle, dx, dy);
+        // Reuse the element resize math so the mask box honors Shift
+        // (proportional) and Alt (from-center) exactly like a normal resize.
+        const raw = computeResizeRect(
+            { handle: cropResize.handle, startRect: cropResize.startMask },
+            dx, dy, !!e.shiftKey, !!e.altKey);
         const snapped = window.__snap.forResize(
             raw, handleEdges(cropResize.handle), cropResize.snapTargets,
             {
                 threshold: 3 / scale, gridEnabled: gridEnabled, suppress: !!e.metaKey,
-                shift: false, alt: false, aspect: cropResize.startMask.w / cropResize.startMask.h,
+                shift: !!e.shiftKey, alt: !!e.altKey,
+                aspect: cropResize.startMask.w / cropResize.startMask.h,
             });
         cropState.mask = {
             x: snapped.rect.x, y: snapped.rect.y, w: snapped.rect.w, h: snapped.rect.h,
@@ -917,24 +922,6 @@
         clearGuides();
         window.removeEventListener("mousemove", onCropHandleMouseMove);
         window.removeEventListener("mouseup", onCropHandleMouseUp);
-    }
-
-    // cropResizeRect
-    // Inputs: the start mask rect, a handle name, and slide-px deltas. Output:
-    // the resized rect (mask reveal/clip; no aspect/center modes). Mirrors
-    // computeResizeRect's edge math with a 1px floor.
-    function cropResizeRect(start, handle, dx, dy) {
-        let x = start.x;
-        let y = start.y;
-        let w = start.w;
-        let h = start.h;
-        if (handle.indexOf("w") >= 0) { x = start.x + dx; w = start.w - dx; }
-        if (handle.indexOf("e") >= 0) { w = start.w + dx; }
-        if (handle.indexOf("n") >= 0) { y = start.y + dy; h = start.h - dy; }
-        if (handle.indexOf("s") >= 0) { h = start.h + dy; }
-        if (w < 1) { w = 1; }
-        if (h < 1) { h = 1; }
-        return { x: x, y: y, w: w, h: h };
     }
 
     // resetCrop — back to the seamless cover baseline (live, in crop mode).
