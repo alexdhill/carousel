@@ -46,6 +46,12 @@ pub enum IoRequest {
     LoadTheme {
         path: PathBuf,
     },
+    // ExportHtml — write a prebuilt set of (relative path, bytes) files into a
+    // chosen folder. The bundle is computed on the main thread; this is just IO.
+    ExportHtml {
+        files: Vec<(String, Vec<u8>)>,
+        dest_dir: PathBuf,
+    },
 }
 
 // IoResponse
@@ -65,6 +71,9 @@ pub enum IoResponse {
     ThemeLoaded {
         serialized: SerializedTheme,
         path: PathBuf,
+    },
+    Exported {
+        dest: PathBuf,
     },
     Error {
         operation: &'static str,
@@ -178,6 +187,7 @@ fn handle_request(request: IoRequest) -> IoResponse {
             save_theme_blocking(serialized, target_path)
         }
         IoRequest::LoadTheme { path } => load_theme_blocking(path),
+        IoRequest::ExportHtml { files, dest_dir } => export_html_blocking(files, dest_dir),
     }
 }
 
@@ -222,6 +232,40 @@ fn load_theme_blocking(path: PathBuf) -> IoResponse {
 // Output: Saved or Error response.
 // Dataflow: open BundleWriter (creates the .tmp file) -> stream entries
 // -> finish (commits atomically). Any error returns IoResponse::Error.
+// export_html_blocking
+// Inputs: the (relative path, bytes) files and the destination folder.
+// Output: IoResponse::Exported on success, IoResponse::Error otherwise.
+// Dataflow: create the dest dir, then each file's parent dir, then write bytes.
+fn export_html_blocking(files: Vec<(String, Vec<u8>)>, dest_dir: PathBuf) -> IoResponse {
+    if let Err(e) = std::fs::create_dir_all(&dest_dir) {
+        return IoResponse::Error {
+            operation: "export_html",
+            path: Some(dest_dir),
+            message: e.to_string(),
+        };
+    }
+    for (rel, bytes) in &files {
+        let full: PathBuf = dest_dir.join(rel);
+        if let Some(parent) = full.parent()
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            return IoResponse::Error {
+                operation: "export_html",
+                path: Some(full),
+                message: e.to_string(),
+            };
+        }
+        if let Err(e) = std::fs::write(&full, bytes) {
+            return IoResponse::Error {
+                operation: "export_html",
+                path: Some(full),
+                message: e.to_string(),
+            };
+        }
+    }
+    IoResponse::Exported { dest: dest_dir }
+}
+
 fn save_blocking(serialized: SerializedDeck, target_path: PathBuf) -> IoResponse {
     debug!(target = %target_path.display(), "io: save begin");
     let mut writer: BundleWriter = match BundleWriter::create(&target_path) {

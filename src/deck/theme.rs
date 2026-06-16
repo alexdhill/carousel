@@ -41,6 +41,9 @@ const DEFAULT_THEME_CSS: &str = r#"
     height: 1080px;
     background: var(--theme-background);
     position: relative;
+    /* Mask anything positioned beyond the slide bounds — content outside the
+       canvas is never part of the rendered slide. */
+    overflow: hidden;
 }
 .slide__content {
     position: relative;

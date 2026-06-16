@@ -237,6 +237,11 @@ pub enum FileAction {
     // Theme save/load — export the current theme / import a theme file.
     SaveTheme,
     LoadTheme,
+    // Export the deck as a self-contained playable HTML folder.
+    ExportHtml,
+    // Export the deck as a PDF (one page per animation stage) via the webview
+    // print path.
+    ExportPdf,
 }
 
 // InterpretResult

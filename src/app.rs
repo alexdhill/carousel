@@ -82,6 +82,8 @@ const NEW_KEY: &str = "new_deck";
 const OPEN_KEY: &str = "open_deck";
 const SAVE_KEY: &str = "save_deck";
 const SAVE_AS_KEY: &str = "save_as_deck";
+const EXPORT_HTML_KEY: &str = "export_html";
+const EXPORT_PDF_KEY: &str = "export_pdf";
 // Synthetic accelerator the JS host posts for ⌘↩ / the toolbar Play button.
 const PRESENT_KEY: &str = "present";
 const BUNDLE_FILE_EXTENSION: &str = "slidedeck";
@@ -147,6 +149,13 @@ pub struct ApplicationCore {
     // Set by the Paste arm to the freshly-inserted element ids; consumed by
     // react_to_outcome to select them once the insert has applied.
     pending_paste_selection: Option<Vec<ElementId>>,
+    // A queued PDF print job: (print-HTML, optional destination). dest=None uses
+    // the interactive print dialog (Save as PDF); Some(path) is the headless
+    // file write. Consumed by the event loop when it builds the print webview.
+    pending_pdf_print: Option<(String, Option<PathBuf>)>,
+    // Asks the event loop to build the hidden print webview (window creation
+    // needs the EventLoopWindowTarget).
+    request_pdf_print: Box<dyn Fn()>,
 }
 
 impl ApplicationCore {
@@ -162,6 +171,7 @@ impl ApplicationCore {
         io_thread: IoThread,
         request_present_open: Box<dyn Fn()>,
         request_present_close: Box<dyn Fn()>,
+        request_pdf_print: Box<dyn Fn()>,
     ) -> Self {
         let deck: Deck = Deck::sample();
         let active_slide: Option<SlideId> = deck.slide_order.first().cloned();
@@ -184,6 +194,8 @@ impl ApplicationCore {
             pending_new_active_layout: None,
             clipboard: None,
             pending_paste_selection: None,
+            pending_pdf_print: None,
+            request_pdf_print,
         }
     }
 
@@ -953,6 +965,12 @@ impl ApplicationCore {
             InteractionEvent::KeyPressed { ref key, .. } if key == SAVE_AS_KEY => {
                 InterpretResult::FileAction(FileAction::SaveAs)
             }
+            InteractionEvent::KeyPressed { ref key, .. } if key == EXPORT_HTML_KEY => {
+                InterpretResult::FileAction(FileAction::ExportHtml)
+            }
+            InteractionEvent::KeyPressed { ref key, .. } if key == EXPORT_PDF_KEY => {
+                InterpretResult::FileAction(FileAction::ExportPdf)
+            }
             InteractionEvent::KeyPressed { ref key, .. } if key == PRESENT_KEY => {
                 InterpretResult::StartPresentation
             }
@@ -1196,6 +1214,8 @@ impl ApplicationCore {
             FileAction::SaveAs => self.file_save_as(),
             FileAction::SaveTheme => self.theme_save(),
             FileAction::LoadTheme => self.theme_load(),
+            FileAction::ExportHtml => self.file_export_html(),
+            FileAction::ExportPdf => self.file_export_pdf(),
         }
     }
 
@@ -1638,6 +1658,80 @@ impl ApplicationCore {
         self.submit_save(target)
     }
 
+    // file_export_html
+    // Inputs: none. Output: Ok(()) whether or not a folder was chosen
+    // (cancellation is silent). Builds the export bundle on the main thread and
+    // queues the folder write on the io thread; completion surfaces a toast via
+    // handle_io_response.
+    pub fn file_export_html(&mut self) -> AppResult<()> {
+        let dest: PathBuf = match rfd::FileDialog::new().pick_folder() {
+            Some(p) => p,
+            None => return Ok(()),
+        };
+        let bundle = match crate::export::build_html_export(self.dispatcher.deck()) {
+            Ok(b) => b,
+            Err(e) => {
+                self.sender.send(MessageKind::Notice {
+                    message: "HTML export failed".to_string(),
+                    detail: Some(e.to_string()),
+                })?;
+                return Ok(());
+            }
+        };
+        if self
+            .io_thread
+            .submit(IoRequest::ExportHtml { files: bundle.files, dest_dir: dest })
+            .is_err()
+        {
+            warn!("export: could not queue (io thread closed)");
+        }
+        Ok(())
+    }
+
+    // file_export_pdf
+    // Inputs: none. Output: Ok(()) whether or not a path was chosen (cancel is
+    // silent). Prompts for a .pdf destination, builds the per-stage print-HTML,
+    // queues the job (dest=Some → headless save), then asks the event loop to
+    // build the hidden print webview.
+    pub fn file_export_pdf(&mut self) -> AppResult<()> {
+        let mut dest: PathBuf = match rfd::FileDialog::new()
+            .add_filter("PDF", &["pdf"])
+            .set_file_name("deck.pdf")
+            .save_file()
+        {
+            Some(p) => p,
+            None => return Ok(()),
+        };
+        if dest.extension().and_then(|e| e.to_str()) != Some("pdf") {
+            dest.set_extension("pdf");
+        }
+        let html: String = crate::export::build_pdf_print_html(self.dispatcher.deck());
+        self.pending_pdf_print = Some((html, Some(dest)));
+        (self.request_pdf_print)();
+        Ok(())
+    }
+
+    // take_pending_pdf_print
+    // Inputs: none. Output: the queued (print-HTML, dest) job, consumed once.
+    // Called by the event loop when it builds the print webview.
+    pub fn take_pending_pdf_print(&mut self) -> Option<(String, Option<PathBuf>)> {
+        self.pending_pdf_print.take()
+    }
+
+    // notify_pdf_export
+    // Inputs: the destination path and whether the write succeeded. Output:
+    // side-effect; surfaces a success/failure toast. Called by the event loop
+    // after the headless print operation returns.
+    pub fn notify_pdf_export(&self, dest: &std::path::Path, ok: bool) {
+        let message = if ok { "Exported PDF" } else { "PDF export failed" };
+        if let Err(e) = self.sender.send(MessageKind::Notice {
+            message: message.to_string(),
+            detail: Some(dest.display().to_string()),
+        }) {
+            warn!("pdf export toast failed: {}", e);
+        }
+    }
+
     // file_save_as
     // Inputs: none.
     // Output: Ok(()) regardless of whether the user picked a path
@@ -1748,6 +1842,14 @@ impl ApplicationCore {
     //   Error   → log and continue (the editor stays on the current deck).
     pub fn handle_io_response(&mut self, response: IoResponse) -> AppResult<()> {
         match response {
+            IoResponse::Exported { dest } => {
+                info!(dest = %dest.display(), "export: html written");
+                self.sender.send(MessageKind::Notice {
+                    message: "Exported HTML".to_string(),
+                    detail: Some(dest.display().to_string()),
+                })?;
+                Ok(())
+            }
             IoResponse::Saved { path } => {
                 info!(path = %path.display(), "file: save committed");
                 {
@@ -3280,6 +3382,12 @@ mod tests {
             }
             InteractionEvent::KeyPressed { ref key, .. } if key == SAVE_AS_KEY => {
                 InterpretResult::FileAction(FileAction::SaveAs)
+            }
+            InteractionEvent::KeyPressed { ref key, .. } if key == EXPORT_HTML_KEY => {
+                InterpretResult::FileAction(FileAction::ExportHtml)
+            }
+            InteractionEvent::KeyPressed { ref key, .. } if key == EXPORT_PDF_KEY => {
+                InterpretResult::FileAction(FileAction::ExportPdf)
             }
             InteractionEvent::KeyPressed { ref key, .. }
                 if key == DELETE_KEY_BACKSPACE || key == DELETE_KEY_DELETE =>

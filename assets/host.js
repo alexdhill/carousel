@@ -4102,6 +4102,12 @@
         if (key === "s" && e.shiftKey) {
             return "save_as_deck";
         }
+        if (key === "e" && e.shiftKey) {
+            return "export_html";
+        }
+        if (key === "p" && e.shiftKey) {
+            return "export_pdf";
+        }
         if (key === "s" && !e.shiftKey) {
             return "save_deck";
         }
