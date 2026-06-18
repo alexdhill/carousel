@@ -2035,6 +2035,25 @@
     const BOXY_TYPES = ["text", "image", "shape", "media"];
     const TEXT_TYPES = ["text"];
 
+    // Segmented-selector icons (inline SVG markup, currentColor stroke).
+    // Declared before INSPECTOR_SECTIONS because its initializer references them.
+    function segIcon(d) {
+        return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none"'
+            + ' stroke="currentColor" stroke-width="1.9" stroke-linecap="round"'
+            + ' stroke-linejoin="round"><path d="' + d + '"/></svg>';
+    }
+    const ALIGN_ICONS = {
+        left: segIcon("M4 6h16M4 11h10M4 16h13"),
+        center: segIcon("M4 6h16M7 11h10M5 16h14"),
+        right: segIcon("M4 6h16M10 11h10M7 16h13"),
+        justify: segIcon("M4 6h16M4 11h16M4 16h16"),
+    };
+    const VALIGN_ICONS = {
+        top: segIcon("M4 5h16M10 9v8M14 9v8"),
+        middle: segIcon("M4 12h16M10 6v3M10 15v3M14 6v3M14 15v3"),
+        bottom: segIcon("M4 19h16M10 7v8M14 7v8"),
+    };
+
     const INSPECTOR_SECTIONS = [
         {
             id: "position",
@@ -2082,26 +2101,27 @@
                 { prop: "font-family", label: "Font", kind: "css", full: true },
                 { prop: "font-size", label: "Size", kind: "number", suffix: "px" },
                 { prop: "font-weight", label: "Weight", kind: "number", suffix: "" },
-                { prop: "color", label: "Color", kind: "color" },
-                {
-                    prop: "text-align", label: "Justify", kind: "select",
-                    options: [
-                        { value: "left", label: "Left" },
-                        { value: "center", label: "Center" },
-                        { value: "right", label: "Right" },
-                        { value: "justify", label: "Full" },
-                    ],
-                },
-                {
-                    prop: "justify-content", label: "Vertical", kind: "select",
-                    options: [
-                        { value: "flex-start", label: "Top" },
-                        { value: "center", label: "Middle" },
-                        { value: "flex-end", label: "Bottom" },
-                    ],
-                },
                 { prop: "line-height", label: "Line Height", kind: "number", suffix: "" },
                 { prop: "letter-spacing", label: "Letter Spacing", kind: "number", suffix: "px" },
+                {
+                    prop: "text-align", label: "Alignment", kind: "segment", full: true,
+                    options: [
+                        { value: "left", icon: ALIGN_ICONS.left, tip: "Align left" },
+                        { value: "center", icon: ALIGN_ICONS.center, tip: "Center" },
+                        { value: "right", icon: ALIGN_ICONS.right, tip: "Align right" },
+                        { value: "justify", icon: ALIGN_ICONS.justify, tip: "Justify" },
+                    ],
+                },
+                {
+                    prop: "justify-content", label: "Vertical", kind: "segment", full: true,
+                    options: [
+                        { value: "flex-start", icon: VALIGN_ICONS.top, tip: "Top" },
+                        { value: "center", icon: VALIGN_ICONS.middle, tip: "Middle" },
+                        { value: "flex-end", icon: VALIGN_ICONS.bottom, tip: "Bottom" },
+                    ],
+                },
+                { prop: "text-style", label: "Style", kind: "text-style", full: true, readonly: true },
+                { prop: "color", label: "Color", kind: "color", full: true },
             ],
         },
     ];
@@ -2113,6 +2133,34 @@
     // trip is waiting on. Used to suppress refresh-from-DOM clobbering
     // the user's in-flight typing.
     const inspectorPending = new Set();
+    // Composite text-style (B/I/U/S) controls. They span multiple CSS props
+    // so they are not keyed by a single prop in inspectorInputs; populate
+    // re-syncs each from the selected element's declarations.
+    const textStyleControls = [];
+
+    // The B/I/U/S toggle specs. `list` props (text-decoration) add/remove
+    // their token within a space-separated list; `min` (font-weight) treats
+    // any weight >= the threshold as "on".
+    const TEXT_STYLE_BUTTONS = [
+        { prop: "font-weight", on: "700", min: 600, glyph: "B", cls: "b", tip: "Bold" },
+        { prop: "font-style", on: "italic", glyph: "I", cls: "i", tip: "Italic" },
+        { prop: "text-decoration", on: "underline", list: true, glyph: "U", cls: "u", tip: "Underline" },
+        { prop: "text-decoration", on: "line-through", list: true, glyph: "S", cls: "s", tip: "Strikethrough" },
+    ];
+
+    // Properties already surfaced by structured inspector fields (or set
+    // structurally). Everything else on the element shows in the Custom CSS
+    // declarations list.
+    const KNOWN_PROPS = {
+        "position": 1, "display": 1, "left": 1, "top": 1, "right": 1, "bottom": 1,
+        "width": 1, "height": 1, "transform": 1, "opacity": 1, "z-index": 1,
+        "background-color": 1, "border": 1, "border-radius": 1, "box-shadow": 1,
+        "font-family": 1, "font-size": 1, "font-weight": 1, "color": 1,
+        "text-align": 1, "justify-content": 1, "line-height": 1,
+        "letter-spacing": 1, "font-style": 1, "text-decoration": 1,
+        // Structural invariant, not user-editable junk (see WYSIWYG principle).
+        "white-space": 1,
+    };
 
     // buildInspectorSections
     // Inputs: none (reads INSPECTOR_SECTIONS).
@@ -2126,6 +2174,7 @@
             return;
         }
         root.replaceChildren();
+        textStyleControls.length = 0;
         for (let i = 0; i < INSPECTOR_SECTIONS.length; i++) {
             const section = INSPECTOR_SECTIONS[i];
             root.appendChild(buildSection(section));
@@ -2214,11 +2263,14 @@
             }
             return sel;
         }
+        if (field.kind === "segment") {
+            return makeSegmentControl(field.options || []);
+        }
+        if (field.kind === "text-style") {
+            return makeTextStyleControl();
+        }
         if (field.kind === "color") {
-            const swatch = document.createElement("input");
-            swatch.type = "color";
-            swatch.className = "inspector__input inspector__swatch";
-            return swatch;
+            return makeColorControl();
         }
         const input = document.createElement("input");
         input.className = "inspector__input";
@@ -2235,6 +2287,223 @@
             });
         }
         return input;
+    }
+
+    // makeSegmentControl
+    // Inputs: an array of { value, icon, tip } options.
+    // Output: a segmented button row that behaves like a form control: it
+    // exposes a synthetic `.value` (the selected option) and dispatches a
+    // `change` event on click, so it reuses the existing commit + populate
+    // plumbing unchanged. Setting `.value` reflects the pressed button.
+    function makeSegmentControl(options) {
+        console.assert(Array.isArray(options), "segment options must be array");
+        const box = document.createElement("div");
+        box.className = "inspector__segment";
+        box.setAttribute("role", "group");
+        let current = "";
+        for (let i = 0; i < options.length; i++) {
+            const opt = options[i];
+            const b = document.createElement("button");
+            b.type = "button";
+            b.className = "inspector__segment-btn tt";
+            b.dataset.value = opt.value;
+            b.setAttribute("aria-pressed", "false");
+            b.setAttribute("data-tip", opt.tip || "");
+            b.setAttribute("data-key", "");
+            b.innerHTML = opt.icon || "";
+            b.addEventListener("click", function () {
+                box.value = opt.value;
+                box.dispatchEvent(new Event("change"));
+            });
+            box.appendChild(b);
+        }
+        Object.defineProperty(box, "value", {
+            get: function () { return current; },
+            set: function (v) {
+                current = (v === null || v === undefined) ? "" : String(v);
+                for (let i = 0; i < box.children.length; i++) {
+                    const on = box.children[i].dataset.value === current;
+                    box.children[i].setAttribute("aria-pressed", on ? "true" : "false");
+                }
+            },
+        });
+        return box;
+    }
+
+    // makeColorControl
+    // Output: a swatch + hex readout that behaves like a color input. A
+    // chromeless <input type=color> is the swatch; a span shows the hex.
+    // `.value` proxies the swatch; picking a color updates the hex and
+    // dispatches `change`. ponytail: non-hex incoming values (rgb/named)
+    // show as text — the native swatch can't render them.
+    function makeColorControl() {
+        const box = document.createElement("div");
+        box.className = "inspector__color";
+        const swatch = document.createElement("input");
+        swatch.type = "color";
+        swatch.className = "inspector__color-swatch";
+        const hex = document.createElement("span");
+        hex.className = "inspector__color-hex";
+        hex.textContent = "—";
+        box.appendChild(swatch);
+        box.appendChild(hex);
+        box.addEventListener("click", function (e) {
+            if (e.target !== swatch) { swatch.click(); }
+        });
+        swatch.addEventListener("input", function () {
+            hex.textContent = swatch.value.toUpperCase();
+        });
+        swatch.addEventListener("change", function () {
+            box.dispatchEvent(new Event("change"));
+        });
+        Object.defineProperty(box, "value", {
+            get: function () { return swatch.value; },
+            set: function (v) {
+                const s = (v === null || v === undefined) ? "" : String(v).trim();
+                if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(s)) {
+                    swatch.value = s;
+                    hex.textContent = s.toUpperCase();
+                } else {
+                    hex.textContent = (s === "") ? "—" : s;
+                }
+            },
+        });
+        return box;
+    }
+
+    // makeTextStyleControl
+    // Output: the B/I/U/S toggle group. Each button commits its own CSS
+    // prop directly (sendPropertyChanged), so the group is wired internally
+    // rather than through the single-prop change handler. `syncDecls(decls)`
+    // (called by populateInspector) stores the live declarations and reflects
+    // the pressed state.
+    function makeTextStyleControl() {
+        const box = document.createElement("div");
+        box.className = "inspector__tstyle";
+        box.setAttribute("role", "group");
+        box._decls = {};
+        for (let i = 0; i < TEXT_STYLE_BUTTONS.length; i++) {
+            const spec = TEXT_STYLE_BUTTONS[i];
+            const b = document.createElement("button");
+            b.type = "button";
+            b.className = "inspector__tstyle-btn inspector__tstyle-btn--" + spec.cls + " tt";
+            b.textContent = spec.glyph;
+            b.setAttribute("aria-pressed", "false");
+            b.setAttribute("data-tip", spec.tip);
+            b.setAttribute("data-key", "");
+            b.addEventListener("click", function () { toggleTextStyle(box, spec); });
+            box.appendChild(b);
+        }
+        Object.defineProperty(box, "value", {
+            get: function () { return ""; },
+            set: function () { /* state comes from syncDecls, not .value */ },
+        });
+        box.syncDecls = function (decls) { syncTextStyle(box, decls || {}); };
+        textStyleControls.push(box);
+        return box;
+    }
+
+    // isTextStyleActive
+    // Inputs: a declaration map and a TEXT_STYLE_BUTTONS spec.
+    // Output: true when that style is currently applied.
+    function isTextStyleActive(decls, spec) {
+        const cur = String(decls[spec.prop] || "").trim();
+        if (spec.list) {
+            return cur.split(/\s+/).indexOf(spec.on) >= 0;
+        }
+        if (spec.min) {
+            const n = parseInt(cur, 10);
+            return isFinite(n) ? (n >= spec.min) : (cur === spec.on);
+        }
+        return cur === spec.on;
+    }
+
+    // toggleTextStyle
+    // Inputs: the control box (holds ._decls) and the clicked spec.
+    // Output: side-effect; commits the toggled value. For list props the
+    // token is added/removed within the space-separated list; otherwise the
+    // value flips between `on` and "" (clear). ponytail: a stale ._decls
+    // between commits could drop a sibling token; the round trip re-syncs.
+    function toggleTextStyle(box, spec) {
+        const decls = box._decls || {};
+        const active = isTextStyleActive(decls, spec);
+        let next;
+        if (spec.list) {
+            const cur = String(decls[spec.prop] || "").trim();
+            const tokens = (cur === "") ? [] : cur.split(/\s+/);
+            const idx = tokens.indexOf(spec.on);
+            if (active && idx >= 0) {
+                tokens.splice(idx, 1);
+            } else if (!active) {
+                tokens.push(spec.on);
+            }
+            next = tokens.join(" ");
+        } else {
+            next = active ? "" : spec.on;
+        }
+        sendPropertyChanged(spec.prop, next);
+    }
+
+    // syncTextStyle
+    // Inputs: the control box and a declaration map.
+    // Output: side-effect; stores the decls and reflects the pressed state.
+    function syncTextStyle(box, decls) {
+        box._decls = decls;
+        for (let i = 0; i < TEXT_STYLE_BUTTONS.length; i++) {
+            const on = isTextStyleActive(decls, TEXT_STYLE_BUTTONS[i]);
+            box.children[i].setAttribute("aria-pressed", on ? "true" : "false");
+        }
+    }
+
+    // renderCustomDeclarations
+    // Inputs: a declaration map for the selected element.
+    // Output: side-effect; fills #inspector-custom-list with a removable chip
+    // for every declaration not covered by a structured field (KNOWN_PROPS).
+    function renderCustomDeclarations(decls) {
+        const list = document.getElementById("inspector-custom-list");
+        if (!list) {
+            return;
+        }
+        list.replaceChildren();
+        const keys = Object.keys(decls || {});
+        for (let i = 0; i < keys.length; i++) {
+            const prop = keys[i];
+            if (KNOWN_PROPS[prop]) {
+                continue;
+            }
+            list.appendChild(buildDeclChip(prop, decls[prop]));
+        }
+    }
+
+    // buildDeclChip
+    // Inputs: a CSS property name and its value.
+    // Output: a "prop : value [×]" row; the × commits an empty value (clear).
+    function buildDeclChip(prop, value) {
+        const row = document.createElement("div");
+        row.className = "inspector__decl";
+        const p = document.createElement("span");
+        p.className = "inspector__decl-prop";
+        p.textContent = prop;
+        const colon = document.createElement("span");
+        colon.className = "inspector__decl-colon";
+        colon.textContent = ":";
+        const v = document.createElement("span");
+        v.className = "inspector__decl-val";
+        v.textContent = value;
+        const rm = document.createElement("button");
+        rm.type = "button";
+        rm.className = "inspector__decl-remove tt";
+        rm.setAttribute("data-tip", "Remove");
+        rm.setAttribute("data-key", "");
+        rm.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none"'
+            + ' stroke="currentColor" stroke-width="2.2" stroke-linecap="round">'
+            + '<path d="M6 6l12 12M18 6 6 18"/></svg>';
+        rm.addEventListener("click", function () { sendPropertyChanged(prop, ""); });
+        row.appendChild(p);
+        row.appendChild(colon);
+        row.appendChild(v);
+        row.appendChild(rm);
+        return row;
     }
 
     // onInspectorFieldCommit
@@ -2272,8 +2541,9 @@
     // pass through verbatim (empty → clear, see interpret_property_changed
     // on the Rust side).
     function encodeForWire(kind, raw) {
-        // CSS strings, select tokens, and color hexes pass through verbatim.
-        if (kind === "css" || kind === "select" || kind === "color") {
+        // CSS strings, select/segment tokens, and color hexes pass through.
+        if (kind === "css" || kind === "select" || kind === "color"
+                || kind === "segment") {
             return String(raw);
         }
         const trimmed = String(raw).trim();
@@ -2546,6 +2816,10 @@
                 input.value = "";
             }
         }
+        for (let i = 0; i < textStyleControls.length; i++) {
+            textStyleControls[i].syncDecls({});
+        }
+        renderCustomDeclarations({});
     }
 
     // populateInspector
@@ -2580,6 +2854,11 @@
         // Typography numeric-with-px fields strip the unit for the number input.
         setIfNotPending("font-size", stripPx(decls["font-size"]));
         setIfNotPending("letter-spacing", stripPx(decls["letter-spacing"]));
+        // Composite controls + the Custom CSS declarations list.
+        for (let i = 0; i < textStyleControls.length; i++) {
+            textStyleControls[i].syncDecls(decls);
+        }
+        renderCustomDeclarations(decls);
     }
 
     function setIfNotPending(prop, value) {
