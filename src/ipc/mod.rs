@@ -389,6 +389,35 @@ pub enum InteractionEvent {
         category: String,
         enabled: bool,
     },
+    // AddAnimation — append a catalog effect to the selected element. The
+    // server resolves catalog_id → category/keyframe/effect; `direction`
+    // (top|bottom|left|right) selects the fly-<dir> keyframe when directional.
+    AddAnimation {
+        element_id: ElementId,
+        catalog_id: String,
+        #[serde(default)]
+        direction: Option<String>,
+    },
+    // UpdateAnimation — patch one entry's mutable fields; None = leave as-is.
+    UpdateAnimation {
+        animation_id: String,
+        #[serde(default)]
+        trigger: Option<String>,
+        #[serde(default)]
+        duration_ms: Option<u32>,
+        #[serde(default)]
+        delay_ms: Option<u32>,
+        #[serde(default)]
+        easing: Option<String>,
+        #[serde(default)]
+        iterations: Option<crate::deck::animation::AnimationIterations>,
+        #[serde(default)]
+        targets: Option<Vec<crate::deck::animation::PropertyTarget>>,
+    },
+    // RemoveAnimationRequested — drop the entry with this id.
+    RemoveAnimationRequested {
+        animation_id: String,
+    },
     // ---- Theme save/load ----
     // SaveThemeRequested / LoadThemeRequested — the layout-mode "Save Theme…" /
     // "Load Theme…" buttons. Map to FileAction::SaveTheme / LoadTheme.
@@ -547,6 +576,9 @@ pub struct EditorConfig {
     // it and injects it into every shadow root alongside theme/globals CSS.
     #[serde(default)]
     pub animation_keyframes_css: String,
+    // The effect catalog (add-menu + effect picker source of truth).
+    #[serde(default)]
+    pub animation_catalog: Vec<crate::deck::anim_catalog::AnimCatalogItem>,
 }
 
 // ThumbnailRequest
@@ -662,13 +694,23 @@ pub struct SlideAnimationsData {
 }
 
 // SlideAnimationEntry
-// One timeline entry as the UI needs it: the stable animation id, its target
-// element, and the category string ("entrance" | "emphasis" | "exit").
+// One timeline entry fully rendered for the panel: stable id, target element,
+// category ("entrance"|"emphasis"|"exit"|"property"), the resolved effect
+// (keyframe name OR property targets), trigger, and timing. `effect_id` is the
+// keyframe name for Named effects, or "property" for a property-change entry.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SlideAnimationEntry {
     pub animation_id: String,
     pub element_id: ElementId,
     pub category: String,
+    pub effect_id: String,
+    pub keyframe: Option<String>,
+    pub targets: Vec<crate::deck::animation::PropertyTarget>,
+    pub trigger: String,
+    pub duration_ms: u32,
+    pub delay_ms: u32,
+    pub easing: String,
+    pub iterations: crate::deck::animation::AnimationIterations,
 }
 
 // SlideInspectorLayout
@@ -928,6 +970,21 @@ mod tests {
     }
 
     #[test]
+    fn add_and_update_animation_decode() {
+        let raw = r#"{"kind":"AddAnimation","element_id":"el_a","catalog_id":"fade-in","direction":null}"#;
+        match serde_json::from_str::<InteractionEvent>(raw).unwrap() {
+            InteractionEvent::AddAnimation { element_id, catalog_id, .. } => {
+                assert_eq!(element_id, "el_a");
+                assert_eq!(catalog_id, "fade-in");
+            }
+            _ => panic!("wrong variant"),
+        }
+        let raw2 = r#"{"kind":"UpdateAnimation","animation_id":"a1","trigger":"on_click","duration_ms":700,"delay_ms":null,"easing":null,"iterations":null,"targets":null}"#;
+        assert!(matches!(serde_json::from_str::<InteractionEvent>(raw2).unwrap(),
+            InteractionEvent::UpdateAnimation { .. }));
+    }
+
+    #[test]
     fn slide_animations_update_and_notice_roundtrip() {
         let data = SlideAnimationsData {
             slide_id: "s1".into(),
@@ -935,6 +992,14 @@ mod tests {
                 animation_id: "anim_1".into(),
                 element_id: "el_a".into(),
                 category: "entrance".into(),
+                effect_id: "appear".into(),
+                keyframe: Some("appear".into()),
+                targets: Vec::new(),
+                trigger: "on_click".into(),
+                duration_ms: 500,
+                delay_ms: 0,
+                easing: "ease".into(),
+                iterations: crate::deck::animation::AnimationIterations::Count(1),
             }],
         };
         let msg = IpcMessage::new(MessageKind::SlideAnimationsUpdate(data.clone()));
@@ -971,7 +1036,7 @@ mod tests {
 
     #[test]
     fn editor_config_carries_keyframes() {
-        let cfg = EditorConfig { debug: false, animation_keyframes_css: "@keyframes appear{}".into() };
+        let cfg = EditorConfig { debug: false, animation_keyframes_css: "@keyframes appear{}".into(), animation_catalog: Vec::new() };
         let back: EditorConfig =
             serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
         assert_eq!(back.animation_keyframes_css, "@keyframes appear{}");

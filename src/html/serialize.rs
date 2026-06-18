@@ -36,6 +36,18 @@ pub const ANIMATION_KEYFRAMES_CSS: &str = r#"
 @keyframes fly-in-top { from { opacity: 0; transform: translateY(-40px); } to { opacity: 1; transform: none; } }
 @keyframes fly-in-bottom { from { opacity: 0; transform: translateY(40px); } to { opacity: 1; transform: none; } }
 @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.06); } 100% { transform: scale(1); } }
+@keyframes scale-in { from { opacity: 0; transform: scale(.8); } to { opacity: 1; transform: none; } }
+@keyframes scale-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: scale(.8); } }
+@keyframes blur-in { from { opacity: 0; filter: blur(8px); } to { opacity: 1; filter: blur(0); } }
+@keyframes blur-out { from { opacity: 1; filter: blur(0); } to { opacity: 0; filter: blur(8px); } }
+@keyframes fly-out-left { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateX(-40px); } }
+@keyframes fly-out-right { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateX(40px); } }
+@keyframes fly-out-top { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(-40px); } }
+@keyframes fly-out-bottom { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(40px); } }
+@keyframes bounce { 0% { transform: translateY(0); } 30% { transform: translateY(-18px); } 55% { transform: translateY(0); } 75% { transform: translateY(-8px); } 100% { transform: translateY(0); } }
+@keyframes shake { 0%,100% { transform: translateX(0); } 20% { transform: translateX(-8px); } 40% { transform: translateX(8px); } 60% { transform: translateX(-6px); } 80% { transform: translateX(6px); } }
+@keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+@keyframes flash { 0%,100% { opacity: 1; } 25%,75% { opacity: .25; } 50% { opacity: 1; } }
 "#;
 
 // AnimMap: element id → its animation entry ids (in timeline order). Built
@@ -363,7 +375,8 @@ mod tests {
         let root = group_element("rt", vec![text_element("el_a", "x"), text_element("el_b", "y")]);
         let mut slide = SlideNode::new("s".into(), "title".into(), root);
         slide.animations.push(AnimationEntry::new(
-            "anim_1".into(), "el_a".into(), "appear".into(),
+            "anim_1".into(), "el_a".into(),
+            crate::deck::animation::AnimationEffect::Named("appear".into()),
             AnimationCategory::Entrance, AnimationTrigger::OnClick, AnimationTiming::default(),
         ));
         let html = serialize_slide(&slide);

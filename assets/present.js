@@ -186,6 +186,18 @@
         if (!el) {
             return;
         }
+        if (a.targets && a.targets.length > 0) {
+            el.style.opacity = "1";
+            el.style.transition =
+                "all " + a.duration_ms + "ms " + a.easing + " " + a.delay_ms + "ms";
+            // Apply targets next frame so the transition observes the change.
+            window.requestAnimationFrame(function () {
+                for (let i = 0; i < a.targets.length && i < 1000; i++) {
+                    el.style.setProperty(a.targets[i].property, a.targets[i].value);
+                }
+            });
+            return;
+        }
         const iters = iterationsToCss(a.iterations);
         // Visible while the keyframe plays; the keyframe's own from/to controls
         // the opacity ramp (e.g. appear 0->1, disappear 1->0).

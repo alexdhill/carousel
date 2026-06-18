@@ -2,11 +2,11 @@
 //
 // A slide owns an ordered timeline of `AnimationEntry`s (see
 // `SlideNode.animations`). Each entry targets an element by id and carries a
-// category (entrance/emphasis/exit), a trigger (on-click / with-previous /
-// after-previous), and timing. There is NO playback in this pass: the state
-// machine is a pure cursor that derives "steps" by folding on-click
-// boundaries, and the validation helpers keep the timeline's invariants
-// (≤1 entrance/exit per element; entrance before exit).
+// category (entrance/emphasis/exit/property), a trigger (on-click /
+// with-previous / after-previous), and timing. Playback exists (see
+// `crate::present::reveal` + `assets/present.js`): the state machine is a pure
+// cursor that derives "steps" by folding on-click boundaries. Multiplicity is
+// unrestricted — any number of entries of any category per element.
 
 use crate::deck::ids::{AnimationId, ElementId};
 use serde::{Deserialize, Serialize};
@@ -16,6 +16,41 @@ pub enum AnimationCategory {
     Entrance,
     Emphasis,
     Exit,
+    Property,
+}
+
+// PropertyTarget — one post-animation CSS declaration for a property-change
+// animation (the value the element transitions TO).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PropertyTarget {
+    pub property: String,
+    pub value: String,
+}
+
+// AnimationEffect — what an entry animates.
+//   Named          a built-in/global @keyframes name (Entrance/Emphasis/Exit)
+//   PropertyChange a set of target declarations to transition to (Property)
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AnimationEffect {
+    Named(String),
+    PropertyChange(Vec<PropertyTarget>),
+}
+
+impl AnimationEffect {
+    // keyframe_name — the @keyframes name for a Named effect, else None.
+    pub fn keyframe_name(&self) -> Option<&str> {
+        match self {
+            AnimationEffect::Named(n) => Some(n.as_str()),
+            AnimationEffect::PropertyChange(_) => None,
+        }
+    }
+    // targets — the property targets for a PropertyChange effect, else None.
+    pub fn targets(&self) -> Option<&[PropertyTarget]> {
+        match self {
+            AnimationEffect::PropertyChange(t) => Some(t.as_slice()),
+            AnimationEffect::Named(_) => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -60,14 +95,15 @@ impl Default for AnimationTiming {
 }
 
 // AnimationEntry
-// One row in a slide's timeline. `keyframe` is a name reference (built-in or
-// custom @keyframes); it is never validated against the library — an unknown
-// name simply fails to animate in a future runtime, harmlessly.
+// One row in a slide's timeline. `effect` is either a @keyframes name
+// reference (Named) or a set of property targets (PropertyChange); a Named
+// reference is never validated against the library — an unknown name simply
+// fails to animate, harmlessly.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AnimationEntry {
     pub id: AnimationId,
     pub element_id: ElementId,
-    pub keyframe: String,
+    pub effect: AnimationEffect,
     pub category: AnimationCategory,
     pub trigger: AnimationTrigger,
     pub timing: AnimationTiming,
@@ -75,21 +111,29 @@ pub struct AnimationEntry {
 
 impl AnimationEntry {
     // new
-    // Inputs: id, target element id, keyframe name, category, trigger, timing.
+    // Inputs: id, target element id, effect, category, trigger, timing.
     // Output: an AnimationEntry.
-    // Errors: panics on empty id / element_id / keyframe (model invariant).
+    // Errors: panics on empty id / element_id, or an effect/category mismatch
+    // (Property ⇔ PropertyChange with ≥1 target; the other three ⇔ a non-empty
+    // Named keyframe). Multiplicity is NOT enforced here.
     pub fn new(
         id: AnimationId,
         element_id: ElementId,
-        keyframe: String,
+        effect: AnimationEffect,
         category: AnimationCategory,
         trigger: AnimationTrigger,
         timing: AnimationTiming,
     ) -> Self {
         assert!(!id.is_empty(), "animation id must not be empty");
         assert!(!element_id.is_empty(), "animation element_id must not be empty");
-        assert!(!keyframe.is_empty(), "animation keyframe must not be empty");
-        Self { id, element_id, keyframe, category, trigger, timing }
+        let pairing_ok = match (category, &effect) {
+            (AnimationCategory::Property, AnimationEffect::PropertyChange(t)) => !t.is_empty(),
+            (AnimationCategory::Property, _) => false,
+            (_, AnimationEffect::Named(n)) => !n.is_empty(),
+            (_, AnimationEffect::PropertyChange(_)) => false,
+        };
+        assert!(pairing_ok, "animation effect/category mismatch or empty");
+        Self { id, element_id, effect, category, trigger, timing }
     }
 }
 
@@ -211,11 +255,10 @@ pub fn ordering_ok(timeline: &[AnimationEntry], element_id: &str) -> bool {
 // accommodating_index
 // Inputs: the timeline, the requested insert position, and the entry about to
 // be inserted.
-// Output: (final_index, warning). For an Entrance whose element already has an
-// Exit at index `ex`, clamp the index to `ex` (so it lands immediately before
-// the exit). For an Exit whose element already has an Entrance at index `en`,
-// clamp the index to at least `en + 1`. Otherwise the requested index (clamped
-// to len). The warning is Some(msg) only when the index was adjusted.
+// Output: (final_index, warning). Multiplicity is now unrestricted (elements
+// own as many entries of any category as they like) so the entry is inserted
+// exactly where requested, clamped to the timeline length. No reordering, no
+// warning. Retained for the future slide-wide manager.
 pub fn accommodating_index(
     timeline: &[AnimationEntry],
     requested: usize,
@@ -223,33 +266,9 @@ pub fn accommodating_index(
 ) -> (usize, Option<String>) {
     let len: usize = timeline.len();
     let want: usize = requested.min(len);
-    match entry.category {
-        AnimationCategory::Entrance => {
-            if let Some(ex) =
-                index_of_category(timeline, &entry.element_id, AnimationCategory::Exit)
-                && want > ex
-            {
-                return (
-                    ex,
-                    Some(format!("Entrance for {} moved before its exit", entry.element_id)),
-                );
-            }
-            (want, None)
-        }
-        AnimationCategory::Exit => {
-            if let Some(en) =
-                index_of_category(timeline, &entry.element_id, AnimationCategory::Entrance)
-                && want <= en
-            {
-                return (
-                    en + 1,
-                    Some(format!("Exit for {} moved after its entrance", entry.element_id)),
-                );
-            }
-            (want, None)
-        }
-        AnimationCategory::Emphasis => (want, None),
-    }
+    assert!(want <= len, "accommodating_index: index past end");
+    let _ = entry;
+    (want, None)
 }
 
 #[cfg(test)]
@@ -258,7 +277,8 @@ mod tests {
     use super::*;
 
     fn entry_at(id: &str, el: &str, cat: AnimationCategory, trig: AnimationTrigger) -> AnimationEntry {
-        AnimationEntry::new(id.into(), el.into(), "appear".into(), cat, trig, AnimationTiming::default())
+        AnimationEntry::new(id.into(), el.into(), AnimationEffect::Named("appear".into()),
+            cat, trig, AnimationTiming::default())
     }
     fn click(id: &str) -> AnimationEntry {
         entry_at(id, "el", AnimationCategory::Entrance, AnimationTrigger::OnClick)
@@ -267,11 +287,11 @@ mod tests {
         entry_at(id, "el", AnimationCategory::Entrance, AnimationTrigger::WithPrevious)
     }
     fn enter(id: &str, el: &str) -> AnimationEntry {
-        AnimationEntry::new(id.into(), el.into(), "appear".into(),
+        AnimationEntry::new(id.into(), el.into(), AnimationEffect::Named("appear".into()),
             AnimationCategory::Entrance, AnimationTrigger::OnClick, AnimationTiming::default())
     }
     fn exit(id: &str, el: &str) -> AnimationEntry {
-        AnimationEntry::new(id.into(), el.into(), "disappear".into(),
+        AnimationEntry::new(id.into(), el.into(), AnimationEffect::Named("disappear".into()),
             AnimationCategory::Exit, AnimationTrigger::OnClick, AnimationTiming::default())
     }
 
@@ -279,7 +299,7 @@ mod tests {
     fn entry_serde_roundtrips_with_finite_and_infinite() {
         for iters in [AnimationIterations::Count(3), AnimationIterations::Infinite] {
             let e = AnimationEntry::new(
-                "anim_1".into(), "el_a".into(), "appear".into(),
+                "anim_1".into(), "el_a".into(), AnimationEffect::Named("appear".into()),
                 AnimationCategory::Entrance, AnimationTrigger::OnClick,
                 AnimationTiming { iterations: iters, ..AnimationTiming::default() },
             );
@@ -289,10 +309,34 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "keyframe must not be empty")]
-    fn entry_rejects_empty_keyframe() {
-        let _ = AnimationEntry::new("a".into(), "el".into(), String::new(),
-            AnimationCategory::Emphasis, AnimationTrigger::OnClick, AnimationTiming::default());
+    fn effect_named_and_property_serde_roundtrip() {
+        let named = AnimationEffect::Named("fade-in".into());
+        let prop = AnimationEffect::PropertyChange(vec![
+            PropertyTarget { property: "opacity".into(), value: "1".into() },
+        ]);
+        for eff in [named, prop] {
+            let j = serde_json::to_string(&eff).unwrap();
+            assert_eq!(serde_json::from_str::<AnimationEffect>(&j).unwrap(), eff);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "effect/category")]
+    fn property_category_requires_property_effect() {
+        let _ = AnimationEntry::new(
+            "a".into(), "el".into(), AnimationEffect::Named("pulse".into()),
+            AnimationCategory::Property, AnimationTrigger::OnClick, AnimationTiming::default());
+    }
+
+    #[test]
+    fn multiple_entrances_allowed_by_accommodating_index() {
+        // accommodating_index never clamps now; identical category twice is fine.
+        let e1 = AnimationEntry::new("e1".into(), "el".into(),
+            AnimationEffect::Named("appear".into()), AnimationCategory::Entrance,
+            AnimationTrigger::OnClick, AnimationTiming::default());
+        let (idx, warn) = accommodating_index(&[e1.clone()], 9, &e1);
+        assert_eq!(idx, 1);
+        assert!(warn.is_none());
     }
 
     #[test]
@@ -338,11 +382,11 @@ mod tests {
     }
 
     #[test]
-    fn accommodate_entrance_before_existing_exit() {
+    fn accommodating_index_inserts_at_requested_clamped() {
         let t = [exit("x", "el_a")];
         let (idx, warn) = accommodating_index(&t, 5, &enter("e", "el_a"));
-        assert_eq!(idx, 0);
-        assert!(warn.is_some());
+        assert_eq!(idx, 1); // clamped to len, no reordering
+        assert!(warn.is_none());
     }
 
     #[test]

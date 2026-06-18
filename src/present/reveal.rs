@@ -52,7 +52,8 @@ pub fn forward_reveal(slide_id: &str, timeline: &[AnimationEntry], to_step: usiz
         assert!(i < MAX_TIMELINE, "forward_reveal: group bound exceeded");
         animate.push(AnimateInstruction {
             element_id: e.element_id.clone(),
-            keyframe: e.keyframe.clone(),
+            keyframe: e.effect.keyframe_name().unwrap_or("").to_string(),
+            targets: e.effect.targets().map(<[_]>::to_vec).unwrap_or_default(),
             duration_ms: e.timing.duration_ms,
             delay_ms: delays[i],
             easing: e.timing.easing.clone(),
@@ -147,7 +148,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
     use crate::deck::animation::{
-        AnimationCategory, AnimationEntry, AnimationTiming, AnimationTrigger,
+        AnimationCategory, AnimationEffect, AnimationEntry, AnimationTiming, AnimationTrigger,
     };
 
     // entry
@@ -164,7 +165,7 @@ mod tests {
         AnimationEntry::new(
             id.into(),
             el.into(),
-            keyframe.into(),
+            AnimationEffect::Named(keyframe.into()),
             cat,
             trig,
             AnimationTiming { duration_ms, delay_ms, easing: "ease".into(), ..Default::default() },
@@ -273,6 +274,22 @@ mod tests {
         assert_eq!(a.delay_ms, 0);
         // b starts after a finishes (0+500) plus its own 100.
         assert_eq!(b.delay_ms, 600);
+    }
+
+    #[test]
+    fn property_entry_emits_targets_not_keyframe() {
+        use crate::deck::animation::PropertyTarget;
+        let e = AnimationEntry::new("p".into(), "el_a".into(),
+            AnimationEffect::PropertyChange(vec![
+                PropertyTarget { property: "opacity".into(), value: "1".into() }]),
+            AnimationCategory::Property, AnimationTrigger::OnClick,
+            AnimationTiming::default());
+        let r = forward_reveal("s1", std::slice::from_ref(&e), 1);
+        assert_eq!(r.animate.len(), 1);
+        assert!(r.animate[0].keyframe.is_empty());
+        assert_eq!(r.animate[0].targets.len(), 1);
+        assert_eq!(r.animate[0].targets[0].property, "opacity");
+        assert!(!r.animate[0].ends_hidden);
     }
 
     #[test]

@@ -7,6 +7,7 @@
 // dirty-tracking sets. Stage 3 builds a `sample()` deck in code; Stage 7
 // will replace that with bundle I/O.
 
+pub mod anim_catalog;
 pub mod animation;
 pub mod builders;
 pub mod canvas;

@@ -1673,26 +1673,237 @@ body.has-single-selection .animations {
     display: flex;
 }
 
+.animations__header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 2px;
+}
+
 .animations__title {
-    margin: 0 0 4px;
+    margin: 0;
     font-size: 11px;
     font-weight: 600;
     letter-spacing: .02em;
     color: var(--ink2);
 }
 
-.animations__row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 12px;
+.animations__count {
+    min-width: 16px;
+    padding: 0 5px;
+    border-radius: 9px;
+    background: var(--field);
     color: var(--ink2);
+    font-size: 10px;
+    font-weight: 600;
+    text-align: center;
+    line-height: 16px;
+}
+
+.animations__play {
+    margin-left: auto;
+    padding: 3px 10px;
+    border: none;
+    border-radius: var(--r-btn);
+    background: var(--acc);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 600;
     cursor: pointer;
 }
 
-.animations__row input,
-.crop-box__field input[type="checkbox"] {
-    accent-color: var(--acc);
+.animations__play:hover {
+    background: var(--acc-hover);
+}
+
+.animations__bars {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.anim-bar {
+    border: 1px solid var(--line);
+    border-radius: var(--r-field);
+    background: var(--field);
+    overflow: hidden;
+}
+
+.anim-bar__head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    font-size: 12px;
+    color: var(--ink);
+}
+
+.anim-bar__icon {
+    width: 16px;
+    text-align: center;
+    color: var(--ink2);
+}
+
+.anim-bar__label {
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.anim-bar__trigger {
+    margin-left: auto;
+    color: var(--ink3);
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+.anim-bar__btn {
+    border: none;
+    background: none;
+    color: var(--ink3);
+    cursor: pointer;
+    padding: 2px 4px;
+    font-size: 12px;
+    line-height: 1;
+}
+
+.anim-bar__btn:hover {
+    color: var(--ink);
+}
+
+.anim-bar__body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px;
+    border-top: 1px solid var(--line);
+    background: var(--field-on);
+}
+
+.anim-bar__field {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--ink2);
+}
+
+.anim-bar__field > span {
+    width: 56px;
+    flex: none;
+}
+
+.anim-bar__field select,
+.anim-bar__field input {
+    flex: 1;
+    min-width: 0;
+    padding: 4px 6px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-field);
+    background: var(--field);
+    color: var(--ink);
+    font: inherit;
+    font-size: 11px;
+}
+
+.anim-bar__pair {
+    display: flex;
+    gap: 8px;
+}
+
+.anim-prop-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.anim-prop-row input {
+    flex: 1;
+    min-width: 0;
+    padding: 4px 6px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-field);
+    background: var(--field);
+    color: var(--ink);
+    font: inherit;
+    font-size: 11px;
+}
+
+.anim-prop-add {
+    align-self: flex-start;
+    border: 1px dashed var(--line);
+    border-radius: var(--r-field);
+    background: none;
+    color: var(--ink2);
+    font-size: 11px;
+    padding: 3px 8px;
+    cursor: pointer;
+}
+
+.animations__add-wrap {
+    position: relative;
+}
+
+.animations__add {
+    width: 100%;
+    border: 1px dashed var(--acc-line);
+    border-radius: var(--r-field);
+    background: none;
+    color: var(--acc-ink);
+    font-size: 12px;
+    font-weight: 500;
+    padding: 7px;
+    cursor: pointer;
+}
+
+.animations__add:hover {
+    background: var(--acc-soft);
+}
+
+.animations__add-menu {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: calc(100% + 4px);
+    z-index: 20;
+    max-height: 280px;
+    overflow-y: auto;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--r-field);
+    box-shadow: var(--shadow-slide);
+    padding: 4px;
+}
+
+.animations__add-menu[hidden] {
+    display: none;
+}
+
+.anim-menu__cat {
+    padding: 6px 8px 2px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--label);
+}
+
+.anim-menu__item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    border: none;
+    background: none;
+    color: var(--ink);
+    font-size: 12px;
+    padding: 5px 8px;
+    border-radius: var(--r-field);
+    cursor: pointer;
+}
+
+.anim-menu__item:hover {
+    background: var(--hover);
 }
 
 /* ===================== Toasts ===================== */

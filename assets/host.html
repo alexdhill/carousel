@@ -237,13 +237,19 @@
             </section>
 
             <section id="animations-section" class="animations">
-                <h3 class="animations__title">Animations</h3>
-                <label class="animations__row">
-                    <input type="checkbox" id="anim-appear"> Appear (entrance)
-                </label>
-                <label class="animations__row">
-                    <input type="checkbox" id="anim-disappear"> Disappear (exit)
-                </label>
+                <header class="animations__header">
+                    <h3 class="animations__title">Animations</h3>
+                    <span id="anim-count" class="animations__count">0</span>
+                    <button type="button" id="anim-play" class="animations__play"
+                            title="Preview the slide build">▶ Play</button>
+                </header>
+                <div id="anim-bars" class="animations__bars"></div>
+                <div class="animations__add-wrap">
+                    <button type="button" id="anim-add-btn" class="animations__add">
+                        + Add animation
+                    </button>
+                    <div id="anim-add-menu" class="animations__add-menu" hidden></div>
+                </div>
             </section>
 
             <section id="globals-editor" class="globals">

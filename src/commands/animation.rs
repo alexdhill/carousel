@@ -7,15 +7,14 @@
 // `manifest_dirty` (the manifest persists the timeline), and reports
 // `affects_animations` so the editor rebroadcasts the slide's timeline.
 //
-// Validation (see `crate::deck::animation`): each element may own at most one
-// entrance and one exit (hard, always rejected), and an entrance must precede
-// its exit. The *add* path (`InsertAnimation`) accommodates an ordering
-// conflict by clamping the insert index and returns a non-fatal warning; the
-// *edit* paths (`ReorderAnimation`, `SetAnimationProperty`) strictly reject a
-// violating arrangement.
+// Validation (see `crate::deck::animation`): multiplicity is unrestricted —
+// an element may own any number of entries of any category, in any order.
+// Entries insert exactly where requested (clamped to length); no command
+// rejects a combination. Only the structural invariants in `AnimationEntry`
+// (non-empty ids, effect/category pairing) can abort.
 
 use crate::commands::{Command, CommandError, CommandOutput};
-use crate::deck::animation::{accommodating_index, has_category, ordering_ok, AnimationEntry};
+use crate::deck::animation::{accommodating_index, AnimationEntry};
 use crate::deck::{AnimationCategory, CanvasTarget, SlideId, SlideNode};
 
 // slide_mut
@@ -30,9 +29,8 @@ fn slide_mut<'a>(
 }
 
 // InsertAnimation
-// Inserts `entry` into the slide's timeline at `position`. Rejects a second
-// entrance/exit for the entry's element; accommodates an ordering conflict by
-// clamping the index and returns a warning.
+// Inserts `entry` into the slide's timeline at `position` (clamped to length).
+// Multiplicity is unrestricted; never rejects.
 #[derive(Debug, Clone)]
 pub struct InsertAnimation {
     pub slide_id: SlideId,
@@ -44,15 +42,6 @@ impl Command for InsertAnimation {
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(!self.slide_id.is_empty(), "InsertAnimation: slide_id empty");
         let slide = slide_mut(deck, &self.slide_id)?;
-        // Multiplicity is a hard invariant for entrance/exit.
-        if matches!(self.entry.category, AnimationCategory::Entrance | AnimationCategory::Exit)
-            && has_category(&slide.animations, &self.entry.element_id, self.entry.category)
-        {
-            return Err(CommandError::InvalidOperation(format!(
-                "element {} already has a {:?} animation",
-                self.entry.element_id, self.entry.category
-            )));
-        }
         let (idx, warning) = accommodating_index(&slide.animations, self.position, &self.entry);
         slide.animations.insert(idx, self.entry.clone());
         slide.dirty = true;
@@ -122,8 +111,8 @@ impl Command for RemoveAnimation {
 }
 
 // ReorderAnimation
-// Moves an entry to `new_position`. Strict: if the move breaks
-// entrance-before-exit ordering it is undone and rejected.
+// Moves an entry to `new_position` (clamped to the last index). Timeline order
+// alone defines playback now, so any reorder is accepted.
 #[derive(Debug, Clone)]
 pub struct ReorderAnimation {
     pub slide_id: SlideId,
@@ -141,16 +130,7 @@ impl Command for ReorderAnimation {
             .ok_or_else(|| CommandError::AnimationNotFound(self.animation_id.clone()))?;
         let to = self.new_position.min(slide.animations.len() - 1);
         let entry = slide.animations.remove(from);
-        let element_id = entry.element_id.clone();
         slide.animations.insert(to, entry);
-        // Edit path: strict reject if ordering broke. Restore and error.
-        if !ordering_ok(&slide.animations, &element_id) {
-            let e = slide.animations.remove(to);
-            slide.animations.insert(from, e);
-            return Err(CommandError::InvalidOperation(
-                "reorder would place an exit before its entrance".into(),
-            ));
-        }
         slide.dirty = true;
         let inverse = ReorderAnimation {
             slide_id: self.slide_id.clone(),
@@ -176,9 +156,8 @@ impl Command for ReorderAnimation {
 }
 
 // SetAnimationProperty
-// Replaces an entry's mutable fields (keyframe / category / trigger / timing)
-// with `new_entry`. Strict: a recategorize that creates a duplicate
-// entrance/exit or breaks ordering is rejected (entry restored).
+// Replaces an entry's mutable fields (effect / category / trigger / timing)
+// with `new_entry`. No multiplicity or ordering checks; always accepted.
 #[derive(Debug, Clone)]
 pub struct SetAnimationProperty {
     pub slide_id: SlideId,
@@ -195,23 +174,7 @@ impl Command for SetAnimationProperty {
             .position(|e| e.id == self.animation_id)
             .ok_or_else(|| CommandError::AnimationNotFound(self.animation_id.clone()))?;
         let prior = slide.animations[pos].clone();
-        // Multiplicity guard if the category changed into one the element
-        // already has (in a *different* entry).
-        if self.new_entry.category != prior.category
-            && matches!(self.new_entry.category, AnimationCategory::Entrance | AnimationCategory::Exit)
-            && has_category(&slide.animations, &self.new_entry.element_id, self.new_entry.category)
-        {
-            return Err(CommandError::InvalidOperation(
-                "category already present on this element".into(),
-            ));
-        }
         slide.animations[pos] = self.new_entry.clone();
-        if !ordering_ok(&slide.animations, &self.new_entry.element_id) {
-            slide.animations[pos] = prior; // restore
-            return Err(CommandError::InvalidOperation(
-                "change would break entrance-before-exit ordering".into(),
-            ));
-        }
         slide.dirty = true;
         let inverse = SetAnimationProperty {
             slide_id: self.slide_id.clone(),
@@ -240,11 +203,11 @@ impl Command for SetAnimationProperty {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
-    use crate::deck::animation::{AnimationTiming, AnimationTrigger};
+    use crate::deck::animation::{AnimationEffect, AnimationTiming, AnimationTrigger};
     use crate::deck::Deck;
 
     fn entry(id: &str, el: &str, cat: AnimationCategory, kf: &str) -> AnimationEntry {
-        AnimationEntry::new(id.into(), el.into(), kf.into(), cat,
+        AnimationEntry::new(id.into(), el.into(), AnimationEffect::Named(kf.into()), cat,
             AnimationTrigger::OnClick, AnimationTiming::default())
     }
 
@@ -285,72 +248,14 @@ mod tests {
     }
 
     #[test]
-    fn second_entrance_is_rejected() {
+    fn two_entrances_on_one_element_are_allowed() {
         let (mut deck, sid, el) = deck_and_el();
         InsertAnimation { slide_id: sid.clone(), position: 0,
             entry: entry("e1", &el, AnimationCategory::Entrance, "appear") }
             .apply(&mut deck).unwrap();
-        let err = InsertAnimation { slide_id: sid.clone(), position: 0,
-            entry: entry("e2", &el, AnimationCategory::Entrance, "appear") }
-            .apply(&mut deck).unwrap_err();
-        assert!(matches!(err, CommandError::InvalidOperation(_)));
-    }
-
-    #[test]
-    fn add_entrance_after_exit_accommodates_and_warns() {
-        let (mut deck, sid, el) = deck_and_el();
-        InsertAnimation { slide_id: sid.clone(), position: 0,
-            entry: entry("x", &el, AnimationCategory::Exit, "disappear") }
-            .apply(&mut deck).unwrap();
-        let out = InsertAnimation { slide_id: sid.clone(), position: 9,
-            entry: entry("e", &el, AnimationCategory::Entrance, "appear") }
-            .apply(&mut deck).unwrap();
-        assert!(!out.warnings.is_empty());
-        let t = &deck.slides[&sid].animations;
-        assert!(t.iter().position(|a| a.id == "e").unwrap()
-              < t.iter().position(|a| a.id == "x").unwrap());
-    }
-
-    #[test]
-    fn reorder_breaking_ordering_is_rejected_and_restores() {
-        let (mut deck, sid, el) = deck_and_el();
-        InsertAnimation { slide_id: sid.clone(), position: 0,
-            entry: entry("en", &el, AnimationCategory::Entrance, "appear") }
-            .apply(&mut deck).unwrap();
         InsertAnimation { slide_id: sid.clone(), position: 1,
-            entry: entry("ex", &el, AnimationCategory::Exit, "disappear") }
+            entry: entry("e2", &el, AnimationCategory::Entrance, "fade-in") }
             .apply(&mut deck).unwrap();
-        // Move the exit to index 0 (before the entrance) → reject.
-        let err = ReorderAnimation { slide_id: sid.clone(), animation_id: "ex".into(), new_position: 0 }
-            .apply(&mut deck).unwrap_err();
-        assert!(matches!(err, CommandError::InvalidOperation(_)));
-        // Timeline unchanged.
-        assert_eq!(deck.slides[&sid].animations[0].id, "en");
-        assert_eq!(deck.slides[&sid].animations[1].id, "ex");
-    }
-
-    #[test]
-    fn recategorize_breaking_ordering_is_rejected() {
-        let (mut deck, sid, el) = deck_and_el();
-        // Order: exit then entrance is valid only if they are different
-        // elements; here same element so we build entrance(0), emphasis(1),
-        // then recategorize the emphasis at index... instead: entrance at 1,
-        // exit at 0 via two elements is awkward — use a direct case:
-        InsertAnimation { slide_id: sid.clone(), position: 0,
-            entry: entry("a", &el, AnimationCategory::Emphasis, "pulse") }
-            .apply(&mut deck).unwrap();
-        InsertAnimation { slide_id: sid.clone(), position: 1,
-            entry: entry("b", &el, AnimationCategory::Exit, "disappear") }
-            .apply(&mut deck).unwrap();
-        // Recategorize "a" (index 0) to Entrance → entrance(0) before exit(1): OK.
-        SetAnimationProperty { slide_id: sid.clone(), animation_id: "a".into(),
-            new_entry: entry("a", &el, AnimationCategory::Entrance, "appear") }
-            .apply(&mut deck).unwrap();
-        // Now recategorize "b" (the exit at index 1) to Entrance → second
-        // entrance → multiplicity reject.
-        let err = SetAnimationProperty { slide_id: sid.clone(), animation_id: "b".into(),
-            new_entry: entry("b", &el, AnimationCategory::Entrance, "appear") }
-            .apply(&mut deck).unwrap_err();
-        assert!(matches!(err, CommandError::InvalidOperation(_)));
+        assert_eq!(deck.slides[&sid].animations.len(), 2);
     }
 }

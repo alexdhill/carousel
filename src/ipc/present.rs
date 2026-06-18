@@ -7,7 +7,7 @@
 // the envelope-free `PresentInbound` enum, decoded directly in the presentation
 // webview's IPC handler (see main.rs).
 
-use crate::deck::animation::AnimationIterations;
+use crate::deck::animation::{AnimationIterations, PropertyTarget};
 use crate::ipc::{ElementId, SlideId};
 use serde::{Deserialize, Serialize};
 
@@ -44,6 +44,10 @@ pub struct PresentSlidePayload {
 pub struct AnimateInstruction {
     pub element_id: ElementId,
     pub keyframe: String,
+    // Property-change targets (the post-state to transition to). Empty for a
+    // keyframe animation; non-empty (and keyframe empty) for a property entry.
+    #[serde(default)]
+    pub targets: Vec<PropertyTarget>,
     pub duration_ms: u32,
     pub delay_ms: u32,
     pub easing: String,
@@ -123,6 +127,7 @@ mod tests {
             animate: vec![AnimateInstruction {
                 element_id: "d".into(),
                 keyframe: "fly-in-left".into(),
+                targets: Vec::new(),
                 duration_ms: 500,
                 delay_ms: 250,
                 easing: "ease".into(),
@@ -138,6 +143,7 @@ mod tests {
         let a = AnimateInstruction {
             element_id: "d".into(),
             keyframe: "pulse".into(),
+            targets: Vec::new(),
             duration_ms: 600,
             delay_ms: 0,
             easing: "linear".into(),

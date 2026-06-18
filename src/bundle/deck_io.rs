@@ -641,7 +641,8 @@ mod tests {
         let sid = original.slide_order[0].clone();
         let el = original.slides[&sid].root.children[0].id.clone();
         original.slides.get_mut(&sid).unwrap().animations.push(AnimationEntry::new(
-            "anim_1".into(), el.clone(), "appear".into(),
+            "anim_1".into(), el.clone(),
+            crate::deck::animation::AnimationEffect::Named("appear".into()),
             AnimationCategory::Entrance, AnimationTrigger::OnClick,
             AnimationTiming { duration_ms: 700, ..AnimationTiming::default() },
         ));

@@ -72,9 +72,16 @@
     // The immutable built-in @keyframes library (delivered once via Configure)
     // injected into every shadow root for forthcoming playback.
     let builtinKeyframesCss = "";
+    // The effect catalog (from Configure): the single source for the add-menu
+    // and per-bar effect picker.
+    let animationCatalog = [];
     // The active slide's animation timeline (from SlideAnimationsUpdate); the
-    // inspector's Appear/Disappear toggles filter this by the selected id.
+    // animations panel filters this by the selected id and renders a bar stack.
     let slideAnimations = [];
+    // animation_id -> true while its bar is expanded (survives refreshes).
+    const animExpanded = {};
+    // Guards the editor build preview so it cannot re-enter / double-restore.
+    let animPreviewActive = false;
     // The active slide's inspector data (from SlideInspectorUpdate); rendered in
     // the Slide box when nothing is selected in slide mode.
     let slideInspectorData = null;
@@ -1606,6 +1613,7 @@
         },
         Configure: function (payload) {
             builtinKeyframesCss = (payload && payload.animation_keyframes_css) || "";
+            animationCatalog = (payload && payload.animation_catalog) || [];
         },
         SlideAnimationsUpdate: function (payload) {
             slideAnimations = (payload && payload.entries) || [];
@@ -4069,54 +4077,600 @@
         window.__deck.send("Ready", null);
     });
 
+    // ---------- animations panel ----------
+
+    const ANIM_TRIGGERS = [
+        { value: "on_click", label: "On click" },
+        { value: "with_previous", label: "With previous" },
+        { value: "after_previous", label: "After previous" },
+    ];
+    const ANIM_EASINGS = [
+        { label: "Out", token: "ease-out" },
+        { label: "In-out", token: "ease-in-out" },
+        { label: "Spring", token: "cubic-bezier(.34,1.56,.64,1)" },
+        { label: "Linear", token: "linear" },
+    ];
+    const ANIM_DIRECTIONS = [
+        { value: "top", label: "Up" },
+        { value: "bottom", label: "Down" },
+        { value: "left", label: "Left" },
+        { value: "right", label: "Right" },
+    ];
+    const ANIM_CAT_ICON = {
+        entrance: "→", emphasis: "★", exit: "←", property: "{ }",
+    };
+
+    // animSend / animAdd / animUpdate / animRemove / animReplace
+    // Thin posters for the four animation IPC events. `animReplace` swaps an
+    // entry's effect (the UpdateAnimation event cannot change the effect, so a
+    // remove + add with the new catalog id is used; the entry re-appends).
+    function animSend(kind, body) {
+        body.kind = kind;
+        window.__deck.send("Interaction", body);
+    }
+    function animAdd(catalogId, direction) {
+        if (currentSelectionIds.length !== 1) {
+            return;
+        }
+        animSend("AddAnimation", {
+            element_id: currentSelectionIds[0],
+            catalog_id: catalogId,
+            direction: direction || null,
+        });
+    }
+    function animUpdate(animId, patch) {
+        animSend("UpdateAnimation", Object.assign({ animation_id: animId }, patch));
+    }
+    function animRemove(animId) {
+        animSend("RemoveAnimationRequested", { animation_id: animId });
+    }
+    function animReplace(animId, catalogId, direction) {
+        animRemove(animId);
+        animAdd(catalogId, direction);
+    }
+
+    // animDirectionOf
+    // Output: the direction token for a directional keyframe (the trailing
+    // top|bottom|left|right segment), else null.
+    function animDirectionOf(entry) {
+        const kf = entry && entry.keyframe;
+        const m = kf && /-(top|bottom|left|right)$/.exec(kf);
+        return m ? m[1] : null;
+    }
+
+    // catalogForEntry
+    // Output: the catalog item backing an entry — by exact keyframe match, or
+    // by prefix for a directional effect, or the property item. May be null.
+    function catalogForEntry(entry) {
+        if (entry.category === "property") {
+            return animationCatalog.find(function (i) { return i.kind === "property"; }) || null;
+        }
+        const exact = animationCatalog.find(function (i) { return i.keyframe === entry.keyframe; });
+        if (exact) {
+            return exact;
+        }
+        const dir = animDirectionOf(entry);
+        if (!dir) {
+            return null;
+        }
+        const base = String(entry.keyframe).replace(/-(top|bottom|left|right)$/, "");
+        return animationCatalog.find(function (i) {
+            return i.directional && String(i.keyframe).replace(/-(top|bottom|left|right)$/, "") === base;
+        }) || null;
+    }
+
+    // animEffectLabel / animTriggerLabel / animEffectSummary — bar text.
+    function animEffectLabel(entry) {
+        const item = catalogForEntry(entry);
+        return item ? item.label : (entry.effect_id || "Effect");
+    }
+    function animTriggerLabel(entry) {
+        const t = ANIM_TRIGGERS.find(function (x) { return x.value === entry.trigger; });
+        return t ? t.label : entry.trigger;
+    }
+    function animEffectSummary(entry) {
+        if (entry.category === "property") {
+            const ts = entry.targets || [];
+            if (ts.length === 0) {
+                return "Property change";
+            }
+            const first = ts[0].property + " → " + ts[0].value;
+            return ts.length > 1 ? (first + " +" + (ts.length - 1)) : first;
+        }
+        const dir = animDirectionOf(entry);
+        return animEffectLabel(entry) + (dir ? " (" + dir + ")" : "");
+    }
+
     // refreshAnimationsSection
     // Inputs: none (reads currentSelectionIds + slideAnimations).
-    // Output: side-effect; shows the Animations group only for a single
-    // selection and sets the Appear/Disappear checkboxes from the active
-    // slide's timeline.
+    // Output: side-effect; shows the panel only for a single selection and
+    // rebuilds the bar stack (one bar per entry of the selected element, in
+    // timeline order) plus the count badge.
     function refreshAnimationsSection() {
         const single = currentSelectionIds.length === 1;
         document.body.classList.toggle("has-single-selection", single);
-        const appear = document.getElementById("anim-appear");
-        const disappear = document.getElementById("anim-disappear");
-        if (!appear || !disappear) {
+        const bars = document.getElementById("anim-bars");
+        const count = document.getElementById("anim-count");
+        if (!bars) {
             return;
         }
         const el = single ? currentSelectionIds[0] : null;
-        const hasCat = function (cat) {
-            return !!el && slideAnimations.some(function (a) {
-                return a.element_id === el && a.category === cat;
+        const mine = el ? slideAnimations.filter(function (a) {
+            return a.element_id === el;
+        }) : [];
+        bars.replaceChildren();
+        for (let i = 0; i < mine.length && i < 4096; i++) {
+            bars.appendChild(buildAnimBar(mine[i]));
+        }
+        if (count) {
+            count.textContent = String(mine.length);
+        }
+    }
+
+    // buildAnimBar
+    // Inputs: a SlideAnimationEntry.
+    // Output: a collapsed-or-expanded bar element with its controls wired to
+    // the animation IPC events.
+    function buildAnimBar(entry) {
+        const bar = document.createElement("div");
+        bar.className = "anim-bar";
+        bar.appendChild(buildAnimHead(entry));
+        if (animExpanded[entry.animation_id]) {
+            bar.appendChild(buildAnimBody(entry));
+        }
+        return bar;
+    }
+
+    // buildAnimHead — the always-visible collapsed row.
+    function buildAnimHead(entry) {
+        const head = document.createElement("div");
+        head.className = "anim-bar__head";
+        const icon = document.createElement("span");
+        icon.className = "anim-bar__icon";
+        icon.textContent = ANIM_CAT_ICON[entry.category] || "•";
+        const label = document.createElement("span");
+        label.className = "anim-bar__label";
+        label.textContent = animEffectSummary(entry);
+        const trig = document.createElement("span");
+        trig.className = "anim-bar__trigger";
+        trig.textContent = animTriggerLabel(entry);
+        const chev = document.createElement("button");
+        chev.type = "button";
+        chev.className = "anim-bar__btn";
+        chev.textContent = animExpanded[entry.animation_id] ? "▾" : "▸";
+        chev.addEventListener("click", function () {
+            animExpanded[entry.animation_id] = !animExpanded[entry.animation_id];
+            refreshAnimationsSection();
+        });
+        const rm = document.createElement("button");
+        rm.type = "button";
+        rm.className = "anim-bar__btn";
+        rm.textContent = "×";
+        rm.addEventListener("click", function () { animRemove(entry.animation_id); });
+        head.append(icon, label, trig, chev, rm);
+        return head;
+    }
+
+    // buildAnimBody — the expanded controls (effect/properties/trigger/timing).
+    function buildAnimBody(entry) {
+        const body = document.createElement("div");
+        body.className = "anim-bar__body";
+        if (entry.category === "property") {
+            body.appendChild(buildAnimPropRows(entry));
+        } else {
+            body.appendChild(buildAnimEffectRow(entry));
+            const dir = animDirectionOf(entry);
+            if (dir) {
+                body.appendChild(buildAnimDirectionRow(entry, dir));
+            }
+        }
+        body.appendChild(buildAnimTriggerRow(entry));
+        body.appendChild(buildAnimTimingRow(entry));
+        body.appendChild(buildAnimEasingRow(entry));
+        if (entry.category === "emphasis") {
+            body.appendChild(buildAnimIterationsRow(entry));
+        }
+        return body;
+    }
+
+    // animField — a labelled control row wrapper.
+    function animField(labelText, control) {
+        const row = document.createElement("label");
+        row.className = "anim-bar__field";
+        const span = document.createElement("span");
+        span.textContent = labelText;
+        row.append(span, control);
+        return row;
+    }
+
+    // buildAnimEffectRow — swap the effect within its category (remove + add).
+    function buildAnimEffectRow(entry) {
+        const sel = document.createElement("select");
+        const current = catalogForEntry(entry);
+        animationCatalog.filter(function (i) {
+            return i.category === entry.category && i.kind === "named";
+        }).forEach(function (item) {
+            const o = document.createElement("option");
+            o.value = item.id;
+            o.textContent = item.label;
+            o.selected = current && item.id === current.id;
+            sel.appendChild(o);
+        });
+        sel.addEventListener("change", function () {
+            const item = animationCatalog.find(function (i) { return i.id === sel.value; });
+            const dir = item && item.directional ? (animDirectionOf(entry) || "top") : null;
+            animReplace(entry.animation_id, sel.value, dir);
+        });
+        return animField("Effect", sel);
+    }
+
+    // buildAnimDirectionRow — direction picker for a directional effect.
+    function buildAnimDirectionRow(entry, dir) {
+        const item = catalogForEntry(entry);
+        const sel = document.createElement("select");
+        ANIM_DIRECTIONS.forEach(function (d) {
+            const o = document.createElement("option");
+            o.value = d.value;
+            o.textContent = d.label;
+            o.selected = d.value === dir;
+            sel.appendChild(o);
+        });
+        sel.addEventListener("change", function () {
+            if (item) {
+                animReplace(entry.animation_id, item.id, sel.value);
+            }
+        });
+        return animField("Direction", sel);
+    }
+
+    // buildAnimTriggerRow — On click / With previous / After previous.
+    function buildAnimTriggerRow(entry) {
+        const sel = document.createElement("select");
+        ANIM_TRIGGERS.forEach(function (t) {
+            const o = document.createElement("option");
+            o.value = t.value;
+            o.textContent = t.label;
+            o.selected = t.value === entry.trigger;
+            sel.appendChild(o);
+        });
+        sel.addEventListener("change", function () {
+            animUpdate(entry.animation_id, { trigger: sel.value });
+        });
+        return animField("Trigger", sel);
+    }
+
+    // buildAnimTimingRow — duration + delay (ms), committed on change.
+    function buildAnimTimingRow(entry) {
+        const pair = document.createElement("div");
+        pair.className = "anim-bar__pair";
+        const dur = animNumberInput(entry.duration_ms, function (v) {
+            animUpdate(entry.animation_id, { duration_ms: v });
+        });
+        const del = animNumberInput(entry.delay_ms, function (v) {
+            animUpdate(entry.animation_id, { delay_ms: v });
+        });
+        pair.append(animField("Duration", dur), animField("Delay", del));
+        const wrap = document.createElement("div");
+        wrap.appendChild(pair);
+        return wrap;
+    }
+
+    // animNumberInput — a non-negative integer input firing `onCommit(int)`.
+    function animNumberInput(value, onCommit) {
+        const input = document.createElement("input");
+        input.type = "number";
+        input.min = "0";
+        input.value = String(value);
+        input.addEventListener("change", function () {
+            const n = Math.max(0, parseInt(input.value, 10) || 0);
+            onCommit(n);
+        });
+        return input;
+    }
+
+    // buildAnimEasingRow — the 4 easing presets as a dropdown of CSS tokens.
+    function buildAnimEasingRow(entry) {
+        const sel = document.createElement("select");
+        ANIM_EASINGS.forEach(function (e) {
+            const o = document.createElement("option");
+            o.value = e.token;
+            o.textContent = e.label;
+            o.selected = e.token === entry.easing;
+            sel.appendChild(o);
+        });
+        sel.addEventListener("change", function () {
+            animUpdate(entry.animation_id, { easing: sel.value });
+        });
+        return animField("Easing", sel);
+    }
+
+    // buildAnimIterationsRow — emphasis count, or ∞ toggle (Infinite).
+    function buildAnimIterationsRow(entry) {
+        const infinite = entry.iterations === "Infinite";
+        const wrap = document.createElement("div");
+        wrap.className = "anim-bar__pair";
+        const num = document.createElement("input");
+        num.type = "number";
+        num.min = "1";
+        num.value = infinite ? "1" : String((entry.iterations && entry.iterations.Count) || 1);
+        num.disabled = infinite;
+        num.addEventListener("change", function () {
+            const n = Math.max(1, parseInt(num.value, 10) || 1);
+            animUpdate(entry.animation_id, { iterations: { Count: n } });
+        });
+        const inf = document.createElement("label");
+        inf.className = "anim-bar__field";
+        const box = document.createElement("input");
+        box.type = "checkbox";
+        box.checked = infinite;
+        box.addEventListener("change", function () {
+            animUpdate(entry.animation_id, {
+                iterations: box.checked ? "Infinite" : { Count: 1 },
             });
+        });
+        const tag = document.createElement("span");
+        tag.textContent = "∞";
+        tag.style.width = "auto";
+        inf.append(box, tag);
+        wrap.append(animField("Repeat", num), inf);
+        const outer = document.createElement("div");
+        outer.appendChild(wrap);
+        return outer;
+    }
+
+    // buildAnimPropRows — the property → value editor for a Property entry.
+    // Any change re-collects every row into one UpdateAnimation{targets}.
+    function buildAnimPropRows(entry) {
+        const box = document.createElement("div");
+        box.style.display = "flex";
+        box.style.flexDirection = "column";
+        box.style.gap = "6px";
+        const targets = (entry.targets && entry.targets.length)
+            ? entry.targets.slice() : [{ property: "opacity", value: "1" }];
+        const commit = function () {
+            const rows = box.querySelectorAll(".anim-prop-row");
+            const out = [];
+            for (let i = 0; i < rows.length && i < 256; i++) {
+                const ins = rows[i].querySelectorAll("input");
+                const p = ins[0].value.trim();
+                const v = ins[1].value.trim();
+                if (p !== "") {
+                    out.push({ property: p, value: v });
+                }
+            }
+            if (out.length > 0) {
+                animUpdate(entry.animation_id, { targets: out });
+            }
         };
-        appear.checked = hasCat("entrance");
-        disappear.checked = hasCat("exit");
+        for (let i = 0; i < targets.length && i < 256; i++) {
+            box.appendChild(animPropRow(targets[i], commit));
+        }
+        const add = document.createElement("button");
+        add.type = "button";
+        add.className = "anim-prop-add";
+        add.textContent = "+ property";
+        add.addEventListener("click", function () {
+            box.insertBefore(animPropRow({ property: "", value: "" }, commit), add);
+        });
+        box.appendChild(add);
+        return box;
+    }
+
+    // animPropRow — one property/value pair with a remove button.
+    function animPropRow(target, commit) {
+        const row = document.createElement("div");
+        row.className = "anim-prop-row";
+        const prop = document.createElement("input");
+        prop.placeholder = "property";
+        prop.value = target.property || "";
+        const val = document.createElement("input");
+        val.placeholder = "value";
+        val.value = target.value || "";
+        prop.addEventListener("change", commit);
+        val.addEventListener("change", commit);
+        const rm = document.createElement("button");
+        rm.type = "button";
+        rm.className = "anim-bar__btn";
+        rm.textContent = "×";
+        rm.addEventListener("click", function () {
+            row.remove();
+            commit();
+        });
+        row.append(prop, val, rm);
+        return row;
     }
 
     // wireAnimationsSection
-    // Inputs: none (wires the two checkboxes once after load).
-    // Output: side-effect; a change on either toggle posts SetElementAnimation
-    // for the single selected element. Rust maps enabled→Insert / disabled→
-    // Remove and broadcasts SlideAnimationsUpdate, which repaints the boxes.
+    // Inputs: none (wires the static panel chrome once after load).
+    // Output: side-effect; wires the Add menu (built from the catalog), the
+    // Play preview button, and a document click-off that closes the menu.
     function wireAnimationsSection() {
-        const send = function (category, enabled) {
-            if (currentSelectionIds.length !== 1) {
+        const addBtn = document.getElementById("anim-add-btn");
+        const menu = document.getElementById("anim-add-menu");
+        const play = document.getElementById("anim-play");
+        if (addBtn && menu) {
+            addBtn.addEventListener("click", function (e) {
+                e.stopPropagation();
+                if (menu.hidden) {
+                    buildAnimAddMenu(menu);
+                }
+                menu.hidden = !menu.hidden;
+            });
+            menu.addEventListener("click", function (e) { e.stopPropagation(); });
+            document.addEventListener("click", function () { menu.hidden = true; });
+        }
+        if (play) {
+            play.addEventListener("click", playAnimPreview);
+        }
+    }
+
+    // buildAnimAddMenu — fill the add dropdown from the catalog, grouped under
+    // category headers. Selecting an item appends it to the selected element.
+    function buildAnimAddMenu(menu) {
+        menu.replaceChildren();
+        const cats = ["entrance", "emphasis", "exit", "property"];
+        for (let c = 0; c < cats.length; c++) {
+            const items = animationCatalog.filter(function (i) { return i.category === cats[c]; });
+            if (items.length === 0) {
+                continue;
+            }
+            const h = document.createElement("div");
+            h.className = "anim-menu__cat";
+            h.textContent = cats[c];
+            menu.appendChild(h);
+            items.forEach(function (item) {
+                const b = document.createElement("button");
+                b.type = "button";
+                b.className = "anim-menu__item";
+                b.textContent = item.label;
+                b.addEventListener("click", function () {
+                    animAdd(item.id, item.directional ? "top" : null);
+                    menu.hidden = true;
+                });
+                menu.appendChild(b);
+            });
+        }
+    }
+
+    // ---------- animations preview ----------
+
+    // animFindEl — locate an element in the editor's mounted slide shadow root.
+    function animFindEl(id) {
+        if (!currentShadow || !id) {
+            return null;
+        }
+        const safe = String(id).replace(/"/g, "\\\"");
+        return currentShadow.querySelector('[data-element-id="' + safe + '"]');
+    }
+
+    // animIterCount — iterations as a positive pacing count (Infinite → 1).
+    function animIterCount(iters) {
+        if (iters === "Infinite") {
+            return 1;
+        }
+        if (iters && typeof iters.Count === "number") {
+            return Math.max(1, iters.Count);
+        }
+        return 1;
+    }
+
+    // animStepGroups — split the timeline into build steps: a new group opens
+    // at each OnClick entry (leading non-OnClick entries form the first group).
+    function animStepGroups(entries) {
+        const groups = [];
+        let cur = null;
+        for (let i = 0; i < entries.length && i < 4096; i++) {
+            if (entries[i].trigger === "on_click" || cur === null) {
+                cur = [];
+                groups.push(cur);
+            }
+            cur.push(entries[i]);
+        }
+        return groups;
+    }
+
+    // animPlayOne — play one entry on the editor canvas (keyframe or property
+    // transition), mirroring present.js playback. `effDelay` is the resolved ms.
+    function animPlayOne(entry, effDelay) {
+        const el = animFindEl(entry.element_id);
+        if (!el) {
+            return;
+        }
+        if (entry.targets && entry.targets.length > 0) {
+            el.style.opacity = "1";
+            el.style.transition =
+                "all " + entry.duration_ms + "ms " + entry.easing + " " + effDelay + "ms";
+            window.requestAnimationFrame(function () {
+                for (let i = 0; i < entry.targets.length && i < 256; i++) {
+                    el.style.setProperty(entry.targets[i].property, entry.targets[i].value);
+                }
+            });
+            return;
+        }
+        const iters = entry.iterations === "Infinite"
+            ? "infinite" : String(animIterCount(entry.iterations));
+        el.style.opacity = "1";
+        el.style.animation = entry.keyframe + " " + entry.duration_ms + "ms "
+            + entry.easing + " " + effDelay + "ms " + iters + " both";
+        const endsHidden = entry.category === "exit";
+        const onEnd = function () {
+            el.style.animation = "none";
+            el.style.opacity = endsHidden ? "0" : "1";
+            el.removeEventListener("animationend", onEnd);
+        };
+        el.addEventListener("animationend", onEnd);
+    }
+
+    // animPlayGroup — play one build-step group with chained (after-previous)
+    // delays; returns the step-finish time in ms (the longest entry).
+    function animPlayGroup(group) {
+        let priorSum = 0;
+        let finish = 0;
+        for (let i = 0; i < group.length && i < 4096; i++) {
+            const e = group[i];
+            const own = e.delay_ms || 0;
+            const eff = e.trigger === "after_previous" ? priorSum + own : own;
+            animPlayOne(e, eff);
+            const span = eff + (e.duration_ms || 0) * animIterCount(e.iterations);
+            if (span > finish) {
+                finish = span;
+            }
+            priorSum += own + (e.duration_ms || 0) * animIterCount(e.iterations);
+        }
+        return finish;
+    }
+
+    // playAnimPreview
+    // Inputs: none (reads slideAnimations + currentShadow).
+    // Output: side-effect; previews the active slide's full build on the editor
+    // canvas (step 0 then auto-advance through every group), then restores the
+    // pre-preview inline styles. Re-entry is guarded by animPreviewActive.
+    function playAnimPreview() {
+        if (!currentShadow || animPreviewActive || slideAnimations.length === 0) {
+            return;
+        }
+        animPreviewActive = true;
+        const entries = slideAnimations.slice();
+        const snap = {};
+        const ids = [];
+        for (let i = 0; i < entries.length && i < 4096; i++) {
+            const id = entries[i].element_id;
+            if (!(id in snap)) {
+                const el = animFindEl(id);
+                snap[id] = el ? el.style.cssText : null;
+                ids.push(id);
+            }
+        }
+        for (let i = 0; i < entries.length && i < 4096; i++) {
+            if (entries[i].category === "entrance") {
+                const el = animFindEl(entries[i].element_id);
+                if (el) {
+                    el.style.animation = "none";
+                    el.style.opacity = "0";
+                }
+            }
+        }
+        const groups = animStepGroups(entries);
+        let g = 0;
+        const restore = function () {
+            for (let i = 0; i < ids.length && i < 4096; i++) {
+                const el = animFindEl(ids[i]);
+                if (el) {
+                    el.style.cssText = snap[ids[i]] || "";
+                }
+            }
+            animPreviewActive = false;
+        };
+        const runNext = function () {
+            if (g >= groups.length) {
+                window.setTimeout(restore, 500);
                 return;
             }
-            window.__deck.send("Interaction", {
-                kind: "SetElementAnimation",
-                element_id: currentSelectionIds[0],
-                category: category,
-                enabled: enabled,
-            });
+            const finish = animPlayGroup(groups[g]);
+            g += 1;
+            window.setTimeout(runNext, finish + 500);
         };
-        const a = document.getElementById("anim-appear");
-        const d = document.getElementById("anim-disappear");
-        if (a) {
-            a.addEventListener("change", function () { send("entrance", a.checked); });
-        }
-        if (d) {
-            d.addEventListener("change", function () { send("exit", d.checked); });
-        }
+        runNext();
     }
 
     // ---------- toasts ----------

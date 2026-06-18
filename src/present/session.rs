@@ -200,7 +200,8 @@ mod tests {
 
     fn click_entry(id: &str, el: &str) -> AnimationEntry {
         AnimationEntry::new(
-            id.into(), el.into(), "appear".into(),
+            id.into(), el.into(),
+            crate::deck::animation::AnimationEffect::Named("appear".into()),
             AnimationCategory::Entrance, AnimationTrigger::OnClick, AnimationTiming::default(),
         )
     }

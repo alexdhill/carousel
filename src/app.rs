@@ -22,11 +22,14 @@ use crate::commands::{
     Command, CommandDispatcher, CompositeCommand, EditorMode, FileAction, GeometryProperty,
     InsertAnimation, InsertElement, InsertLayout, InsertSlide, InterpretResult, MoveElement,
     RemoveAnimation, RemoveElementCommand, RemoveInlineStyle, RemoveSlide, RenameElement, ReparentElement,
-    ResizeElement, SetElementId, SetGeometryProperty, SetGlobalsCss, SetInlineStyle, SetLayoutName,
+    ResizeElement, SetAnimationProperty, SetElementId, SetGeometryProperty, SetGlobalsCss, SetInlineStyle, SetLayoutName,
     SetSlideBackground, SetSlideLayout, SetSlideNotes, SetSlideTitle, SetTextContent, SwapTheme,
     TransactionSnapshot,
 };
-use crate::deck::animation::{AnimationCategory, AnimationEntry, AnimationTiming, AnimationTrigger};
+use crate::deck::animation::{
+    AnimationCategory, AnimationEffect, AnimationEntry, AnimationTiming, AnimationTrigger,
+    PropertyTarget,
+};
 use crate::deck::element::{
     AssetRef, ElementContent, ElementNode, ElementStyle, ElementType, RichText,
 };
@@ -246,6 +249,7 @@ impl ApplicationCore {
                 self.sender.send(MessageKind::Configure(EditorConfig {
                     debug: false,
                     animation_keyframes_css: ANIMATION_KEYFRAMES_CSS.to_string(),
+                    animation_catalog: crate::deck::anim_catalog::animation_catalog(),
                 }))?;
                 self.send_slide_list()?;
                 self.send_assets_bundle()?;
@@ -470,8 +474,22 @@ impl ApplicationCore {
                     AnimationCategory::Entrance => "entrance",
                     AnimationCategory::Emphasis => "emphasis",
                     AnimationCategory::Exit => "exit",
+                    AnimationCategory::Property => "property",
                 }
                 .to_string(),
+                effect_id: e.effect.keyframe_name().unwrap_or("property").to_string(),
+                keyframe: e.effect.keyframe_name().map(str::to_string),
+                targets: e.effect.targets().map(<[_]>::to_vec).unwrap_or_default(),
+                trigger: match e.trigger {
+                    AnimationTrigger::OnClick => "on_click",
+                    AnimationTrigger::WithPrevious => "with_previous",
+                    AnimationTrigger::AfterPrevious => "after_previous",
+                }
+                .to_string(),
+                duration_ms: e.timing.duration_ms,
+                delay_ms: e.timing.delay_ms,
+                easing: e.timing.easing.clone(),
+                iterations: e.timing.iterations,
             })
             .collect();
         self.sender.send(MessageKind::SlideAnimationsUpdate(SlideAnimationsData {
@@ -911,6 +929,36 @@ impl ApplicationCore {
                     &category,
                     enabled,
                 )
+            }
+            InteractionEvent::AddAnimation { element_id, catalog_id, direction } => {
+                interpret_add_animation(
+                    self.dispatcher.deck(),
+                    self.dispatcher.mode(),
+                    self.active_slide.as_ref(),
+                    element_id,
+                    &catalog_id,
+                    direction.as_deref(),
+                )
+            }
+            InteractionEvent::UpdateAnimation {
+                animation_id, trigger, duration_ms, delay_ms, easing, iterations, targets,
+            } => interpret_update_animation(
+                self.dispatcher.deck(),
+                self.active_slide.as_ref(),
+                &animation_id,
+                trigger.as_deref(),
+                duration_ms,
+                delay_ms,
+                easing.as_deref(),
+                iterations,
+                targets,
+            ),
+            InteractionEvent::RemoveAnimationRequested { animation_id } => {
+                match self.active_slide.clone() {
+                    Some(slide_id) => InterpretResult::Command(Box::new(
+                        RemoveAnimation { slide_id, animation_id })),
+                    None => InterpretResult::Nothing,
+                }
             }
             InteractionEvent::SaveThemeRequested => {
                 InterpretResult::FileAction(FileAction::SaveTheme)
@@ -2918,7 +2966,7 @@ fn interpret_set_element_animation(
             let entry = AnimationEntry::new(
                 new_animation_id(),
                 element_id,
-                keyframe.to_string(),
+                AnimationEffect::Named(keyframe.to_string()),
                 cat,
                 AnimationTrigger::OnClick,
                 AnimationTiming::default(),
@@ -2934,6 +2982,135 @@ fn interpret_set_element_animation(
         }
         _ => InterpretResult::Nothing,
     }
+}
+
+// interpret_add_animation
+// Inputs: the deck (read), editor mode, active slide, target element, a catalog
+// id, and an optional direction token.
+// Output: an InsertAnimation appending the resolved effect to the active
+// slide's timeline with default trigger/timing, or Nothing (wrong mode, no
+// active slide, or an unknown catalog id / missing slide).
+fn interpret_add_animation(
+    deck: &Deck,
+    mode: EditorMode,
+    active_slide: Option<&SlideId>,
+    element_id: ElementId,
+    catalog_id: &str,
+    direction: Option<&str>,
+) -> InterpretResult {
+    assert!(!element_id.is_empty(), "interpret_add_animation: empty element id");
+    if mode != EditorMode::Slide {
+        return InterpretResult::Nothing;
+    }
+    let slide_id: SlideId = match active_slide {
+        Some(s) => s.clone(),
+        None => return InterpretResult::Nothing,
+    };
+    let item = match crate::deck::anim_catalog::animation_catalog()
+        .into_iter()
+        .find(|i| i.id == catalog_id)
+    {
+        Some(i) => i,
+        None => return InterpretResult::Nothing,
+    };
+    let category = match item.category.as_str() {
+        "entrance" => AnimationCategory::Entrance,
+        "emphasis" => AnimationCategory::Emphasis,
+        "exit" => AnimationCategory::Exit,
+        "property" => AnimationCategory::Property,
+        _ => return InterpretResult::Nothing,
+    };
+    let effect: AnimationEffect = if item.kind == "property" {
+        AnimationEffect::PropertyChange(vec![PropertyTarget {
+            property: "opacity".into(),
+            value: "1".into(),
+        }])
+    } else {
+        AnimationEffect::Named(directional_keyframe(&item, direction))
+    };
+    let slide = match deck.slides.get(&slide_id) {
+        Some(s) => s,
+        None => return InterpretResult::Nothing,
+    };
+    let entry = AnimationEntry::new(
+        new_animation_id(), element_id, effect, category,
+        AnimationTrigger::OnClick, AnimationTiming::default());
+    InterpretResult::Command(Box::new(InsertAnimation {
+        slide_id, position: slide.animations.len(), entry,
+    }))
+}
+
+// directional_keyframe
+// Inputs: a catalog item and an optional direction token.
+// Output: the per-direction keyframe name (fly-in-<dir> / fly-out-<dir>) for a
+// directional item, else the item's keyframe verbatim. Defaults to "top".
+fn directional_keyframe(
+    item: &crate::deck::anim_catalog::AnimCatalogItem,
+    dir: Option<&str>,
+) -> String {
+    let base: &str = item.keyframe.as_deref().unwrap_or("appear");
+    if !item.directional {
+        return base.to_string();
+    }
+    let d: &str = dir.unwrap_or("top");
+    let prefix: &str = if base.starts_with("fly-out") { "fly-out" } else { "fly-in" };
+    assert!(matches!(d, "top" | "bottom" | "left" | "right"), "bad direction");
+    format!("{}-{}", prefix, d)
+}
+
+// interpret_update_animation
+// Inputs: the deck (read), active slide, target animation id, and the optional
+// patch fields (None = leave as-is). `targets` only applies to a Property entry.
+// Output: a SetAnimationProperty carrying the patched entry, or Nothing (no
+// active slide / unknown id).
+#[allow(clippy::too_many_arguments)]
+fn interpret_update_animation(
+    deck: &Deck,
+    active_slide: Option<&SlideId>,
+    animation_id: &str,
+    trigger: Option<&str>,
+    duration_ms: Option<u32>,
+    delay_ms: Option<u32>,
+    easing: Option<&str>,
+    iterations: Option<crate::deck::animation::AnimationIterations>,
+    targets: Option<Vec<PropertyTarget>>,
+) -> InterpretResult {
+    assert!(!animation_id.is_empty(), "interpret_update_animation: empty id");
+    let slide_id: SlideId = match active_slide {
+        Some(s) => s.clone(),
+        None => return InterpretResult::Nothing,
+    };
+    let slide = match deck.slides.get(&slide_id) {
+        Some(s) => s,
+        None => return InterpretResult::Nothing,
+    };
+    let prior = match slide.animations.iter().find(|e| e.id == animation_id) {
+        Some(e) => e.clone(),
+        None => return InterpretResult::Nothing,
+    };
+    let trig = match trigger {
+        Some("on_click") => AnimationTrigger::OnClick,
+        Some("with_previous") => AnimationTrigger::WithPrevious,
+        Some("after_previous") => AnimationTrigger::AfterPrevious,
+        _ => prior.trigger,
+    };
+    let timing = AnimationTiming {
+        duration_ms: duration_ms.unwrap_or(prior.timing.duration_ms),
+        delay_ms: delay_ms.unwrap_or(prior.timing.delay_ms),
+        easing: easing.map(str::to_string).unwrap_or_else(|| prior.timing.easing.clone()),
+        iterations: iterations.unwrap_or(prior.timing.iterations),
+    };
+    let effect = match (targets, prior.category) {
+        (Some(t), AnimationCategory::Property) if !t.is_empty() => {
+            AnimationEffect::PropertyChange(t)
+        }
+        _ => prior.effect.clone(),
+    };
+    let new_entry = AnimationEntry::new(
+        prior.id.clone(), prior.element_id.clone(), effect, prior.category, trig, timing);
+    InterpretResult::Command(Box::new(SetAnimationProperty {
+        slide_id, animation_id: animation_id.to_string(), new_entry,
+    }))
 }
 
 // build_insert_slide_after_active
@@ -4970,8 +5147,45 @@ mod tests {
         let t = &dispatcher.deck().slides[&sid].animations;
         assert_eq!(t.len(), 1);
         assert_eq!(t[0].category, AnimationCategory::Entrance);
-        assert_eq!(t[0].keyframe, "appear");
+        assert_eq!(t[0].effect.keyframe_name(), Some("appear"));
         assert_eq!(t[0].element_id, eid);
+    }
+
+    #[test]
+    fn add_animation_appends_catalog_effect() {
+        let (mut dispatcher, _sel, sid, eid) = fixture();
+        let result = interpret_add_animation(
+            dispatcher.deck(), EditorMode::Slide, Some(&sid), eid.clone(), "fly-in", Some("left"));
+        let cmd = match result {
+            InterpretResult::Command(c) => c,
+            other => panic!("expected Command, got {other:?}"),
+        };
+        cmd.apply(dispatcher.deck_mut()).unwrap();
+        let t = &dispatcher.deck().slides[&sid].animations;
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].effect.keyframe_name(), Some("fly-in-left"));
+    }
+
+    #[test]
+    fn update_animation_overlays_timing() {
+        let (mut dispatcher, _sel, sid, eid) = fixture();
+        let add = match interpret_set_element_animation(
+            dispatcher.deck(), EditorMode::Slide, Some(&sid), eid, "entrance", true) {
+            InterpretResult::Command(c) => c,
+            other => panic!("expected Command, got {other:?}"),
+        };
+        add.apply(dispatcher.deck_mut()).unwrap();
+        let anim_id = dispatcher.deck().slides[&sid].animations[0].id.clone();
+        let upd = match interpret_update_animation(
+            dispatcher.deck(), Some(&sid), &anim_id, Some("after_previous"),
+            Some(700), None, None, None, None) {
+            InterpretResult::Command(c) => c,
+            other => panic!("expected Command, got {other:?}"),
+        };
+        upd.apply(dispatcher.deck_mut()).unwrap();
+        let e = &dispatcher.deck().slides[&sid].animations[0];
+        assert_eq!(e.timing.duration_ms, 700);
+        assert_eq!(e.trigger, AnimationTrigger::AfterPrevious);
     }
 
     #[test]
