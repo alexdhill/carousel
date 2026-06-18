@@ -770,6 +770,19 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     gap: 8px 10px;
 }
 
+/* Flow body: wraps a relocated panel (Custom CSS / Animations) rather than the
+   field grid, so it stacks and the inner node supplies its own padding. */
+.inspector__section-body--flow {
+    display: block;
+    padding: 0;
+}
+
+.inspector__section-body--flow > .inspector__custom,
+.inspector__section-body--flow > .animations {
+    border: 0;
+    padding: 4px 14px 13px;
+}
+
 .inspector__field {
     display: flex;
     flex-direction: column;
@@ -1661,16 +1674,12 @@ body[data-mode="layout"] .theme-actions {
 
 /* ===================== Animations ===================== */
 
+/* Visibility is owned by the wrapping collapsible section; the panel itself is
+   always laid out (its section is hidden when no element is selected). */
 .animations {
-    display: none;
+    display: flex;
     flex-direction: column;
     gap: 6px;
-    padding: 12px 14px;
-    border-top: 1px solid var(--line);
-}
-
-body.has-single-selection .animations {
-    display: flex;
 }
 
 .animations__header {

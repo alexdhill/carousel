@@ -2064,28 +2064,14 @@
 
     const INSPECTOR_SECTIONS = [
         {
-            id: "position",
-            label: "Position",
-            appliesTo: ALL_TYPES,
-            fields: [
-                { prop: "x", label: "X", kind: "number", suffix: "px" },
-                { prop: "y", label: "Y", kind: "number", suffix: "px" },
-            ],
-        },
-        {
-            id: "size",
-            label: "Size",
-            appliesTo: ALL_TYPES,
-            fields: [
-                { prop: "width", label: "Width", kind: "number", suffix: "px" },
-                { prop: "height", label: "Height", kind: "number", suffix: "px" },
-            ],
-        },
-        {
             id: "transform",
             label: "Transform",
             appliesTo: ALL_TYPES,
             fields: [
+                { prop: "x", label: "X", kind: "number", suffix: "px" },
+                { prop: "y", label: "Y", kind: "number", suffix: "px" },
+                { prop: "width", label: "Width", kind: "number", suffix: "px" },
+                { prop: "height", label: "Height", kind: "number", suffix: "px" },
                 { prop: "rotation", label: "Rotation", kind: "rotation-deg", suffix: "°" },
                 { prop: "opacity", label: "Opacity", kind: "number", suffix: "" },
             ],
@@ -2132,6 +2118,10 @@
                 { prop: "color", label: "Color", kind: "color", full: true },
             ],
         },
+        // Custom sections — collapsible chrome wrapping pre-existing DOM (the
+        // Custom CSS form and the Animations panel) rather than field rows.
+        { id: "custom-css", label: "Custom CSS", appliesTo: ALL_TYPES, custom: "inspector-custom" },
+        { id: "animations", label: "Animations", appliesTo: ALL_TYPES, custom: "animations-section" },
     ];
 
     // Cache of input elements keyed by property name so refreshInspector
@@ -2218,8 +2208,18 @@
 
         const body = document.createElement("div");
         body.className = "inspector__section-body";
-        for (let i = 0; i < def.fields.length; i++) {
-            body.appendChild(buildField(def.fields[i]));
+        if (def.custom) {
+            // Relocate the pre-built node (Custom CSS form / Animations panel)
+            // into this section's body; flow layout, not the field grid.
+            body.classList.add("inspector__section-body--flow");
+            const node = document.getElementById(def.custom);
+            if (node) {
+                body.appendChild(node);
+            }
+        } else {
+            for (let i = 0; i < def.fields.length; i++) {
+                body.appendChild(buildField(def.fields[i]));
+            }
         }
         sec.appendChild(body);
         return sec;
@@ -2696,8 +2696,6 @@
                 sec.style.display = applies ? "" : "none";
             }
         }
-        toggleDisplay("inspector-custom", show);
-        toggleDisplay("animations-section", show);
     }
 
     function sectionDefById(id) {
