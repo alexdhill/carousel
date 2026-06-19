@@ -305,6 +305,7 @@ fn is_known_attr(key: &str) -> bool {
             | "data-flex-dir"
             | "data-flex-dist"
             | "data-flex-align"
+            | "data-flex-scale"
             | "class"
             // data-anim-ids is a derived targeting tag emitted by the
             // serializer from the slide timeline; consume (drop) it on read

@@ -207,6 +207,7 @@ fn add_content_attrs(node: &ElementNode, attrs: &mut BTreeMap<String, String>) {
         attrs.insert("data-flex-dir".into(), group_dir_token(gs.direction).into());
         attrs.insert("data-flex-dist".into(), group_dist_token(gs.distribution).into());
         attrs.insert("data-flex-align".into(), group_align_token(gs.alignment).into());
+        attrs.insert("data-flex-scale".into(), format!("{}", gs.scale));
     }
 }
 

@@ -39,6 +39,24 @@
     let pendingDrag = null;
     let dragRafScheduled = false;
     let currentSelectionIds = [];
+    // focusChain — group ids the editor has entered (empty = top level). A
+    // click resolves to the deepest focused group's child; double-click drills.
+    let focusChain = [];
+
+    // elementChain — the data-element-id ancestry of a node, innermost→outermost,
+    // bounded by .slide-host.
+    function elementChain(node) {
+        const out = [];
+        let n = node;
+        let guard = 0;
+        while (n && guard < 1000) {
+            guard += 1;
+            if (n.classList && n.classList.contains("slide-host")) { break; }
+            if (n.dataset && n.dataset.elementId) { out.push(n); }
+            n = n.parentElement || (n.getRootNode && n.getRootNode().host);
+        }
+        return out;
+    }
     // pendingDragEnd: when mouseup fires, we keep the optimistic
     // transform on the dragged element so there is no visible flash
     // between the transform clearing and the absolute-position patch
@@ -457,8 +475,10 @@
             overlay.appendChild(box);
 
             if (showHandles) {
+                const isGroup = el.dataset.elementType === "group";
                 for (let h = 0; h < SELECTION_HANDLES.length; h++) {
                     const spec = SELECTION_HANDLES[h];
+                    if (isGroup && spec.name.length === 1) { continue; } // skip edges n/e/s/w
                     const handle = document.createElement("div");
                     handle.className = "selection-handle";
                     handle.dataset.handle = spec.name;
@@ -1117,19 +1137,34 @@
     // stops at the slide host (so background clicks return null).
     function findInteractionTarget(e) {
         const path = (typeof e.composedPath === "function") ? e.composedPath() : [];
+        let hit = null;
         for (let i = 0; i < path.length; i++) {
             const node = path[i];
             if (!node || !node.dataset) {
                 continue;
             }
             if (node.classList && node.classList.contains("slide-host")) {
-                return null;
+                break;
             }
             if (node.dataset.elementId) {
-                return node;
+                hit = node;
+                break;
             }
         }
-        return null;
+        if (!hit) { return null; }
+        const chain = elementChain(hit); // innermost..outermost
+        if (focusChain.length === 0) {
+            return chain[chain.length - 1]; // outermost element under the slide
+        }
+        // Focused: return the child of the deepest focused group in the chain.
+        const deep = focusChain[focusChain.length - 1];
+        for (let i = 0; i < chain.length; i++) {
+            const parent = chain[i].parentElement;
+            if (parent && parent.dataset && parent.dataset.elementId === deep) {
+                return chain[i];
+            }
+        }
+        return chain[chain.length - 1];
     }
 
     // readModifiers
@@ -1153,6 +1188,19 @@
     function onViewportDblClick(e) {
         const target = findInteractionTarget(e);
         if (!target) {
+            return;
+        }
+        if (target.dataset.elementType === "group") {
+            e.preventDefault();
+            focusChain.push(target.dataset.elementId);
+            // Select the child under the cursor at the new level.
+            const inner = findInteractionTarget(e);
+            if (inner && inner.dataset.elementId) {
+                window.__deck.send("Interaction", {
+                    kind: "ElementClicked", element_id: inner.dataset.elementId,
+                    modifiers: readModifiers(e), position: { x: e.clientX, y: e.clientY },
+                });
+            }
             return;
         }
         if (target.dataset.elementType === "image") {
@@ -1319,6 +1367,7 @@
         // #viewport-container, so this never fires for the side panels.
         const slideHost = e.target.closest && e.target.closest(".slide-host");
         if (!slideHost) {
+            focusChain = [];
             window.__deck.send("Interaction", {
                 kind: "BackgroundClicked",
                 position: { x: e.clientX, y: e.clientY },
@@ -1326,6 +1375,15 @@
             return;
         }
         const target = findInteractionTarget(e);
+        // Leaving the deepest focused group (background or an element outside
+        // it) drops back to top-level selection before sending.
+        if (focusChain.length > 0) {
+            const deep = focusChain[focusChain.length - 1];
+            const insideFocus = !!(target && elementChain(target).some(function (n) {
+                return n.dataset.elementId === deep;
+            }));
+            if (!insideFocus) { focusChain = []; }
+        }
         if (!target) {
             window.__deck.send("Interaction", {
                 kind: "BackgroundClicked",
@@ -1997,6 +2055,32 @@
         const scale = getViewportScale();
         const dx = (e.clientX - resizeState.startMouse.x) / scale;
         const dy = (e.clientY - resizeState.startMouse.y) / scale;
+        // Groups scale uniformly: map the corner drag to a SetGroupScale and
+        // let the remount re-bake child positions + the transform.
+        if (resizeState.target.dataset.elementType === "group") {
+            const startW = resizeState.startRect.w;
+            const newRect = snappedResizeRect(computeResizeRect(
+                resizeState, dx, dy, true, false), e, scale, false);
+            const factor = startW > 0 ? (newRect.w / startW) : 1;
+            const prior = parseFloat(resizeState.target.dataset.flexScale || "1") || 1;
+            window.__deck.send("Interaction", {
+                kind: "SetGroupScale", element_id: resizeState.elementId,
+                scale: prior * factor,
+            });
+            clearGuides();
+            if (resizeState.savedTransform === "") {
+                resizeState.target.style.removeProperty("transform");
+            } else {
+                resizeState.target.style.transform = resizeState.savedTransform;
+            }
+            document.body.style.userSelect = "";
+            resizeState = null;
+            pendingResize = null;
+            window.removeEventListener("mousemove", onResizeMouseMove);
+            window.removeEventListener("mouseup", onResizeMouseUp);
+            updateSelectionOverlay();
+            return;
+        }
         const rect = snappedResizeRect(computeResizeRect(
             resizeState, dx, dy, !!e.shiftKey, !!e.altKey,
         ), e, scale, false);
@@ -5103,6 +5187,11 @@
         if (cropState) {
             if (e.key === "Enter") { e.preventDefault(); commitCrop(); return; }
             if (e.key === "Escape") { e.preventDefault(); cancelCrop(); return; }
+            return;
+        }
+        if (e.key === "Escape" && focusChain.length > 0 && !textEditState) {
+            focusChain = [];
+            updateSelectionOverlay();
             return;
         }
         if (matchGridToggleShortcut(e)) {
