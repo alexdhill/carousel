@@ -150,6 +150,50 @@ fn shrink_wrap(group: &mut ElementNode, scale: f64) {
     group.geometry.height = max_y - min_y;
 }
 
+// ancestor_group_ids
+// Inputs: a root node and a target element id.
+// Output: the ids of the target's group ancestors, innermost first. Empty if
+// the element is absent or has no group ancestor. Iterative DFS (no recursion),
+// fixed node ceiling.
+fn ancestor_group_ids(root: &ElementNode, element_id: &str) -> Vec<String> {
+    const MAX_NODES: usize = 1_000_000;
+    let mut stack: Vec<(&ElementNode, Vec<String>)> = vec![(root, Vec::new())];
+    let mut seen: usize = 0;
+    while let Some((node, path)) = stack.pop() {
+        seen += 1;
+        assert!(seen <= MAX_NODES, "ancestor_group_ids: node ceiling");
+        if node.id == element_id {
+            let mut chain: Vec<String> = path;
+            chain.reverse(); // innermost first
+            return chain;
+        }
+        for child in &node.children {
+            let mut next: Vec<String> = path.clone();
+            if node.element_type == ElementType::Group {
+                next.push(node.id.clone());
+            }
+            stack.push((child, next));
+        }
+    }
+    Vec::new()
+}
+
+// relayout_ancestors
+// Inputs: root (mutated), the element whose edit triggered relayout.
+// Output: true if any ancestor group's geometry changed. Relayouts innermost
+// group first so outer groups shrink-wrap around settled inner groups.
+pub fn relayout_ancestors(root: &mut ElementNode, element_id: &str) -> bool {
+    let chain: Vec<String> = ancestor_group_ids(root, element_id);
+    let mut changed: bool = false;
+    for (i, gid) in chain.iter().enumerate() {
+        assert!(i < 100_000, "relayout_ancestors: bound");
+        if let Some(g) = crate::deck::canvas::find_element_mut(root, gid) {
+            changed = relayout_group(g) || changed;
+        }
+    }
+    changed
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -255,5 +299,23 @@ mod tests {
         assert_eq!(one.geometry.width, 20.0);
         let mut empty = grp(GroupStyle::default(), vec![]);
         assert!(!relayout_group(&mut empty));
+    }
+
+    #[test]
+    fn relayout_ancestors_runs_bottom_up_for_nested_groups() {
+        // outer[ inner[ a,b ] , c ]  — moving a child triggers inner then outer.
+        let inner = {
+            let mut g = grp(GroupStyle { distribution: GroupDistribution::SpaceBetween, ..Default::default() },
+                vec![child("a", 0.0, 0.0, 20.0, 10.0), child("b", 80.0, 0.0, 20.0, 10.0)]);
+            g.id = "inner".into();
+            g
+        };
+        let mut outer = group_element("outer", vec![inner, child("c", 0.0, 40.0, 10.0, 10.0)]);
+        outer.style = ElementStyle::Group(GroupStyle::default());
+        let changed = relayout_ancestors(&mut outer, "a");
+        assert!(changed);
+        // inner distributed a,b to 0 and 80 (already there) -> inner box width 100.
+        let inner_node = outer.children.iter().find(|n| n.id == "inner").unwrap();
+        assert_eq!(inner_node.geometry.width, 100.0);
     }
 }
