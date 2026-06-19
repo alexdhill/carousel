@@ -99,7 +99,10 @@ mod tests {
         let mut g = group_element("g", vec![a, c, b]);
         g.style = ElementStyle::Group(GroupStyle {
             distribution: GroupDistribution::SpaceBetween, ..Default::default() });
-        let patches = relayout_patches(&mut g, "a");
+        // The flex group sits under a structural root (the slide root is never
+        // a user flex group); relayout against that root.
+        let mut root = group_element("root", vec![g]);
+        let patches = relayout_patches(&mut root, "a");
         // c moved 50 -> 40, so at least one SetStyle left patch for c exists.
         let has_c_left = patches.iter().any(|p| matches!(p,
             Patch::SetStyle { element_id, property, value }

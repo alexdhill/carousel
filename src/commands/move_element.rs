@@ -52,7 +52,7 @@ impl Command for MoveElement {
             previous_position: Some(self.new_position),
         };
 
-        let patches: Vec<Patch> = vec![
+        let mut patches: Vec<Patch> = vec![
             Patch::SetStyle {
                 element_id: self.element_id.clone(),
                 property: "left".into(),
@@ -64,6 +64,7 @@ impl Command for MoveElement {
                 value: format!("{}px", self.new_position.y),
             },
         ];
+        patches.extend(crate::commands::relayout_patches(canvas.root_mut(), &self.element_id));
 
         Ok(CommandOutput {
             patches,
@@ -90,6 +91,33 @@ mod tests {
         let sid: SlideId = deck.slide_order[0].clone();
         let eid: ElementId = deck.slides[&sid].root.children[0].id.clone();
         (deck, sid, eid)
+    }
+
+    #[test]
+    fn move_inside_group_relayouts_and_emits_group_patches() {
+        use crate::deck::builders::{group_element, text_element};
+        use crate::deck::element::ElementStyle;
+        use crate::deck::style::{GroupDistribution, GroupStyle};
+        let mut deck = Deck::sample();
+        let sid: SlideId = deck.slide_order[0].clone();
+        let mut a = text_element("ca", "t"); a.geometry.width = 20.0; a.geometry.height = 10.0;
+        let mut b = text_element("cb", "t"); b.geometry.x = 80.0; b.geometry.width = 20.0; b.geometry.height = 10.0;
+        let mut g = group_element("cg", vec![a, b]);
+        g.style = ElementStyle::Group(GroupStyle { distribution: GroupDistribution::SpaceBetween, ..Default::default() });
+        deck.slides.get_mut(&sid).unwrap().root.children.push(g);
+        let cmd = MoveElement {
+            target: CanvasTarget::Slide(sid.clone()),
+            element_id: "cb".into(),
+            new_position: Point { x: 200.0, y: 0.0 },
+            previous_position: None,
+        };
+        let out = cmd.apply(&mut deck).unwrap();
+        // Group "cg" width tracks the new span (SpaceBetween pins ends) -> > 100.
+        let g = deck.slides[&sid].find_element("cg").unwrap();
+        assert!(g.geometry.width >= 200.0);
+        // Patches include a width SetStyle for the group.
+        assert!(out.patches.iter().any(|p| matches!(p,
+            Patch::SetStyle { element_id, property, .. } if element_id == "cg" && property == "width")));
     }
 
     #[test]

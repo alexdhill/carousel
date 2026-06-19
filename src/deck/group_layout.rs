@@ -153,10 +153,12 @@ fn shrink_wrap(group: &mut ElementNode, scale: f64) {
 // ancestor_group_ids
 // Inputs: a root node and a target element id.
 // Output: the ids of the target's group ancestors, innermost first. Empty if
-// the element is absent or has no group ancestor. Iterative DFS (no recursion),
-// fixed node ceiling.
+// the element is absent or has no group ancestor. The top-level `root` is the
+// slide's structural container (always a Group) — it is never a user flex
+// group, so it is excluded. Iterative DFS (no recursion), fixed node ceiling.
 fn ancestor_group_ids(root: &ElementNode, element_id: &str) -> Vec<String> {
     const MAX_NODES: usize = 1_000_000;
+    let root_id: &str = &root.id;
     let mut stack: Vec<(&ElementNode, Vec<String>)> = vec![(root, Vec::new())];
     let mut seen: usize = 0;
     while let Some((node, path)) = stack.pop() {
@@ -164,12 +166,17 @@ fn ancestor_group_ids(root: &ElementNode, element_id: &str) -> Vec<String> {
         assert!(seen <= MAX_NODES, "ancestor_group_ids: node ceiling");
         if node.id == element_id {
             let mut chain: Vec<String> = path;
-            chain.reverse(); // innermost first
+            chain.reverse(); // innermost ancestor first
+            // When the anchor is itself a group (e.g. a SetGroupLayout target),
+            // relayout it first, then its ancestors.
+            if node.element_type == ElementType::Group && node.id != root_id {
+                chain.insert(0, node.id.clone());
+            }
             return chain;
         }
         for child in &node.children {
             let mut next: Vec<String> = path.clone();
-            if node.element_type == ElementType::Group {
+            if node.element_type == ElementType::Group && node.id != root_id {
                 next.push(node.id.clone());
             }
             stack.push((child, next));

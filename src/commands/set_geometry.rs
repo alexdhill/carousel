@@ -98,11 +98,12 @@ impl Command for SetGeometryProperty {
         canvas.invalidate_index();
 
         let css_value: String = format_css_value(self.property, self.new_value);
-        let patch: Patch = Patch::SetStyle {
+        let mut patches: Vec<Patch> = vec![Patch::SetStyle {
             element_id: self.element_id.clone(),
             property: self.property.css_property().to_string(),
             value: css_value,
-        };
+        }];
+        patches.extend(crate::commands::relayout_patches(canvas.root_mut(), &self.element_id));
 
         let inverse: SetGeometryProperty = SetGeometryProperty {
             target: self.target.clone(),
@@ -112,7 +113,7 @@ impl Command for SetGeometryProperty {
         };
 
         Ok(CommandOutput {
-            patches: vec![patch],
+            patches,
             inverse: Box::new(inverse),
             dirty_targets: vec![self.target.clone()],
             manifest_dirty: false,
@@ -309,6 +310,31 @@ mod tests {
         };
         let err = cmd.apply(&mut deck).unwrap_err();
         assert!(matches!(err, CommandError::ElementNotFound(id) if id == "no_such"));
+    }
+
+    #[test]
+    fn set_geometry_inside_group_relayouts() {
+        use crate::deck::builders::{group_element, text_element};
+        use crate::deck::element::ElementStyle;
+        use crate::deck::style::{GroupAlignment, GroupStyle};
+        let mut deck = Deck::sample();
+        let sid: SlideId = deck.slide_order[0].clone();
+        let mut a = text_element("ca", "t"); a.geometry.width = 20.0; a.geometry.height = 10.0;
+        let mut b = text_element("cb", "t"); b.geometry.x = 30.0; b.geometry.width = 20.0; b.geometry.height = 10.0;
+        let mut g = group_element("cg", vec![a, b]);
+        g.style = ElementStyle::Group(GroupStyle { alignment: GroupAlignment::Start, ..Default::default() });
+        deck.slides.get_mut(&sid).unwrap().root.children.push(g);
+        let cmd = SetGeometryProperty {
+            target: CanvasTarget::Slide(sid.clone()),
+            element_id: "cb".into(),
+            property: GeometryProperty::Width,
+            new_value: 120.0,
+        };
+        let out = cmd.apply(&mut deck).unwrap();
+        let g = deck.slides[&sid].find_element("cg").unwrap();
+        assert!(g.geometry.width >= 150.0);
+        assert!(out.patches.iter().any(|p| matches!(p,
+            Patch::SetStyle { element_id, property, .. } if element_id == "cg" && property == "width")));
     }
 
     #[test]
