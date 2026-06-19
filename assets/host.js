@@ -1802,6 +1802,14 @@
         const cropStart = (target.dataset.elementType === "image")
             ? window.__crop.fromStyles(decls["background-size"], decls["background-position"])
             : null;
+        // Groups resize by uniform scale (transform), not by box geometry, and
+        // commit via SetGroupScale on drop — entirely client-side. They must NOT
+        // open a resize transaction (ElementResizeStarted) since no
+        // ElementResizeEnded ever closes it; a leftover open transaction would
+        // panic the next undo.
+        const isGroup = target.dataset.elementType === "group";
+        const priorScale = isGroup
+            ? (parseFloat(target.dataset.flexScale || "1") || 1) : 1;
         resizeState = {
             target: target,
             elementId: elementId,
@@ -1812,18 +1820,35 @@
             savedTransform: target.style.transform || "",
             snapTargets: buildSnapTargets(elementId),
             cropStart: cropStart,
+            isGroup: isGroup,
+            priorScale: priorScale,
+            // The grabbed (visual) box is the unscaled box times the prior
+            // scale; map corner drags against it to derive the new scale.
+            visualRect: {
+                x: startRect.x, y: startRect.y,
+                w: startRect.w * priorScale, h: startRect.h * priorScale,
+            },
         };
-        // Clear any optimistic transform from a prior drag so the
-        // resize math operates on the inline left/top/width/height.
-        target.style.transform = "none";
+        if (isGroup) {
+            // Anchor the scale at the box origin so the handle math matches the
+            // visual box. (Rotation, if any, is dropped for the preview only.)
+            // ponytail: scale-only preview; rotated groups re-render correct on commit.
+            target.style.transformOrigin = "0 0";
+        } else {
+            // Clear any optimistic transform from a prior drag so the
+            // resize math operates on the inline left/top/width/height.
+            target.style.transform = "none";
+        }
         document.body.style.userSelect = "none";
 
-        window.__deck.send("Interaction", {
-            kind: "ElementResizeStarted",
-            element_id: elementId,
-            handle: resizeHandleToRustEnum(handle.dataset.handle),
-            position: { x: e.clientX, y: e.clientY },
-        });
+        if (!isGroup) {
+            window.__deck.send("Interaction", {
+                kind: "ElementResizeStarted",
+                element_id: elementId,
+                handle: resizeHandleToRustEnum(handle.dataset.handle),
+                position: { x: e.clientX, y: e.clientY },
+            });
+        }
 
         window.addEventListener("mousemove", onResizeMouseMove);
         window.addEventListener("mouseup", onResizeMouseUp);
@@ -1964,11 +1989,31 @@
     // it optimistically by writing inline left/top/width/height on the
     // shadow-DOM element, refreshes the overlay handles, and posts a
     // throttled ElementResized event.
+    // groupResizeScale — absolute group scale for the current pointer position,
+    // derived from the corner drag against the grabbed visual box (aspect
+    // locked). Floored at 0.01 so the commit's scale-must-be-positive holds.
+    function groupResizeScale(e, scale) {
+        const dx = (e.clientX - resizeState.startMouse.x) / scale;
+        const dy = (e.clientY - resizeState.startMouse.y) / scale;
+        const synthetic = { handle: resizeState.handle, startRect: resizeState.visualRect };
+        const r = computeResizeRect(synthetic, dx, dy, true, false);
+        const f = resizeState.visualRect.w > 0 ? (r.w / resizeState.visualRect.w) : 1;
+        return Math.max(0.01, resizeState.priorScale * f);
+    }
+
     function onResizeMouseMove(e) {
         if (!resizeState) {
             return;
         }
         const scale = getViewportScale();
+        if (resizeState.isGroup) {
+            // Live uniform-scale preview so the group's contents grow/shrink
+            // while dragging instead of snapping on drop.
+            const s = groupResizeScale(e, scale);
+            resizeState.target.style.transform = "scale(" + s + ")";
+            updateSelectionOverlay();
+            return;
+        }
         const dx = (e.clientX - resizeState.startMouse.x) / scale;
         const dy = (e.clientY - resizeState.startMouse.y) / scale;
         const rect = snappedResizeRect(computeResizeRect(
@@ -2055,24 +2100,16 @@
         const scale = getViewportScale();
         const dx = (e.clientX - resizeState.startMouse.x) / scale;
         const dy = (e.clientY - resizeState.startMouse.y) / scale;
-        // Groups scale uniformly: map the corner drag to a SetGroupScale and
-        // let the remount re-bake child positions + the transform.
-        if (resizeState.target.dataset.elementType === "group") {
-            const startW = resizeState.startRect.w;
-            const newRect = snappedResizeRect(computeResizeRect(
-                resizeState, dx, dy, true, false), e, scale, false);
-            const factor = startW > 0 ? (newRect.w / startW) : 1;
-            const prior = parseFloat(resizeState.target.dataset.flexScale || "1") || 1;
+        // Groups scale uniformly: commit the previewed scale via SetGroupScale.
+        // The optimistic transform stays until the remount re-bakes it (avoids a
+        // flash). No transaction was opened, so nothing to close here.
+        if (resizeState.isGroup) {
+            const finalScale = groupResizeScale(e, scale);
             window.__deck.send("Interaction", {
                 kind: "SetGroupScale", element_id: resizeState.elementId,
-                scale: prior * factor,
+                scale: finalScale,
             });
             clearGuides();
-            if (resizeState.savedTransform === "") {
-                resizeState.target.style.removeProperty("transform");
-            } else {
-                resizeState.target.style.transform = resizeState.savedTransform;
-            }
             document.body.style.userSelect = "";
             resizeState = null;
             pendingResize = null;
