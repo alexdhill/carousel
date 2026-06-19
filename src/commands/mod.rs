@@ -20,6 +20,7 @@ pub mod animation;
 pub mod composite;
 pub mod group_commands;
 pub mod group_relayout;
+pub mod group_select;
 pub mod history;
 pub mod insert_element;
 pub mod layout_lifecycle;
@@ -49,6 +50,7 @@ pub use animation::{InsertAnimation, RemoveAnimation, ReorderAnimation, SetAnima
 pub use composite::CompositeCommand;
 pub use group_commands::{SetGroupLayout, SetGroupScale};
 pub use group_relayout::relayout_patches;
+pub use group_select::{DissolveGroup, GroupElements};
 pub use history::{CommandHistory, DEFAULT_HISTORY_DEPTH, HistoryEntry, UndoOutput};
 pub use rename_element::RenameElement;
 pub use reparent_element::ReparentElement;

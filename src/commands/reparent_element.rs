@@ -80,6 +80,18 @@ impl Command for ReparentElement {
             return Err(CommandError::ElementNotFound(self.new_parent_id.clone()));
         }
 
+        // Capture coordinate frames BEFORE mutation so the moved element keeps
+        // its visual position/size when its coordinates switch parent spaces
+        // (each parent's children are stored in that parent's local, scaled
+        // space). Converting here is what makes a drag into/out of a scaled
+        // group not teleport the element; the subsequent relayout shrink-wraps.
+        let move_frame = crate::deck::group_layout::element_frame(canvas.root(), &self.element_id);
+        let np_frame = crate::deck::group_layout::element_frame(canvas.root(), &self.new_parent_id);
+        let old_size: (f64, f64) = canvas
+            .find_element(&self.element_id)
+            .map(|n| (n.geometry.width, n.geometry.height))
+            .unwrap_or((0.0, 0.0));
+
         let RemovedElement {
             node,
             parent_id: old_parent,
@@ -101,6 +113,24 @@ impl Command for ReparentElement {
                     ))
                 }
             })?;
+        // Convert the moved element into its new parent's coordinate space and
+        // re-fit the affected groups. No patches: the command remounts.
+        if let (Some((mx, my, ms_anc, _)), Some((px, py, ps_anc, ps_own))) = (move_frame, np_frame) {
+            let content_scale: f64 = {
+                let c = ps_anc * ps_own;
+                if c.abs() < f64::EPSILON { 1.0 } else { c }
+            };
+            let size_factor: f64 = ms_anc / content_scale;
+            if let Some(n) = canvas.find_element_mut(&self.element_id) {
+                n.geometry.x = (mx - px) / content_scale;
+                n.geometry.y = (my - py) / content_scale;
+                n.geometry.width = old_size.0 * size_factor;
+                n.geometry.height = old_size.1 * size_factor;
+            }
+        }
+        crate::deck::group_layout::relayout_ancestors(canvas.root_mut(), &self.element_id);
+        crate::deck::group_layout::relayout_ancestors(canvas.root_mut(), &old_parent);
+
         canvas.mark_dirty();
         canvas.invalidate_index();
 
@@ -231,6 +261,43 @@ mod tests {
         assert!(group_kids.iter().any(|k| k == "el_a"));
         let root_kids = child_ids(&deck, &"s".into(), "el_root");
         assert!(!root_kids.iter().any(|k| k == "el_a"));
+    }
+
+    #[test]
+    fn reparent_into_group_shrinkwraps_and_preserves_position() {
+        // root -> [ a(200,100,20,10), g(@50,50) -> [ b(0,0,30,30) ] ]
+        let mut a = text_element("el_a", "a");
+        a.geometry.x = 200.0; a.geometry.y = 100.0; a.geometry.width = 20.0; a.geometry.height = 10.0;
+        let mut b = text_element("el_b", "b");
+        b.geometry.width = 30.0; b.geometry.height = 30.0;
+        let mut g = group_element("el_group", vec![b]);
+        g.geometry.x = 50.0; g.geometry.y = 50.0;
+        let root = group_element("el_root", vec![a, g]);
+        let slide = SlideNode::new("s".into(), "t".into(), root);
+        let mut slides: BTreeMap<SlideId, SlideNode> = BTreeMap::new();
+        slides.insert("s".into(), slide);
+        let mut deck: Deck = Deck::default();
+        deck.slides = slides;
+        deck.slide_order = vec!["s".into()];
+
+        ReparentElement {
+            target: CanvasTarget::Slide("s".into()),
+            element_id: "el_a".into(),
+            new_parent_id: "el_group".into(),
+            new_position: 1,
+        }
+        .apply(&mut deck)
+        .unwrap();
+
+        let sid: SlideId = "s".into();
+        let g = deck.slides[&sid].find_element("el_group").unwrap();
+        // bbox of {b(0,0,30,30), a(150,50,20,10)} -> 170 x 60.
+        assert_eq!(g.geometry.width, 170.0);
+        assert_eq!(g.geometry.height, 60.0);
+        assert_eq!(g.geometry.x, 50.0); // origin unchanged (min was 0,0)
+        let a = g.children.iter().find(|c| c.id == "el_a").unwrap();
+        assert_eq!(a.geometry.x, 150.0); // 200 - 50 group origin
+        assert_eq!(a.geometry.y, 50.0);  // 100 - 50
     }
 
     #[test]

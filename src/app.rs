@@ -20,7 +20,7 @@ use crate::bundle::{
 };
 use crate::commands::{
     Command, CommandDispatcher, CompositeCommand, EditorMode, FileAction, GeometryProperty,
-    InsertAnimation, InsertElement, InsertLayout, InsertSlide, InterpretResult, MoveElement,
+    GroupElements, InsertAnimation, InsertElement, InsertLayout, InsertSlide, InterpretResult, MoveElement,
     RemoveAnimation, RemoveElementCommand, RemoveInlineStyle, RemoveSlide, RenameElement, ReparentElement,
     ResizeElement, SetAnimationProperty, SetElementId, SetGeometryProperty, SetGlobalsCss, SetGroupLayout,
     SetGroupScale, SetInlineStyle, SetLayoutName,
@@ -1013,6 +1013,23 @@ impl ApplicationCore {
                     Some(sid) => InterpretResult::Command(Box::new(SetGroupScale {
                         target: CanvasTarget::Slide(sid), element_id, scale,
                     })),
+                    None => InterpretResult::Nothing,
+                }
+            }
+            InteractionEvent::GroupSelectionRequested { element_ids } => {
+                if element_ids.len() < 2 {
+                    return InterpretResult::Nothing;
+                }
+                match self.active_slide.clone() {
+                    Some(sid) => {
+                        let group_id: ElementId = new_element_id();
+                        self.pending_paste_selection = Some(vec![group_id.clone()]);
+                        InterpretResult::Command(Box::new(GroupElements {
+                            target: CanvasTarget::Slide(sid),
+                            group_id,
+                            element_ids,
+                        }))
+                    }
                     None => InterpretResult::Nothing,
                 }
             }

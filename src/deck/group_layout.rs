@@ -185,6 +185,43 @@ fn ancestor_group_ids(root: &ElementNode, element_id: &str) -> Vec<String> {
     Vec::new()
 }
 
+// own_scale — a node's own group scale (1.0 for non-groups).
+fn own_scale(n: &ElementNode) -> f64 {
+    match &n.style {
+        ElementStyle::Group(g) => g.scale,
+        _ => 1.0,
+    }
+}
+
+// element_frame
+// Inputs: root, an element id.
+// Output: Some((abs_x, abs_y, ancestor_scale, own_scale)) where abs_x/abs_y is
+// the element's absolute top-left on the slide, ancestor_scale is the cumulative
+// scale its coordinates are rendered at (product of ancestor group scales), and
+// own_scale is the element's own group scale. None when absent.
+// Used to convert geometry between parent coordinate spaces on reparent.
+// Iterative DFS, fixed node ceiling.
+pub fn element_frame(root: &ElementNode, id: &str) -> Option<(f64, f64, f64, f64)> {
+    const MAX_NODES: usize = 1_000_000;
+    let mut stack: Vec<(&ElementNode, f64, f64, f64)> = vec![(root, 0.0, 0.0, 1.0)];
+    let mut seen: usize = 0;
+    while let Some((n, ox, oy, s)) = stack.pop() {
+        seen += 1;
+        assert!(seen <= MAX_NODES, "element_frame: node ceiling");
+        let abs_x: f64 = ox + n.geometry.x * s;
+        let abs_y: f64 = oy + n.geometry.y * s;
+        let own: f64 = own_scale(n);
+        if n.id == id {
+            return Some((abs_x, abs_y, s, own));
+        }
+        let child_s: f64 = s * own;
+        for c in &n.children {
+            stack.push((c, abs_x, abs_y, child_s));
+        }
+    }
+    None
+}
+
 // relayout_ancestors
 // Inputs: root (mutated), the element whose edit triggered relayout.
 // Output: true if any ancestor group's geometry changed. Relayouts innermost

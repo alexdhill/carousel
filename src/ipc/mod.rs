@@ -441,6 +441,11 @@ pub enum InteractionEvent {
         element_id: ElementId,
         scale: f64,
     },
+    // GroupSelectionRequested — Cmd+Shift+G. Wrap the given sibling elements in
+    // a new group at the top member's z-slot. The Rust side mints the group id.
+    GroupSelectionRequested {
+        element_ids: Vec<ElementId>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default)]

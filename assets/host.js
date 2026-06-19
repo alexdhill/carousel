@@ -5263,6 +5263,18 @@
             // not preventDefault — inputs need their default behavior.
             return;
         }
+        // Cmd+Shift+G / Ctrl+Shift+G — group the current multi-selection.
+        if ((e.metaKey || e.ctrlKey) && e.shiftKey
+                && typeof e.key === "string" && e.key.toLowerCase() === "g") {
+            e.preventDefault();
+            if (currentSelectionIds.length >= 2) {
+                window.__deck.send("Interaction", {
+                    kind: "GroupSelectionRequested",
+                    element_ids: currentSelectionIds.slice(),
+                });
+            }
+            return;
+        }
         // Element/slide clipboard accelerators. Placed AFTER the editable
         // bail so Cmd+C/V inside a text edit or input keeps native behavior.
         const clip = matchClipboardShortcut(e);
