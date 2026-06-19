@@ -22,7 +22,8 @@ use crate::commands::{
     Command, CommandDispatcher, CompositeCommand, EditorMode, FileAction, GeometryProperty,
     InsertAnimation, InsertElement, InsertLayout, InsertSlide, InterpretResult, MoveElement,
     RemoveAnimation, RemoveElementCommand, RemoveInlineStyle, RemoveSlide, RenameElement, ReparentElement,
-    ResizeElement, SetAnimationProperty, SetElementId, SetGeometryProperty, SetGlobalsCss, SetInlineStyle, SetLayoutName,
+    ResizeElement, SetAnimationProperty, SetElementId, SetGeometryProperty, SetGlobalsCss, SetGroupLayout,
+    SetGroupScale, SetInlineStyle, SetLayoutName,
     SetSlideBackground, SetSlideLayout, SetSlideNotes, SetSlideTitle, SetTextContent, SwapTheme,
     TransactionSnapshot,
 };
@@ -993,6 +994,26 @@ impl ApplicationCore {
                         })),
                         None => InterpretResult::Nothing,
                     }
+                }
+            }
+            InteractionEvent::SetGroupLayout { element_id, direction, distribution, alignment } => {
+                match self.active_slide.clone() {
+                    Some(sid) => InterpretResult::Command(Box::new(SetGroupLayout {
+                        target: CanvasTarget::Slide(sid),
+                        element_id,
+                        direction: parse_group_dir_opt(direction.as_deref()),
+                        distribution: parse_group_dist_opt(distribution.as_deref()),
+                        alignment: parse_group_align_opt(alignment.as_deref()),
+                    })),
+                    None => InterpretResult::Nothing,
+                }
+            }
+            InteractionEvent::SetGroupScale { element_id, scale } => {
+                match self.active_slide.clone() {
+                    Some(sid) => InterpretResult::Command(Box::new(SetGroupScale {
+                        target: CanvasTarget::Slide(sid), element_id, scale,
+                    })),
+                    None => InterpretResult::Nothing,
                 }
             }
             InteractionEvent::KeyPressed { ref key, .. } if key == UNDO_KEY => {
@@ -2926,6 +2947,28 @@ fn build_set_text_command(
 
 // interpret_set_element_animation
 // Inputs: the deck (read), editor mode, active slide, target element, the
+// parse_group_dir/dist/align — IPC token → enum (None token → keep via Option).
+fn parse_group_dir_opt(s: Option<&str>) -> Option<crate::deck::style::GroupDirection> {
+    use crate::deck::style::GroupDirection::*;
+    match s { Some("row") => Some(Row), Some("column") => Some(Column), _ => None }
+}
+fn parse_group_dist_opt(s: Option<&str>) -> Option<crate::deck::style::GroupDistribution> {
+    use crate::deck::style::GroupDistribution::*;
+    match s {
+        Some("none") => Some(None), Some("start") => Some(Start), Some("center") => Some(Center),
+        Some("end") => Some(End), Some("space-between") => Some(SpaceBetween),
+        Some("space-around") => Some(SpaceAround), Some("space-evenly") => Some(SpaceEvenly),
+        _ => Option::None,
+    }
+}
+fn parse_group_align_opt(s: Option<&str>) -> Option<crate::deck::style::GroupAlignment> {
+    use crate::deck::style::GroupAlignment::*;
+    match s {
+        Some("none") => Some(None), Some("start") => Some(Start), Some("center") => Some(Center),
+        Some("end") => Some(End), _ => Option::None,
+    }
+}
+
 // category string ("entrance"|"exit"), and the toggle state.
 // Output: an InsertAnimation when enabling an absent animation of that
 // category, a RemoveAnimation when disabling a present one, else Nothing.

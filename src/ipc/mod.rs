@@ -429,6 +429,18 @@ pub enum InteractionEvent {
     SetSlideBackgroundRequested { background: String },
     SetSlideNotesRequested { notes: String },
     SetSlideLayoutRequested { layout_id: LayoutId },
+    // SetGroupLayout — patch a group's flex props (None = leave as-is).
+    SetGroupLayout {
+        element_id: ElementId,
+        #[serde(default)] direction: Option<String>,
+        #[serde(default)] distribution: Option<String>,
+        #[serde(default)] alignment: Option<String>,
+    },
+    // SetGroupScale — set a group's uniform scale.
+    SetGroupScale {
+        element_id: ElementId,
+        scale: f64,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default)]
@@ -941,6 +953,16 @@ mod tests {
         ] {
             let _e: InteractionEvent = serde_json::from_str(raw).unwrap();
         }
+    }
+
+    #[test]
+    fn group_layout_and_scale_events_decode() {
+        let a = r#"{"kind":"SetGroupLayout","element_id":"g","direction":"column","distribution":"space-between","alignment":null}"#;
+        assert!(matches!(serde_json::from_str::<InteractionEvent>(a).unwrap(),
+            InteractionEvent::SetGroupLayout { .. }));
+        let b = r#"{"kind":"SetGroupScale","element_id":"g","scale":1.5}"#;
+        assert!(matches!(serde_json::from_str::<InteractionEvent>(b).unwrap(),
+            InteractionEvent::SetGroupScale { .. }));
     }
 
     #[test]
