@@ -7,6 +7,73 @@
 
 use serde::{Deserialize, Serialize};
 
+// GroupDirection — which axis a group distributes along (main axis).
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum GroupDirection {
+    Row,
+    Column,
+}
+
+// GroupDistribution — main-axis distribution mode. None = manual (keep each
+// child's own main coordinate).
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum GroupDistribution {
+    None,
+    Start,
+    Center,
+    End,
+    SpaceBetween,
+    SpaceAround,
+    SpaceEvenly,
+}
+
+// GroupAlignment — cross-axis alignment. None = manual.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum GroupAlignment {
+    None,
+    Start,
+    Center,
+    End,
+}
+
+// GroupStyle — a group's layout state. `scale` is a uniform multiplier applied
+// at render (transform: scale) and to the on-slide shrink-wrap shift.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct GroupStyle {
+    #[serde(default = "group_dir_default")]
+    pub direction: GroupDirection,
+    #[serde(default = "group_dist_default")]
+    pub distribution: GroupDistribution,
+    #[serde(default = "group_align_default")]
+    pub alignment: GroupAlignment,
+    #[serde(default = "group_scale_default")]
+    pub scale: f64,
+}
+
+fn group_dir_default() -> GroupDirection {
+    GroupDirection::Row
+}
+fn group_dist_default() -> GroupDistribution {
+    GroupDistribution::None
+}
+fn group_align_default() -> GroupAlignment {
+    GroupAlignment::None
+}
+fn group_scale_default() -> f64 {
+    1.0
+}
+
+impl Default for GroupStyle {
+    fn default() -> Self {
+        Self {
+            direction: GroupDirection::Row,
+            distribution: GroupDistribution::None,
+            alignment: GroupAlignment::None,
+            scale: 1.0,
+        }
+    }
+}
+
 // Geometry
 // Position, size, rotation, opacity, z-order. Coordinates in pixels;
 // rotation in radians; opacity in [0,1].
@@ -323,5 +390,29 @@ mod tests {
         assert_json_roundtrip(&ShapeStyle::default());
         assert_json_roundtrip(&MediaStyle::default());
         assert_json_roundtrip(&TableStyle::default());
+    }
+}
+
+#[cfg(test)]
+mod group_style_tests {
+    use super::*;
+    #[test]
+    fn group_style_default_is_row_none_none_unscaled() {
+        let g = GroupStyle::default();
+        assert_eq!(g.direction, GroupDirection::Row);
+        assert_eq!(g.distribution, GroupDistribution::None);
+        assert_eq!(g.alignment, GroupAlignment::None);
+        assert_eq!(g.scale, 1.0);
+    }
+    #[test]
+    fn group_style_serde_roundtrip() {
+        let g = GroupStyle {
+            direction: GroupDirection::Column,
+            distribution: GroupDistribution::SpaceBetween,
+            alignment: GroupAlignment::Center,
+            scale: 1.5,
+        };
+        let j = serde_json::to_string(&g).unwrap();
+        assert_eq!(serde_json::from_str::<GroupStyle>(&j).unwrap(), g);
     }
 }

@@ -115,7 +115,7 @@ pub enum ElementStyle {
     Shape(ShapeStyle),
     Media(MediaStyle),
     Table(TableStyle),
-    Group,
+    Group(GroupStyle),
     Embed,
 }
 
@@ -173,7 +173,7 @@ impl ElementNode {
                 | (ElementType::Shape, ElementStyle::Shape(_), ElementContent::Shape(_))
                 | (ElementType::Media, ElementStyle::Media(_), ElementContent::Media(_))
                 | (ElementType::Table, ElementStyle::Table(_), ElementContent::Table(_))
-                | (ElementType::Group, ElementStyle::Group, ElementContent::Group)
+                | (ElementType::Group, ElementStyle::Group(_), ElementContent::Group)
                 | (ElementType::Embed, ElementStyle::Embed, ElementContent::Embed(_))
         )
     }

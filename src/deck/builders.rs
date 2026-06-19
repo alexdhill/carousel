@@ -98,7 +98,7 @@ pub fn group_element(id: impl Into<ElementId>, children: Vec<ElementNode>) -> El
         id,
         element_type: ElementType::Group,
         geometry: Geometry::default(),
-        style: ElementStyle::Group,
+        style: ElementStyle::Group(crate::deck::style::GroupStyle::default()),
         content: ElementContent::Group,
         children,
         placeholder_fill: None,

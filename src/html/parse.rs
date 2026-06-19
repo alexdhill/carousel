@@ -98,7 +98,7 @@ pub fn parse_slide_fragment(html: &str) -> Result<SlideNode, ParseError> {
         id: root_id,
         element_type: ElementType::Group,
         geometry: Geometry::default(),
-        style: ElementStyle::Group,
+        style: ElementStyle::Group(crate::deck::style::GroupStyle::default()),
         content: ElementContent::Group,
         children,
         placeholder_fill: None,
@@ -256,7 +256,7 @@ fn parse_typed_payload(
         )),
         ElementType::Group => {
             let children: Vec<ElementNode> = parse_element_children(node)?;
-            Ok((ElementStyle::Group, ElementContent::Group, children))
+            Ok((ElementStyle::Group(crate::deck::style::GroupStyle::default()), ElementContent::Group, children))
         }
         ElementType::Embed => {
             let html: String = serialize_inner_html(node)?;

@@ -3333,7 +3333,7 @@ fn default_group_element() -> ElementNode {
             height: 200.0,
             ..Geometry::default()
         },
-        style: ElementStyle::Group,
+        style: ElementStyle::Group(crate::deck::style::GroupStyle::default()),
         content: ElementContent::Group,
         children: vec![],
         placeholder_fill: None,
