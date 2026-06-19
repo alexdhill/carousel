@@ -203,6 +203,27 @@ fn add_content_attrs(node: &ElementNode, attrs: &mut BTreeMap<String, String>) {
         },
         _ => {}
     }
+    if let ElementStyle::Group(gs) = &node.style {
+        attrs.insert("data-flex-dir".into(), group_dir_token(gs.direction).into());
+        attrs.insert("data-flex-dist".into(), group_dist_token(gs.distribution).into());
+        attrs.insert("data-flex-align".into(), group_align_token(gs.alignment).into());
+    }
+}
+
+fn group_dir_token(d: crate::deck::style::GroupDirection) -> &'static str {
+    use crate::deck::style::GroupDirection::*;
+    match d { Row => "row", Column => "column" }
+}
+fn group_dist_token(d: crate::deck::style::GroupDistribution) -> &'static str {
+    use crate::deck::style::GroupDistribution::*;
+    match d {
+        None => "none", Start => "start", Center => "center", End => "end",
+        SpaceBetween => "space-between", SpaceAround => "space-around", SpaceEvenly => "space-evenly",
+    }
+}
+fn group_align_token(a: crate::deck::style::GroupAlignment) -> &'static str {
+    use crate::deck::style::GroupAlignment::*;
+    match a { None => "none", Start => "start", Center => "center", End => "end" }
 }
 
 // write_content
@@ -236,6 +257,18 @@ fn write_content(node: &ElementNode, anim: &AnimMap, out: &mut String) {
 fn build_style(node: &ElementNode, sibling_index: Option<i32>) -> String {
     let mut s: String = String::new();
     write_geom(&node.geometry, &mut s);
+    if let ElementStyle::Group(gs) = &node.style {
+        if gs.scale != 1.0 {
+            // Compose with rotation if present; scale grows from the top-left.
+            let rot: String = if node.geometry.rotation != 0.0 {
+                format!("rotate({}rad) ", node.geometry.rotation)
+            } else {
+                String::new()
+            };
+            decl(&mut s, "transform", &format!("{}scale({})", rot, gs.scale));
+            decl(&mut s, "transform-origin", "0 0");
+        }
+    }
     if let ElementStyle::Text(ts) = &node.style {
         write_text_style(ts, &mut s);
     }
@@ -622,5 +655,32 @@ mod tests {
         assert!(n.inline_styles.is_empty());
         let html = serialize_element(&n);
         assert!(!html.contains("background-color"));
+    }
+}
+
+#[cfg(test)]
+mod group_render_tests {
+    use super::*;
+    use crate::deck::builders::group_element;
+    use crate::deck::element::ElementStyle;
+    use crate::deck::style::{GroupAlignment, GroupDirection, GroupDistribution, GroupStyle};
+
+    #[test]
+    fn group_emits_flex_attrs_and_scale_transform() {
+        let mut g = group_element("g", vec![]);
+        g.geometry.width = 100.0;
+        g.geometry.height = 50.0;
+        g.style = ElementStyle::Group(GroupStyle {
+            direction: GroupDirection::Column,
+            distribution: GroupDistribution::SpaceBetween,
+            alignment: GroupAlignment::Center,
+            scale: 2.0,
+        });
+        let html = serialize_element(&g);
+        assert!(html.contains("data-flex-dir=\"column\""), "{html}");
+        assert!(html.contains("data-flex-dist=\"space-between\""), "{html}");
+        assert!(html.contains("data-flex-align=\"center\""), "{html}");
+        assert!(html.contains("scale(2)"), "{html}");
+        assert!(html.contains("transform-origin:0 0"), "{html}");
     }
 }

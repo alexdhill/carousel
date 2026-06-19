@@ -256,7 +256,18 @@ fn parse_typed_payload(
         )),
         ElementType::Group => {
             let children: Vec<ElementNode> = parse_element_children(node)?;
-            Ok((ElementStyle::Group(crate::deck::style::GroupStyle::default()), ElementContent::Group, children))
+            let ed = node.as_element().ok_or(ParseError::NoElement)?;
+            let a = ed.attributes.borrow();
+            let scale: f64 =
+                parse_scale(style_decls.get("transform").map(String::as_str).unwrap_or(""));
+            let gs = crate::deck::style::GroupStyle {
+                direction: parse_group_dir(a.get("data-flex-dir")),
+                distribution: parse_group_dist(a.get("data-flex-dist")),
+                alignment: parse_group_align(a.get("data-flex-align")),
+                scale,
+            };
+            drop(a);
+            Ok((ElementStyle::Group(gs), ElementContent::Group, children))
         }
         ElementType::Embed => {
             let html: String = serialize_inner_html(node)?;
@@ -291,6 +302,9 @@ fn is_known_attr(key: &str) -> bool {
             | "data-shape"
             | "data-shape-radius"
             | "data-shape-d"
+            | "data-flex-dir"
+            | "data-flex-dist"
+            | "data-flex-align"
             | "class"
             // data-anim-ids is a derived targeting tag emitted by the
             // serializer from the slide timeline; consume (drop) it on read
@@ -379,7 +393,7 @@ fn parse_geometry(map: &BTreeMap<String, String>) -> Geometry {
 // can show and edit it (and so save/load round-trips preserve it).
 fn known_style_keys(element_type: ElementType) -> &'static [&'static str] {
     const GEOMETRY: &[&str] = &[
-        "left", "top", "width", "height", "transform", "opacity", "z-index",
+        "left", "top", "width", "height", "transform", "transform-origin", "opacity", "z-index",
     ];
     const TEXT_EXTRA: &[&str] = &[
         "font-family", "font-size", "font-weight", "font-style",
@@ -402,7 +416,7 @@ fn known_style_keys(element_type: ElementType) -> &'static [&'static str] {
 // Kept as a single const so `known_style_keys` can return a &'static
 // slice without runtime allocation.
 const TEXT_KEYS: &[&str] = &[
-    "left", "top", "width", "height", "transform", "opacity", "z-index",
+    "left", "top", "width", "height", "transform", "transform-origin", "opacity", "z-index",
     "font-family", "font-size", "font-weight", "font-style",
     "color", "text-align", "line-height", "letter-spacing",
 ];
@@ -456,6 +470,35 @@ fn parse_rotation(s: &str) -> f64 {
         .and_then(|caps| caps.get(1))
         .and_then(|m| m.as_str().parse::<f64>().ok())
         .unwrap_or(0.0)
+}
+
+fn parse_scale(s: &str) -> f64 {
+    let re: &Regex = scale_regex();
+    re.captures(s)
+        .and_then(|c| c.get(1))
+        .and_then(|m| m.as_str().parse::<f64>().ok())
+        .unwrap_or(1.0)
+}
+fn scale_regex() -> &'static Regex {
+    static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"scale\(\s*([0-9.]+)\s*\)").unwrap())
+}
+
+fn parse_group_dir(s: Option<&str>) -> crate::deck::style::GroupDirection {
+    use crate::deck::style::GroupDirection::*;
+    match s { Some("column") => Column, _ => Row }
+}
+fn parse_group_dist(s: Option<&str>) -> crate::deck::style::GroupDistribution {
+    use crate::deck::style::GroupDistribution::*;
+    match s {
+        Some("start") => Start, Some("center") => Center, Some("end") => End,
+        Some("space-between") => SpaceBetween, Some("space-around") => SpaceAround,
+        Some("space-evenly") => SpaceEvenly, _ => None,
+    }
+}
+fn parse_group_align(s: Option<&str>) -> crate::deck::style::GroupAlignment {
+    use crate::deck::style::GroupAlignment::*;
+    match s { Some("start") => Start, Some("center") => Center, Some("end") => End, _ => None }
 }
 
 fn parse_text_style(map: &BTreeMap<String, String>) -> TextStyle {
@@ -545,6 +588,35 @@ mod tests {
     use proptest::prelude::*;
 
     // ---------- unit tests: known-input/known-output ("red-black") ----------
+
+    #[test]
+    fn group_roundtrips_flex_props_and_scale() {
+        use crate::deck::builders::group_element;
+        use crate::deck::element::ElementStyle;
+        use crate::deck::style::{GroupAlignment, GroupDirection, GroupDistribution, GroupStyle};
+        let mut g = group_element("g", vec![]);
+        g.geometry.width = 100.0; g.geometry.height = 50.0;
+        g.style = ElementStyle::Group(GroupStyle {
+            direction: GroupDirection::Column,
+            distribution: GroupDistribution::SpaceAround,
+            alignment: GroupAlignment::End,
+            scale: 1.5,
+        });
+        let html = crate::html::serialize::serialize_element(&g);
+        let back = parse_element(&html).unwrap();
+        // The scale transform/origin are model-owned, not free CSS.
+        assert!(!back.inline_styles.contains_key("transform-origin"));
+        assert!(!back.inline_styles.contains_key("transform"));
+        match back.style {
+            ElementStyle::Group(gs) => {
+                assert_eq!(gs.direction, GroupDirection::Column);
+                assert_eq!(gs.distribution, GroupDistribution::SpaceAround);
+                assert_eq!(gs.alignment, GroupAlignment::End);
+                assert_eq!(gs.scale, 1.5);
+            }
+            other => panic!("expected group, got {other:?}"),
+        }
+    }
 
     #[test]
     fn parser_drops_derived_data_anim_ids() {
