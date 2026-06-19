@@ -18,6 +18,7 @@
 
 pub mod animation;
 pub mod composite;
+pub mod group_commands;
 pub mod group_relayout;
 pub mod history;
 pub mod insert_element;
@@ -46,6 +47,7 @@ use tracing::{debug, warn};
 
 pub use animation::{InsertAnimation, RemoveAnimation, ReorderAnimation, SetAnimationProperty};
 pub use composite::CompositeCommand;
+pub use group_commands::{SetGroupLayout, SetGroupScale};
 pub use group_relayout::relayout_patches;
 pub use history::{CommandHistory, DEFAULT_HISTORY_DEPTH, HistoryEntry, UndoOutput};
 pub use rename_element::RenameElement;
