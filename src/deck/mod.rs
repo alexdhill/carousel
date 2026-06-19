@@ -12,6 +12,7 @@ pub mod animation;
 pub mod builders;
 pub mod canvas;
 pub mod element;
+pub mod group_layout;
 pub mod ids;
 pub mod layout;
 pub mod slide;
