@@ -2040,6 +2040,7 @@
     // types; Typography to text only. Shared sections are listed first so
     // switching selection only changes the tail of the pane.
     const ALL_TYPES = ["text", "image", "shape", "media", "group", "table", "embed"];
+    const NON_GROUP_TYPES = ["text", "image", "shape", "media", "table", "embed"];
     const BOXY_TYPES = ["text", "image", "shape", "media"];
     const TEXT_TYPES = ["text"];
 
@@ -2066,7 +2067,7 @@
         {
             id: "transform",
             label: "Transform",
-            appliesTo: ALL_TYPES,
+            appliesTo: NON_GROUP_TYPES,
             fields: [
                 { prop: "x", label: "X", kind: "number", suffix: "px" },
                 { prop: "y", label: "Y", kind: "number", suffix: "px" },
@@ -2120,6 +2121,7 @@
         },
         // Custom sections — collapsible chrome wrapping pre-existing DOM (the
         // Custom CSS form and the Animations panel) rather than field rows.
+        { id: "flexbox", label: "Flexbox", appliesTo: ["group"], custom: "group-flex-section" },
         { id: "custom-css", label: "Custom CSS", appliesTo: ALL_TYPES, custom: "inspector-custom" },
         { id: "animations", label: "Animations", appliesTo: ALL_TYPES, custom: "animations-section" },
     ];
@@ -2678,6 +2680,7 @@
         setElementInspectorVisible(true, type);
         const decls = parseStyleAttr(el.getAttribute("style") || "");
         populateInspector(decls);
+        refreshGroupFlexSection();
         inspectorPending.clear();
     }
 
@@ -4203,6 +4206,65 @@
         if (count) {
             count.textContent = String(mine.length);
         }
+    }
+
+    const FLEX_DIRS = [ { v: "row", t: "Row" }, { v: "column", t: "Column" } ];
+    const FLEX_DISTS = [
+        { v: "none", t: "Manual" }, { v: "start", t: "Start" }, { v: "center", t: "Center" },
+        { v: "end", t: "End" }, { v: "space-between", t: "Between" },
+        { v: "space-around", t: "Around" }, { v: "space-evenly", t: "Evenly" },
+    ];
+    const FLEX_ALIGNS = [
+        { v: "none", t: "Manual" }, { v: "start", t: "Start" },
+        { v: "center", t: "Center" }, { v: "end", t: "End" },
+    ];
+
+    // groupFlexState — read the selected group's current flex props from its DOM
+    // data-attrs (set by the serializer). Returns null when not a single group.
+    function groupFlexState() {
+        if (currentSelectionIds.length !== 1) { return null; }
+        const el = findElement(currentSelectionIds[0]);
+        if (!el || el.dataset.elementType !== "group") { return null; }
+        return {
+            direction: el.dataset.flexDir || "row",
+            distribution: el.dataset.flexDist || "none",
+            alignment: el.dataset.flexAlign || "none",
+        };
+    }
+
+    // flexSelect — a labelled <select> that posts SetGroupLayout on change.
+    function flexSelect(label, opts, current, field) {
+        const row = document.createElement("label");
+        row.className = "anim-bar__field";
+        const span = document.createElement("span");
+        span.textContent = label;
+        const sel = document.createElement("select");
+        opts.forEach(function (o) {
+            const opt = document.createElement("option");
+            opt.value = o.v; opt.textContent = o.t; opt.selected = o.v === current;
+            sel.appendChild(opt);
+        });
+        sel.addEventListener("change", function () {
+            if (currentSelectionIds.length !== 1) { return; }
+            const body = { kind: "SetGroupLayout", element_id: currentSelectionIds[0],
+                direction: null, distribution: null, alignment: null };
+            body[field] = sel.value;
+            window.__deck.send("Interaction", body);
+        });
+        row.append(span, sel);
+        return row;
+    }
+
+    // refreshGroupFlexSection — rebuild #flex-controls from the selected group.
+    function refreshGroupFlexSection() {
+        const host = document.getElementById("flex-controls");
+        if (!host) { return; }
+        host.replaceChildren();
+        const st = groupFlexState();
+        if (!st) { return; }
+        host.appendChild(flexSelect("Direction", FLEX_DIRS, st.direction, "direction"));
+        host.appendChild(flexSelect("Distribute", FLEX_DISTS, st.distribution, "distribution"));
+        host.appendChild(flexSelect("Align", FLEX_ALIGNS, st.alignment, "alignment"));
     }
 
     // buildAnimBar
