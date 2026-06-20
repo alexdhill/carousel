@@ -215,6 +215,17 @@
                 <button type="button" id="crop-reset" class="crop-box__reset">Reset crop</button>
             </section>
 
+            <section id="guide-box" class="inspector__section slide-box">
+                <div class="inspector__section-body">
+                    <div class="inspector__field inspector__field--full">
+                        <label class="inspector__field-label" for="guide-pos">
+                            Position (<span id="guide-pos-label">Y</span>)
+                        </label>
+                        <input type="number" id="guide-pos" class="inspector__input" step="1">
+                    </div>
+                </div>
+            </section>
+
             <form class="inspector__custom" id="inspector-custom" autocomplete="off">
                 <p class="inspector__custom-hint">Add any property not listed above.</p>
                 <div id="inspector-custom-list" class="inspector__decls"></div>

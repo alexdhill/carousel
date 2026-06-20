@@ -1482,6 +1482,93 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     pointer-events: none;
 }
 
+/* ---- rulers & guides (editor-only overlay) ---- */
+.ruler {
+    position: absolute;
+    z-index: 20;
+    pointer-events: auto;
+}
+
+.ruler--top {
+    top: 0;
+    left: 0;
+    border-bottom: 1px solid var(--line);
+    cursor: ns-resize;
+}
+
+.ruler--left {
+    top: 0;
+    left: 0;
+    border-right: 1px solid var(--line);
+    cursor: ew-resize;
+}
+
+.ruler-corner {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 18px;
+    height: 18px;
+    z-index: 21;
+    background: var(--panel);
+    border-right: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    pointer-events: none;
+}
+
+#guide-layer {
+    position: absolute;
+    inset: 0;
+    z-index: 6;
+    pointer-events: none;
+}
+
+/* The guide div IS the visible accent line; a transparent ::before widens the
+   grab/hit area. Selected guides thicken from 1px to 2px. */
+.guide {
+    position: absolute;
+    background: var(--acc);
+    pointer-events: auto;
+    z-index: 1;
+}
+
+.guide::before {
+    content: "";
+    position: absolute;
+}
+
+.guide--h {
+    height: 1px;
+    cursor: ns-resize;
+}
+
+.guide--h::before {
+    left: 0;
+    right: 0;
+    top: -4px;
+    height: 9px;
+}
+
+.guide--v {
+    width: 1px;
+    cursor: ew-resize;
+}
+
+.guide--v::before {
+    top: 0;
+    bottom: 0;
+    left: -4px;
+    width: 9px;
+}
+
+.guide--selected.guide--h {
+    height: 2px;
+}
+
+.guide--selected.guide--v {
+    width: 2px;
+}
+
 .snap-guide--line { background: var(--guide); }
 .snap-guide--space { background: var(--guide); }
 .snap-guide--space-h { height: 1px; }

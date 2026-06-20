@@ -53,6 +53,17 @@
     const ZOOM_MIN = 50;
     const ZOOM_MAX = 250;
     const ZOOM_STEP = 10;
+    // Rulers & guides (editor-only overlay; never serialized / presented /
+    // exported). Guides are session-ephemeral, keyed by slide id. A guide is
+    // { id, orient: "h"|"v", pos } where pos is in slide pixels (0 at the
+    // slide's top-left corner). Horizontal guides come from the top ruler and
+    // move in Y; vertical guides from the left ruler, move in X.
+    let rulersOn = false;
+    const RULER = 18;
+    let guidesBySlide = Object.create(null);
+    let selectedGuideId = null;
+    let guideDragSession = null;
+    let guideSeq = 0;
     // focusChain — group ids the editor has entered (empty = top level). A
     // click resolves to the deepest focused group's child; double-click drills.
     let focusChain = [];
@@ -351,6 +362,8 @@
         if (currentSelectionIds.length > 0) {
             updateSelectionOverlay();
         }
+        refreshRulers();
+        renderRulerGuides();
     }
 
     // setZoomFit / zoomStep
@@ -625,6 +638,386 @@
         return { ox: hr.left - lr.left, oy: hr.top - lr.top, scale: hr.width / 1920 };
     }
 
+    // ---------- rulers & guides ----------
+    // canvasMetrics — map slide pixels to viewport-container-local px, plus the
+    // slide's natural size. screen = origin + slidePx * scale. Null when no
+    // slide is mounted.
+    function canvasMetrics() {
+        const host = currentSlideHost;
+        const stage = document.getElementById("viewport-container");
+        if (!host || !stage) {
+            return null;
+        }
+        const hr = host.getBoundingClientRect();
+        const sr = stage.getBoundingClientRect();
+        const w = host.offsetWidth || 1920;
+        const h = host.offsetHeight || 1080;
+        return {
+            ox: hr.left - sr.left, oy: hr.top - sr.top,
+            scale: hr.width / w, slideW: w, slideH: h,
+            stageW: sr.width, stageH: sr.height,
+        };
+    }
+
+    // ensureRulers — create the two ruler canvases + corner once, wiring the
+    // drag-out-a-guide gesture on each ruler.
+    function ensureRulers() {
+        const stage = document.getElementById("viewport-container");
+        if (!stage || document.getElementById("ruler-top")) {
+            return;
+        }
+        const top = document.createElement("canvas");
+        top.id = "ruler-top";
+        top.className = "ruler ruler--top";
+        top.addEventListener("mousedown", function (e) { startGuideCreate(e, "h"); });
+        const left = document.createElement("canvas");
+        left.id = "ruler-left";
+        left.className = "ruler ruler--left";
+        left.addEventListener("mousedown", function (e) { startGuideCreate(e, "v"); });
+        const corner = document.createElement("div");
+        corner.id = "ruler-corner";
+        corner.className = "ruler-corner";
+        stage.append(top, left, corner);
+    }
+
+    // toggleRulers — Cmd+R.
+    function toggleRulers() {
+        rulersOn = !rulersOn;
+        ensureRulers();
+        refreshRulers();
+    }
+
+    // refreshRulers — show/draw or hide the rulers for the current zoom/slide.
+    function refreshRulers() {
+        const top = document.getElementById("ruler-top");
+        const left = document.getElementById("ruler-left");
+        const corner = document.getElementById("ruler-corner");
+        if (!top || !left || !corner) {
+            return;
+        }
+        const show = rulersOn;
+        top.style.display = show ? "block" : "none";
+        left.style.display = show ? "block" : "none";
+        corner.style.display = show ? "block" : "none";
+        if (!show) {
+            return;
+        }
+        const m = canvasMetrics();
+        if (m) {
+            drawRuler(top, m, "h");
+            drawRuler(left, m, "v");
+        }
+    }
+
+    // rulerStep — slide-px between labelled ticks so labels stay ~64px apart.
+    function rulerStep(scale) {
+        const cands = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000];
+        for (let i = 0; i < cands.length; i++) {
+            if (cands[i] * scale >= 64) {
+                return cands[i];
+            }
+        }
+        return cands[cands.length - 1];
+    }
+
+    // drawRuler — paint ticks/labels in slide pixels onto a ruler canvas.
+    // Only the span that lies over the slide (0..slideDim) gets ticks; the rest
+    // (e.g. when zoomed out) stays blank.
+    function drawRuler(cv, m, orient) {
+        const horiz = orient === "h";
+        const cssW = horiz ? m.stageW : RULER;
+        const cssH = horiz ? RULER : m.stageH;
+        const dpr = window.devicePixelRatio || 1;
+        cv.width = Math.max(1, Math.round(cssW * dpr));
+        cv.height = Math.max(1, Math.round(cssH * dpr));
+        cv.style.width = cssW + "px";
+        cv.style.height = cssH + "px";
+        const ctx = cv.getContext("2d");
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, cssW, cssH);
+        const css = getComputedStyle(document.body);
+        ctx.fillStyle = css.getPropertyValue("--panel") || "#f4f1ea";
+        ctx.fillRect(0, 0, cssW, cssH);
+        const ink = (css.getPropertyValue("--ink3") || "#9a9384").trim();
+        ctx.strokeStyle = ink;
+        ctx.fillStyle = ink;
+        ctx.font = "9px ui-monospace, Menlo, monospace";
+        const step = rulerStep(m.scale);
+        const minor = step / 5;
+        const origin = horiz ? m.ox : m.oy;
+        const slideDim = horiz ? m.slideW : m.slideH;
+        const limit = horiz ? m.stageW : m.stageH;
+        ctx.beginPath();
+        for (let p = 0; p <= slideDim + 0.5; p += minor) {
+            const s = origin + p * m.scale;
+            if (s < RULER - 0.5 || s > limit) {
+                continue;
+            }
+            const major = Math.abs(p % step) < 0.001;
+            const len = major ? RULER : (RULER * 0.4);
+            if (horiz) {
+                ctx.moveTo(s + 0.5, RULER); ctx.lineTo(s + 0.5, RULER - len);
+            } else {
+                ctx.moveTo(RULER, s + 0.5); ctx.lineTo(RULER - len, s + 0.5);
+            }
+            if (major) {
+                drawRulerLabel(ctx, Math.round(p), s, horiz);
+            }
+        }
+        ctx.stroke();
+    }
+
+    function drawRulerLabel(ctx, value, s, horiz) {
+        const txt = String(value);
+        if (horiz) {
+            ctx.fillText(txt, s + 2, 8);
+        } else {
+            ctx.save();
+            ctx.translate(8, s - 2);
+            ctx.rotate(-Math.PI / 2);
+            ctx.fillText(txt, 0, 0);
+            ctx.restore();
+        }
+    }
+
+    // ---- guides ----
+    function ensureGuideOverlay() {
+        const stage = document.getElementById("viewport-container");
+        if (!stage) {
+            return null;
+        }
+        let layer = document.getElementById("guide-layer");
+        if (!layer) {
+            layer = document.createElement("div");
+            layer.id = "guide-layer";
+            stage.appendChild(layer);
+        }
+        return layer;
+    }
+
+    function currentGuides() {
+        const sid = activeSlideId;
+        if (!sid) {
+            return [];
+        }
+        if (!guidesBySlide[sid]) {
+            guidesBySlide[sid] = [];
+        }
+        return guidesBySlide[sid];
+    }
+
+    // renderRulerGuides — redraw all ruler-pulled guides for the active slide
+    // at the current zoom. (Distinct from the snap engine's renderGuides.)
+    function renderRulerGuides() {
+        const layer = ensureGuideOverlay();
+        if (!layer) {
+            return;
+        }
+        layer.replaceChildren();
+        const m = canvasMetrics();
+        if (!m) {
+            return;
+        }
+        const guides = currentGuides();
+        for (let i = 0; i < guides.length && i < 512; i++) {
+            layer.appendChild(buildGuideLine(guides[i], m));
+        }
+    }
+
+    function buildGuideLine(g, m) {
+        const line = document.createElement("div");
+        line.className = "guide";
+        if (g.id === selectedGuideId) {
+            line.classList.add("guide--selected");
+        }
+        line.dataset.guideId = g.id;
+        if (g.orient === "h") {
+            line.classList.add("guide--h");
+            line.style.top = (m.oy + g.pos * m.scale) + "px";
+            line.style.left = m.ox + "px";
+            line.style.width = (m.slideW * m.scale) + "px";
+        } else {
+            line.classList.add("guide--v");
+            line.style.left = (m.ox + g.pos * m.scale) + "px";
+            line.style.top = m.oy + "px";
+            line.style.height = (m.slideH * m.scale) + "px";
+        }
+        line.addEventListener("mousedown", function (e) { startGuideDrag(e, g); });
+        return line;
+    }
+
+    // pointerToSlide — slide-pixel coordinate of a pointer event along an axis.
+    function pointerToSlide(e, orient, m) {
+        const sr = document.getElementById("viewport-container").getBoundingClientRect();
+        if (orient === "h") {
+            return Math.round((e.clientY - sr.top - m.oy) / m.scale);
+        }
+        return Math.round((e.clientX - sr.left - m.ox) / m.scale);
+    }
+
+    function clampGuidePos(orient, pos, m) {
+        const max = (orient === "h") ? m.slideH : m.slideW;
+        return Math.max(0, Math.min(max, pos));
+    }
+
+    // overRuler — is the pointer over the ruler the given orientation drags from
+    // (top ruler for h-guides, left ruler for v-guides)? Used to delete-on-drop.
+    function overRuler(e, orient) {
+        const sr = document.getElementById("viewport-container").getBoundingClientRect();
+        if (orient === "h") {
+            return (e.clientY - sr.top) < RULER;
+        }
+        return (e.clientX - sr.left) < RULER;
+    }
+
+    // startGuideCreate — drag a new guide out of a ruler. It lives only once the
+    // pointer leaves the ruler band; releasing back on the ruler discards it.
+    function startGuideCreate(e, orient) {
+        if (!rulersOn || e.button !== 0) {
+            return;
+        }
+        const m = canvasMetrics();
+        if (!m) {
+            return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        const g = { id: "g" + (++guideSeq), orient: orient, pos: clampGuidePos(orient, pointerToSlide(e, orient, m), m) };
+        currentGuides().push(g);
+        selectedGuideId = g.id;
+        renderRulerGuides();
+        showGuideInspector();
+        beginGuideSession(g, orient, true);
+    }
+
+    // startGuideDrag — move (or delete) an existing guide.
+    function startGuideDrag(e, g) {
+        if (e.button !== 0) {
+            return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        selectGuide(g.id);
+        beginGuideSession(g, g.orient, false);
+    }
+
+    // beginGuideSession — shared move loop for create + drag, with its own
+    // listeners so it never tangles with element dragging.
+    function beginGuideSession(g, orient, isCreate) {
+        guideDragSession = { g: g, orient: orient, isCreate: isCreate };
+        const move = function (ev) {
+            const m = canvasMetrics();
+            if (!m) {
+                return;
+            }
+            g.pos = clampGuidePos(orient, pointerToSlide(ev, orient, m), m);
+            renderRulerGuides();
+            showGuideInspector();
+        };
+        const up = function (ev) {
+            window.removeEventListener("mousemove", move);
+            window.removeEventListener("mouseup", up);
+            guideDragSession = null;
+            if (overRuler(ev, orient)) {
+                deleteGuide(g.id);
+            }
+        };
+        window.addEventListener("mousemove", move);
+        window.addEventListener("mouseup", up);
+    }
+
+    function selectGuide(id) {
+        selectedGuideId = id;
+        // A guide selection is not an element selection — clear any element
+        // selection (and slide focus) so only the guide reads as selected.
+        slideSelected = false;
+        if (currentSelectionIds.length > 0) {
+            window.__deck.send("Interaction", { kind: "SetSelectionFromPanel", element_ids: [] });
+        }
+        renderRulerGuides();
+        refreshInspector();
+    }
+
+    function deselectGuide() {
+        if (selectedGuideId === null) {
+            return;
+        }
+        selectedGuideId = null;
+        renderRulerGuides();
+        hideGuideInspector();
+    }
+
+    function deleteGuide(id) {
+        const guides = currentGuides();
+        const idx = guides.findIndex(function (x) { return x.id === id; });
+        if (idx >= 0) {
+            guides.splice(idx, 1);
+        }
+        if (selectedGuideId === id) {
+            selectedGuideId = null;
+            hideGuideInspector();
+        }
+        renderRulerGuides();
+    }
+
+    // showGuideInspector / hideGuideInspector — the selected guide's only
+    // editable property is its position (px along its axis).
+    function showGuideInspector() {
+        const box = document.getElementById("guide-box");
+        if (!box) {
+            return;
+        }
+        const g = currentGuides().find(function (x) { return x.id === selectedGuideId; });
+        if (!g) {
+            hideGuideInspector();
+            return;
+        }
+        setSlideBoxVisible(false);
+        setElementInspectorVisible(false, null);
+        box.style.display = "block";
+        const sub = document.getElementById("inspector-target");
+        if (sub) {
+            sub.textContent = (g.orient === "h" ? "Horizontal" : "Vertical") + " guide";
+        }
+        const lbl = document.getElementById("guide-pos-label");
+        if (lbl) {
+            lbl.textContent = (g.orient === "h") ? "Y" : "X";
+        }
+        const input = document.getElementById("guide-pos");
+        if (input && document.activeElement !== input) {
+            input.value = String(g.pos);
+        }
+    }
+
+    function hideGuideInspector() {
+        const box = document.getElementById("guide-box");
+        if (box) {
+            box.style.display = "none";
+        }
+    }
+
+    // wireGuideInspector — commit the position field to the selected guide.
+    function wireGuideInspector() {
+        const input = document.getElementById("guide-pos");
+        if (!input) {
+            return;
+        }
+        input.addEventListener("change", function () {
+            const g = currentGuides().find(function (x) { return x.id === selectedGuideId; });
+            if (!g) {
+                return;
+            }
+            const m = canvasMetrics();
+            let v = parseInt(input.value, 10);
+            if (!isFinite(v)) {
+                v = g.pos;
+            }
+            g.pos = m ? clampGuidePos(g.orient, v, m) : Math.max(0, v);
+            input.value = String(g.pos);
+            renderRulerGuides();
+        });
+    }
+
     // drawAlignLine
     // Inputs: the layer, an align/center guide { axis, pos }, the mapping.
     // Output: side-effect; one full-length 1px line over the slide surface.
@@ -720,7 +1113,18 @@
                 }
             }
         }
-        return window.__snap.__build_targets(rects);
+        const targets = window.__snap.__build_targets(rects);
+        // Ruler guides are snap targets too: vertical guides add an x line,
+        // horizontal guides add a y line.
+        const guides = currentGuides();
+        for (let g = 0; g < guides.length; g++) {
+            if (guides[g].orient === "v") {
+                targets.xLines.push({ pos: guides[g].pos, source: "guide" });
+            } else {
+                targets.yLines.push({ pos: guides[g].pos, source: "guide" });
+            }
+        }
+        return targets;
     }
 
     // movingRectFromStyle
@@ -1459,8 +1863,9 @@
             commitTextEdit();
         }
         // Any canvas press is element-level focus, never a slide selection —
-        // including a background click, which deselects everything.
+        // including a background click, which deselects everything (guides too).
         slideSelected = false;
+        deselectGuide();
         // A press in the canvas area but outside the slide deselects, just
         // like clicking the slide's own background. The handler is bound to
         // #viewport-container, so this never fires for the side panels.
@@ -1725,6 +2130,11 @@
             // affected slide only.
             updateThumbnailHtml(payload.slide_id, payload.slide_html, payload.theme_css);
             highlightActiveThumbnail(payload.slide_id);
+            // Guides belong to a slide; a switch deselects any guide and redraws
+            // for the newly active slide.
+            selectedGuideId = null;
+            refreshRulers();
+            renderRulerGuides();
         },
         ApplyPatch: function (payload) {
             applyPatch(payload);
@@ -1738,9 +2148,13 @@
                 ? payload.element_ids
                 : [];
             currentSelectionIds = ids.slice();
-            // An element selection is never also a slide selection.
+            // An element selection is never also a slide or guide selection.
             if (currentSelectionIds.length > 0) {
                 slideSelected = false;
+                if (selectedGuideId !== null) {
+                    selectedGuideId = null;
+                    renderRulerGuides();
+                }
             }
             updateSelectionOverlay();
             refreshInspector();
@@ -2888,6 +3302,13 @@
             return;
         }
         refreshCropBox();
+        // A selected guide owns the inspector (position only).
+        if (selectedGuideId !== null) {
+            clearInspectorInputs();
+            showGuideInspector();
+            return;
+        }
+        hideGuideInspector();
         // No selection: in slide mode the pane targets the slide (Slide box);
         // otherwise (layout mode) just blank the element controls.
         if (currentSelectionIds.length === 0) {
@@ -3856,6 +4277,13 @@
         const items = (payload && Array.isArray(payload[spec.listKey]))
             ? payload[spec.listKey]
             : [];
+        // Slide count badge in the thumbnails header.
+        if (kind === "slide") {
+            const badge = document.getElementById("thumbs-count");
+            if (badge) {
+                badge.textContent = String(items.length);
+            }
+        }
         // Seed / refresh the HTML cache from the payload.
         for (let i = 0; i < items.length; i++) {
             const entry = items[i];
@@ -4399,11 +4827,16 @@
         window.addEventListener("mousemove", onMouseMove);
         window.addEventListener("mouseup", onMouseUp);
         window.addEventListener("resize", function () {
-            // In fit mode the scale tracks the pane width.
+            // In fit mode the scale tracks the pane width (applyZoom also
+            // redraws rulers + guides).
             if (zoomMode === "fit") {
                 applyZoom();
-            } else if (currentSelectionIds.length > 0) {
-                updateSelectionOverlay();
+            } else {
+                if (currentSelectionIds.length > 0) {
+                    updateSelectionOverlay();
+                }
+                refreshRulers();
+                renderRulerGuides();
             }
         });
         // Suppress the window-level default drop behavior (which would
@@ -4425,6 +4858,7 @@
             });
         }
         bindCropInspectorControls();
+        wireGuideInspector();
         buildInspectorSections();
         refreshInspector();
         wireObjectsToolbar();
@@ -5659,6 +6093,20 @@
         if (e.key === "Escape" && focusChain.length > 0 && !textEditState) {
             focusChain = [];
             updateSelectionOverlay();
+            return;
+        }
+        // Delete the selected guide (before the element-delete path forwards it).
+        if (selectedGuideId !== null && !isEditableFocus()
+            && (e.key === "Backspace" || e.key === "Delete")) {
+            e.preventDefault();
+            deleteGuide(selectedGuideId);
+            return;
+        }
+        // Cmd/Ctrl+R toggles rulers (preventDefault: the host would reload).
+        if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey
+            && typeof e.key === "string" && e.key.toLowerCase() === "r") {
+            e.preventDefault();
+            toggleRulers();
             return;
         }
         // Zoom: Cmd/Ctrl with +/- steps by 10%, Cmd/Ctrl+0 fits to pane.
