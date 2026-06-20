@@ -83,6 +83,19 @@ body {
     gap: var(--gap);
 }
 
+/* Pane resize dividers — absolutely positioned over the inter-pane gutters by
+   JS (positionDividers). The element is the hit area; ::before is the thin
+   accent line shown on hover/drag. Hidden until JS gives them a box. */
+.divider {
+    position: absolute;
+    z-index: 50;
+    display: none;
+}
+
+.divider--col { cursor: col-resize; }
+.divider--row { cursor: row-resize; }
+
+
 /* ===================== Shared chrome utilities ===================== */
 
 button {

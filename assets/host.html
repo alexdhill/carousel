@@ -320,6 +320,12 @@
         <nav id="thumbnail-row" class="thumbs-strip" aria-label="Slides"></nav>
     </div>
 
+    <!-- Pane resize dividers: absolutely positioned over the gutters, placed by
+         JS (positionDividers). Session-only sizing; see resizable-panes spec. -->
+    <div id="divider-objects" class="divider divider--col" aria-hidden="true"></div>
+    <div id="divider-inspector" class="divider divider--col" aria-hidden="true"></div>
+    <div id="divider-thumbs" class="divider divider--row" aria-hidden="true"></div>
+
     <div id="toast-stack" aria-live="polite"></div>
     <script>__CROP_JS__</script>
     <script>__SNAP_JS__</script>

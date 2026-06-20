@@ -99,6 +99,15 @@
     const DRAG_THRESHOLD = 3;
     const MAX_BATCH_ITER = 100000;
     const PENDING_TRANSFORM_TIMEOUT_MS = 200;
+    // Resizable panes (session-only). Canvas floor captured once at launch =
+    // its size in the default spawn window; panes may grow only into the spare
+    // room a larger window provides. Mins are the CSS defaults; fixed maxes are
+    // 750 (side panes) / 500 (thumbs). See resizable-panes spec.
+    let canvasMinW = 0;
+    let canvasMinH = 0;
+    const PANE_MIN = { objects: 240, inspector: 300, thumbs: 160 };
+    const PANE_MAX = { objects: 750, inspector: 750, thumbs: 500 };
+    let paneDragSession = null;
     // assetBlobCache: asset_id -> { url: blob URL, media_type } so the
     // slide's CSS custom properties can resolve to image URLs.
     // assetVarStyleEl: the <style> node injected into the active shadow
@@ -1016,6 +1025,160 @@
             input.value = String(g.pos);
             renderRulerGuides();
         });
+    }
+
+    // ---------- resizable panes ----------
+    // captureCanvasMin — record the canvas content size at launch (the default
+    // spawn window). This is the floor pane growth may not push the canvas
+    // below. Captured once.
+    function captureCanvasMin() {
+        if (canvasMinW > 0) {
+            return;
+        }
+        const canvas = document.querySelector(".panel--canvas");
+        if (!canvas) {
+            return;
+        }
+        const r = canvas.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) {
+            canvasMinW = r.width;
+            canvasMinH = r.height;
+        }
+    }
+
+    // positionDividers — lay the three hit strips over the inter-pane gutters,
+    // tracking the live pane rects. Coordinates are body-relative (body is the
+    // fixed positioning context).
+    function positionDividers() {
+        const objects = document.getElementById("object-panel");
+        const inspector = document.getElementById("inspector-panel");
+        const thumbs = document.querySelector(".panel--thumbs");
+        const dObj = document.getElementById("divider-objects");
+        const dIns = document.getElementById("divider-inspector");
+        const dThu = document.getElementById("divider-thumbs");
+        if (!objects || !inspector || !thumbs || !dObj || !dIns || !dThu) {
+            return;
+        }
+        const gut = 11;
+        const place = function (el, left, top, w, h) {
+            el.style.display = "block";
+            el.style.left = left + "px";
+            el.style.top = top + "px";
+            el.style.width = w + "px";
+            el.style.height = h + "px";
+        };
+        const o = objects.getBoundingClientRect();
+        const ins = inspector.getBoundingClientRect();
+        const th = thumbs.getBoundingClientRect();
+        place(dObj, o.right - gut / 2, o.top, gut, o.height);
+        place(dIns, ins.left - gut / 2, ins.top, gut, ins.height);
+        place(dThu, th.left, th.top - gut / 2, th.width, gut);
+    }
+
+    // refitThumbnails — size every thumbnail preview to fill the thumbs pane
+    // height (margins unchanged), then refit each slide mount to its new box.
+    function refitThumbnails() {
+        const strip = document.getElementById("thumbnail-row");
+        if (!strip) {
+            return;
+        }
+        const cs = getComputedStyle(strip);
+        const padV = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+        const cap = strip.querySelector(".thumb__caption");
+        const capH = cap ? cap.offsetHeight : 16;
+        const gap = 6; // .thumb column gap (preview ↔ caption)
+        let ph = strip.clientHeight - padV - capH - gap;
+        if (!(ph > 0)) {
+            return;
+        }
+        const aspect = (thumbnailDims.width || 1920) / (thumbnailDims.height || 1080);
+        const pw = Math.round(ph * aspect);
+        ph = Math.round(ph);
+        const boxes = strip.querySelectorAll(".thumb__preview, .thumb__add-glyph");
+        for (let i = 0; i < boxes.length; i++) {
+            boxes[i].style.width = pw + "px";
+            boxes[i].style.height = ph + "px";
+        }
+        const previews = strip.querySelectorAll(".thumb__preview");
+        for (let i = 0; i < previews.length; i++) {
+            const mount = previews[i].querySelector(".thumb__mount");
+            if (mount) {
+                applyThumbnailScale(previews[i], mount);
+            }
+        }
+    }
+
+    // wirePaneResizers — bind the three dividers.
+    function wirePaneResizers() {
+        const map = {
+            "divider-objects": "objects",
+            "divider-inspector": "inspector",
+            "divider-thumbs": "thumbs",
+        };
+        Object.keys(map).forEach(function (id) {
+            const el = document.getElementById(id);
+            if (el) {
+                el.addEventListener("mousedown", function (e) { beginPaneDrag(e, map[id], el); });
+            }
+        });
+        positionDividers();
+    }
+
+    // beginPaneDrag — drag one divider. Recomputes the clamp from live rects on
+    // every move so a pane grows only into the canvas's spare room (zero at the
+    // spawn window), capped at its fixed max, and never below its default min.
+    function beginPaneDrag(e, kind, el) {
+        if (e.button !== 0) {
+            return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        captureCanvasMin();
+        el.classList.add("is-dragging");
+        const move = function (ev) {
+            applyPaneSize(kind, ev);
+            positionDividers();
+        };
+        const up = function () {
+            window.removeEventListener("mousemove", move);
+            window.removeEventListener("mouseup", up);
+            el.classList.remove("is-dragging");
+        };
+        window.addEventListener("mousemove", move);
+        window.addEventListener("mouseup", up);
+    }
+
+    function applyPaneSize(kind, ev) {
+        const canvas = document.querySelector(".panel--canvas");
+        if (!canvas) {
+            return;
+        }
+        const cr = canvas.getBoundingClientRect();
+        if (kind === "thumbs") {
+            const thumbs = document.querySelector(".panel--thumbs");
+            const cur = thumbs.getBoundingClientRect();
+            const desired = cur.bottom - ev.clientY;
+            const max = Math.min(PANE_MAX.thumbs, cur.height + (cr.height - canvasMinH));
+            const h = Math.max(PANE_MIN.thumbs, Math.min(desired, max));
+            thumbs.style.height = h + "px";
+            refitThumbnails();
+        } else {
+            const isObj = kind === "objects";
+            const pane = document.getElementById(isObj ? "object-panel" : "inspector-panel");
+            const cur = pane.getBoundingClientRect();
+            const desired = isObj ? (ev.clientX - cur.left) : (cur.right - ev.clientX);
+            const max = Math.min(PANE_MAX[kind], cur.width + (cr.width - canvasMinW));
+            const w = Math.max(PANE_MIN[kind], Math.min(desired, max));
+            pane.style.width = w + "px";
+        }
+        // Keep overlays aligned with the reflowed canvas.
+        if (zoomMode === "fit") {
+            applyZoom();
+        } else {
+            refreshRulers();
+            renderRulerGuides();
+            updateSelectionOverlay();
+        }
     }
 
     // drawAlignLine
@@ -4310,6 +4473,7 @@
         }
         row.appendChild(buildAddTile(spec));
         updateSlideFocusState();
+        refitThumbnails();
         scrollActiveThumbnailIntoView();
     }
 
@@ -4838,6 +5002,8 @@
                 refreshRulers();
                 renderRulerGuides();
             }
+            positionDividers();
+            refitThumbnails();
         });
         // Suppress the window-level default drop behavior (which would
         // navigate away to the dropped file) outside the viewport.
@@ -4864,7 +5030,15 @@
         wireObjectsToolbar();
         wireLayoutEditorControls();
         wireAnimationsSection();
+        wirePaneResizers();
         renderObjectPanel(null);
+        // Capture the canvas floor + place dividers after first layout (the
+        // window is at its default spawn size here).
+        window.requestAnimationFrame(function () {
+            captureCanvasMin();
+            positionDividers();
+            refitThumbnails();
+        });
         window.__deck.send("Ready", null);
     });
 
