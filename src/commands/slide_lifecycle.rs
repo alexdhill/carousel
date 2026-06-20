@@ -153,6 +153,7 @@ impl Command for RemoveSlide {
                 notes_ref: None,
                 animations: Vec::new(),
                 background: None,
+                background_image: None,
                 notes: None,
             }
         };
@@ -209,6 +210,7 @@ mod tests {
             notes_ref: None,
             animations: Vec::new(),
             background: None,
+            background_image: None,
             notes: None,
         }
     }

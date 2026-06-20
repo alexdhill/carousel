@@ -39,6 +39,12 @@
     let pendingDrag = null;
     let dragRafScheduled = false;
     let currentSelectionIds = [];
+    // slideSelected — true only when the slide itself is the selection (an
+    // explicit thumbnail click), distinct from "nothing selected". Clicking
+    // negative space (slide background, around the thumbnails) leaves both this
+    // and the element selection empty, so nothing is highlighted. Managed by the
+    // click handlers, NOT inferred from an empty element selection.
+    let slideSelected = false;
     // focusChain — group ids the editor has entered (empty = top level). A
     // click resolves to the deepest focused group's child; double-click drills.
     let focusChain = [];
@@ -103,6 +109,9 @@
     // The active slide's inspector data (from SlideInspectorUpdate); rendered in
     // the Slide box when nothing is selected in slide mode.
     let slideInspectorData = null;
+    // The active layout's background (from LayoutListUpdate); feeds the Slide
+    // box's Fill/Image controls when editing a layout in layout mode.
+    let layoutBgData = null;
 
     // ---------- envelope id ----------
     function newId() {
@@ -1362,6 +1371,9 @@
             }
             commitTextEdit();
         }
+        // Any canvas press is element-level focus, never a slide selection —
+        // including a background click, which deselects everything.
+        slideSelected = false;
         // A press in the canvas area but outside the slide deselects, just
         // like clicking the slide's own background. The handler is bound to
         // #viewport-container, so this never fires for the side panels.
@@ -1639,9 +1651,14 @@
                 ? payload.element_ids
                 : [];
             currentSelectionIds = ids.slice();
+            // An element selection is never also a slide selection.
+            if (currentSelectionIds.length > 0) {
+                slideSelected = false;
+            }
             updateSelectionOverlay();
             refreshInspector();
             updateObjectPanelSelection();
+            updateSlideFocusState();
             refreshAnimationsSection();
         },
         ObjectTreeUpdate: function (payload) {
@@ -1652,6 +1669,20 @@
         },
         LayoutListUpdate: function (payload) {
             renderThumbnailRow(payload, "layout");
+            // Cache the active layout's background so the Slide box can show its
+            // Fill/Image controls in layout mode.
+            layoutBgData = null;
+            if (payload && Array.isArray(payload.layouts)) {
+                for (let i = 0; i < payload.layouts.length; i++) {
+                    if (payload.layouts[i].layout_id === payload.active_layout_id) {
+                        layoutBgData = payload.layouts[i];
+                        break;
+                    }
+                }
+            }
+            if (currentMode === "layout" && currentSelectionIds.length === 0) {
+                refreshInspector();
+            }
             // Keep the globals textarea in sync with the committed value.
             if (payload && typeof payload.globals_css === "string") {
                 currentGlobalsCss = payload.globals_css;
@@ -2774,12 +2805,13 @@
         if (currentSelectionIds.length === 0) {
             clearInspectorInputs();
             const slideMode = currentMode === "slide";
-            subtitle.textContent = slideMode ? "Slide" : "No selection";
-            setSlideBoxVisible(slideMode);
+            // Both modes show the Slide box with no selection: slide mode edits
+            // the active slide; layout mode edits the active layout's theme
+            // background (only the Fill/Image controls — slide-only fields hide).
+            subtitle.textContent = slideMode ? "Slide" : "Layout";
+            setSlideBoxVisible(true);
             setElementInspectorVisible(false, null);
-            if (slideMode) {
-                renderSlideBox();
-            }
+            renderSlideBox();
             return;
         }
         setSlideBoxVisible(false);
@@ -2844,7 +2876,7 @@
     function setSlideBoxVisible(show) {
         const el = document.getElementById("slide-box");
         if (el) {
-            el.style.display = show ? "flex" : "none";
+            el.style.display = show ? "block" : "none";
         }
     }
 
@@ -2854,7 +2886,21 @@
     // SlideInspectorUpdate and (once) wires their commit handlers.
     function renderSlideBox() {
         wireSlideBox();
-        const data = slideInspectorData;
+        const layoutMode = currentMode === "layout";
+        // Background source: the active layout in layout mode, the active slide
+        // otherwise. Slide-only fields (title/layout/notes) hide in layout mode.
+        const data = layoutMode ? layoutBgData : slideInspectorData;
+        const box = document.getElementById("slide-box");
+        if (box) {
+            const slideOnly = box.querySelectorAll("[data-slide-only]");
+            for (let i = 0; i < slideOnly.length; i++) {
+                slideOnly[i].hidden = layoutMode;
+            }
+            const header = document.getElementById("slide-box-header");
+            if (header) {
+                header.firstChild.textContent = layoutMode ? "Layout " : "Slide ";
+            }
+        }
         const bg = document.getElementById("slide-bg");
         const layout = document.getElementById("slide-layout");
         const title = document.getElementById("slide-title");
@@ -2867,6 +2913,28 @@
         }
         if (notes && document.activeElement !== notes) {
             notes.value = (data && data.notes) || "";
+        }
+        // Background-image well: show a thumbnail of the current image (resolved
+        // from the asset blob cache via its var(--asset-<id>) id) and toggle the
+        // clear button.
+        const bgImgPick = document.getElementById("slide-bg-image");
+        const bgImgClear = document.getElementById("slide-bg-image-clear");
+        if (bgImgPick) {
+            const raw = (data && data.background_image) || "";
+            const m = /var\(--asset-([^)]+)\)/.exec(raw);
+            const url = m ? cropImageUrl(m[1]) : "";
+            if (url) {
+                bgImgPick.style.backgroundImage = "url(\"" + url + "\")";
+                bgImgPick.textContent = "";
+                bgImgPick.dataset.hasImage = "1";
+            } else {
+                bgImgPick.style.backgroundImage = "";
+                bgImgPick.textContent = "Choose…";
+                delete bgImgPick.dataset.hasImage;
+            }
+            if (bgImgClear) {
+                bgImgClear.hidden = !url;
+            }
         }
         if (layout && document.activeElement !== layout) {
             const layouts = (data && data.layouts) || [];
@@ -2895,12 +2963,48 @@
             return;
         }
         box.dataset.wired = "1";
-        const bg = document.getElementById("slide-bg");
-        if (bg) {
-            bg.addEventListener("change", function () {
-                window.__deck.send("Interaction", {
-                    kind: "SetSlideBackgroundRequested", background: bg.value,
-                });
+        // Collapse toggle, matching the inspector sections.
+        const header = document.getElementById("slide-box-header");
+        if (header) {
+            header.addEventListener("click", function () {
+                const collapsed = box.dataset.collapsed === "true";
+                box.dataset.collapsed = collapsed ? "false" : "true";
+            });
+        }
+        // Mount the custom color control (chromeless swatch + hex) in place
+        // of a raw <input type=color>; id "slide-bg" so render/commit below
+        // find it. It exposes a synthetic .value + a "change" event.
+        const mount = document.getElementById("slide-bg-mount");
+        const bg = makeColorControl();
+        bg.id = "slide-bg";
+        if (mount) {
+            mount.appendChild(bg);
+        }
+        bg.addEventListener("change", function () {
+            window.__deck.send("Interaction", {
+                kind: "SetSlideBackgroundRequested", background: bg.value,
+            });
+        });
+        // Background-image well: pick imports the file as the slide bg, clear
+        // resets it. Both target the active slide (Rust supplies the id).
+        const bgImgPick = document.getElementById("slide-bg-image");
+        const bgImgFile = document.getElementById("slide-bg-image-file");
+        const bgImgClear = document.getElementById("slide-bg-image-clear");
+        if (bgImgPick && bgImgFile) {
+            bgImgPick.addEventListener("click", function () {
+                bgImgFile.click();
+            });
+            bgImgFile.addEventListener("change", function () {
+                const file = bgImgFile.files && bgImgFile.files[0];
+                if (file) {
+                    importImageFile(file, null, true);
+                }
+                bgImgFile.value = "";
+            });
+        }
+        if (bgImgClear) {
+            bgImgClear.addEventListener("click", function () {
+                window.__deck.send("Interaction", { kind: "SetSlideBackgroundImageCleared" });
             });
         }
         const layout = document.getElementById("slide-layout");
@@ -3685,6 +3789,7 @@
             row.appendChild(buildThumbnail(items[i], i, active, spec));
         }
         row.appendChild(buildAddTile(spec));
+        updateSlideFocusState();
         scrollActiveThumbnailIntoView();
     }
 
@@ -3735,10 +3840,6 @@
 
         const preview = document.createElement("div");
         preview.className = "thumb__preview";
-        const idx = document.createElement("span");
-        idx.className = "thumb__index";
-        idx.textContent = String(index + 1);
-        preview.appendChild(idx);
 
         const mount = document.createElement("div");
         mount.className = "thumb__mount";
@@ -3754,6 +3855,12 @@
             + (entry.html || "");
         preview.appendChild(mount);
 
+        // Caption row: slide number (mono, accent) left of the title.
+        const caption = document.createElement("div");
+        caption.className = "thumb__caption";
+        const num = document.createElement("span");
+        num.className = "thumb__num";
+        num.textContent = String(index + 1);
         const label = document.createElement("span");
         label.className = "thumb__label";
         label.textContent = spec.labelOf(entry);
@@ -3770,8 +3877,10 @@
             });
         });
 
+        caption.appendChild(num);
+        caption.appendChild(label);
         btn.appendChild(preview);
-        btn.appendChild(label);
+        btn.appendChild(caption);
 
         // Per-slide delete affordance (slides only). stopPropagation on
         // mousedown/click so it never switches the active slide.
@@ -3802,6 +3911,9 @@
         });
 
         btn.addEventListener("click", function () {
+            // Clicking a thumbnail is an explicit slide-level selection.
+            slideSelected = true;
+            updateSlideFocusState();
             const msg = { kind: spec.clickKind };
             msg[spec.clickField] = itemId;
             window.__deck.send("Interaction", msg);
@@ -4063,7 +4175,7 @@
     // Dataflow: FileReader → ArrayBuffer → base64 string in parallel
     // with an Image() decode for natural width/height; once both are
     // ready, dispatch.
-    function importImageFile(file, slidePos) {
+    function importImageFile(file, slidePos, asSlideBackground) {
         const reader = new FileReader();
         reader.onerror = function () {
             console.error("importImageFile: read failed for", file.name);
@@ -4083,6 +4195,7 @@
                     width: dims.width,
                     height: dims.height,
                     position: slidePos,
+                    as_slide_background: !!asSlideBackground,
                 });
             });
         };
@@ -4156,8 +4269,21 @@
         }
         const thumbRow = document.getElementById("thumbnail-row");
         if (thumbRow) {
-            thumbRow.addEventListener("mousedown", function () {
+            thumbRow.addEventListener("mousedown", function (e) {
                 setFocusRegion("navigator");
+                // A press on the strip's negative space (not on a thumbnail)
+                // deselects: no slide highlight, and clear any element selection
+                // so nothing is highlighted anywhere.
+                const onThumb = e.target && e.target.closest && e.target.closest(".thumb");
+                if (!onThumb) {
+                    slideSelected = false;
+                    updateSlideFocusState();
+                    if (currentSelectionIds.length > 0) {
+                        window.__deck.send("Interaction", {
+                            kind: "SetSelectionFromPanel", element_ids: [],
+                        });
+                    }
+                }
             }, true);
         }
         // Seed the initial ring on the default (preview) region.
@@ -5024,6 +5150,19 @@
     function matchGridToggleShortcut(e) {
         const meta = !!(e.metaKey || e.ctrlKey);
         return meta && !e.shiftKey && e.key === "'";
+    }
+
+    // updateSlideFocusState
+    // Inputs: none (reads slideSelected). Output: side-effect; sets
+    // data-slide-focus on the thumbnail row. True only when the slide is
+    // explicitly selected (thumbnail click) — CSS then shows the accent border
+    // on the current thumbnail. Negative-space clicks clear the flag, so
+    // nothing is highlighted.
+    function updateSlideFocusState() {
+        const row = document.getElementById("thumbnail-row");
+        if (row) {
+            row.dataset.slideFocus = slideSelected ? "true" : "false";
+        }
     }
 
     // setFocusRegion

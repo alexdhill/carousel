@@ -43,6 +43,13 @@ fn layout_path_for(id: &str) -> String {
 pub(crate) struct LayoutMeta {
     pub(crate) id: String,
     pub(crate) name: String,
+    // Theme background for slides built on this layout (LayoutNode-authoritative,
+    // like the slide background on its manifest entry). Default empty for bundles
+    // predating layout backgrounds.
+    #[serde(default)]
+    pub(crate) background: Option<String>,
+    #[serde(default)]
+    pub(crate) background_image: Option<String>,
 }
 
 // ThemeJson
@@ -106,12 +113,15 @@ pub fn serialize_deck(deck: &Deck) -> BundleResult<SerializedDeck> {
             .layouts
             .get(lid)
             .ok_or_else(|| BundleError::MalformedManifest(format!("layout {lid} missing")))?;
-        layout_metas.push(LayoutMeta { id: lid.clone(), name: layout.name.clone() });
-        // Serialize the layout root through a transient SlideNode so it
-        // reuses the slide serializer (a layout root is a Group).
-        let transient: SlideNode =
-            SlideNode::new(layout.id.clone(), layout.id.clone(), layout.root.clone());
-        layout_files.insert(layout_path_for(lid), serialize_slide(&transient));
+        layout_metas.push(LayoutMeta {
+            id: lid.clone(),
+            name: layout.name.clone(),
+            background: layout.background.clone(),
+            background_image: layout.background_image.clone(),
+        });
+        // Serialize the layout root through a transient SlideNode (carrying the
+        // layout's own background) so it reuses the slide serializer.
+        layout_files.insert(layout_path_for(lid), serialize_slide(&layout.preview_slide()));
     }
     // Sync each slide's animation timeline (the in-memory source of truth on
     // SlideNode) into a manifest clone before serializing the manifest JSON.
@@ -122,6 +132,7 @@ pub fn serialize_deck(deck: &Deck) -> BundleResult<SerializedDeck> {
             // Background is SlideNode-authoritative (it renders); sync it into
             // the manifest for persistence, like the animation timeline.
             entry.background = slide.metadata.background.clone();
+            entry.background_image = slide.metadata.background_image.clone();
         }
     }
     let manifest_json: String = serde_json::to_string_pretty(&manifest)?;
@@ -318,8 +329,10 @@ pub fn deserialize_deck(serialized: SerializedDeck) -> BundleResult<Deck> {
             })?;
             let parsed: SlideNode = parse_slide_fragment(html)
                 .map_err(|e| BundleError::SlideParse(format!("layout {}: {}", meta.id, e)))?;
-            let node: LayoutNode =
+            let mut node: LayoutNode =
                 LayoutNode::new(meta.id.clone(), meta.name.clone(), parsed.root);
+            node.background = meta.background.clone();
+            node.background_image = meta.background_image.clone();
             layouts.insert(meta.id.clone(), node);
             layout_order.push(meta.id.clone());
         }
@@ -353,6 +366,7 @@ pub fn deserialize_deck(serialized: SerializedDeck) -> BundleResult<Deck> {
         // Hydrate the per-slide background from the manifest (the serializer
         // re-derives the section inline style from it on the next save).
         slide.metadata.background = entry.background.clone();
+        slide.metadata.background_image = entry.background_image.clone();
         // Manifest is authoritative for slide id; ensure parsed slide
         // matches so round trips are stable.
         if slide.id != entry.id {

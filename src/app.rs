@@ -23,8 +23,9 @@ use crate::commands::{
     GroupElements, InsertAnimation, InsertElement, InsertLayout, InsertSlide, InterpretResult, MoveElement,
     RemoveAnimation, RemoveElementCommand, RemoveInlineStyle, RemoveSlide, RenameElement, ReparentElement,
     ResizeElement, SetAnimationProperty, SetElementId, SetGeometryProperty, SetGlobalsCss, SetGroupLayout,
-    SetGroupScale, SetInlineStyle, SetLayoutName,
-    SetSlideBackground, SetSlideLayout, SetSlideNotes, SetSlideTitle, SetTextContent, SwapTheme,
+    SetGroupScale, SetInlineStyle, SetLayoutBackground, SetLayoutBackgroundImage, SetLayoutName,
+    SetSlideBackground, SetSlideBackgroundImage, SetSlideLayout, SetSlideNotes, SetSlideTitle,
+    SetTextContent, SwapTheme,
     TransactionSnapshot,
 };
 use crate::deck::animation::{
@@ -42,7 +43,7 @@ use crate::deck::style::{
 };
 use crate::deck::{Canvas, CanvasTarget, Deck, ElementId, LayoutId, ShapeGeometry, SlideId};
 use crate::error::{AppError, AppResult};
-use crate::html::serialize::{serialize_slide, ANIMATION_KEYFRAMES_CSS};
+use crate::html::serialize::{serialize_slide, serialize_slide_themed, ANIMATION_KEYFRAMES_CSS};
 use crate::ipc::bridge::WebviewSender;
 use crate::ipc::present::{PresentInbound, PresentInitPayload};
 use crate::present::session::{PresentationSession, PresentStep};
@@ -353,13 +354,18 @@ impl ApplicationCore {
     ) -> Option<(String, String, ObjectTreeData)> {
         match target {
             CanvasTarget::Slide(id) => {
-                let slide = self.dispatcher.deck().slides.get(id)?;
-                Some((id.clone(), serialize_slide(slide), build_object_tree(slide)))
+                let deck = self.dispatcher.deck();
+                let slide = deck.slides.get(id)?;
+                let (fill, img) = deck.effective_slide_bg(slide);
+                Some((
+                    id.clone(),
+                    serialize_slide_themed(slide, fill.as_deref(), img.as_deref()),
+                    build_object_tree(slide),
+                ))
             }
             CanvasTarget::Layout(id) => {
                 let layout = self.dispatcher.deck().theme.layouts.get(id)?;
-                let transient: SlideNode =
-                    SlideNode::new(layout.id.clone(), layout.id.clone(), layout.root.clone());
+                let transient: SlideNode = layout.preview_slide();
                 Some((
                     id.clone(),
                     serialize_slide(&transient),
@@ -521,6 +527,13 @@ impl ApplicationCore {
             return Ok(());
         }
         if self.active_slide.as_deref() == Some(slide_id.as_str()) {
+            // Same slide: a thumbnail click is a slide-level select, so still
+            // drop any element selection to return focus to the slide.
+            if !self.selection.is_empty() {
+                self.selection = SelectionState::empty();
+                self.sender
+                    .send(MessageKind::SetSelection(SelectionState::empty()))?;
+            }
             return Ok(());
         }
         info!(target = %slide_id, "switching active slide");
@@ -841,6 +854,7 @@ impl ApplicationCore {
                 width,
                 height,
                 position,
+                as_slide_background,
             } => self.interpret_asset_imported(
                 content_base64,
                 original_filename,
@@ -848,6 +862,7 @@ impl ApplicationCore {
                 width,
                 height,
                 position,
+                as_slide_background,
             ),
             InteractionEvent::SlideThumbnailClicked { slide_id } => {
                 if slide_id.is_empty() {
@@ -968,14 +983,39 @@ impl ApplicationCore {
                 InterpretResult::FileAction(FileAction::LoadTheme)
             }
             InteractionEvent::SetSlideBackgroundRequested { background } => {
-                match &self.active_slide {
-                    Some(sid) => InterpretResult::Command(Box::new(SetSlideBackground {
-                        slide_id: sid.clone(),
-                        background: empty_to_none(background),
-                    })),
+                // Routes to the active canvas: a layout in layout mode (theme
+                // background inherited by its slides), else the active slide.
+                match self.active_canvas() {
+                    Some(CanvasTarget::Slide(sid)) => {
+                        InterpretResult::Command(Box::new(SetSlideBackground {
+                            slide_id: sid,
+                            background: empty_to_none(background),
+                        }))
+                    }
+                    Some(CanvasTarget::Layout(lid)) => {
+                        InterpretResult::Command(Box::new(SetLayoutBackground {
+                            layout_id: lid,
+                            background: empty_to_none(background),
+                        }))
+                    }
                     None => InterpretResult::Nothing,
                 }
             }
+            InteractionEvent::SetSlideBackgroundImageCleared => match self.active_canvas() {
+                Some(CanvasTarget::Slide(sid)) => {
+                    InterpretResult::Command(Box::new(SetSlideBackgroundImage {
+                        slide_id: sid,
+                        background_image: None,
+                    }))
+                }
+                Some(CanvasTarget::Layout(lid)) => {
+                    InterpretResult::Command(Box::new(SetLayoutBackgroundImage {
+                        layout_id: lid,
+                        background_image: None,
+                    }))
+                }
+                None => InterpretResult::Nothing,
+            },
             InteractionEvent::SetSlideNotesRequested { notes } => match &self.active_slide {
                 Some(sid) => InterpretResult::Command(Box::new(SetSlideNotes {
                     slide_id: sid.clone(),
@@ -1635,6 +1675,7 @@ impl ApplicationCore {
         width: u32,
         height: u32,
         position: Option<Point>,
+        as_slide_background: bool,
     ) -> InterpretResult {
         // Target the active canvas (slide OR layout) so media drops into the
         // layout being edited in layout mode, not the hidden active slide.
@@ -1667,6 +1708,28 @@ impl ApplicationCore {
         );
         // Snapshot the id for the post-dispatch AssetAdded broadcast.
         self.pending_asset_broadcast = Some(entry.id.clone());
+
+        // Background import: set the active canvas's background image to a var()
+        // referencing the new asset instead of inserting a picture. In layout
+        // mode this themes the layout (inherited by its slides).
+        if as_slide_background {
+            let img: String = format!("var(--asset-{})", entry.id);
+            return match self.active_canvas() {
+                Some(CanvasTarget::Slide(sid)) => {
+                    InterpretResult::Command(Box::new(SetSlideBackgroundImage {
+                        slide_id: sid,
+                        background_image: Some(img),
+                    }))
+                }
+                Some(CanvasTarget::Layout(lid)) => {
+                    InterpretResult::Command(Box::new(SetLayoutBackgroundImage {
+                        layout_id: lid,
+                        background_image: Some(img),
+                    }))
+                }
+                None => InterpretResult::Nothing,
+            };
+        }
 
         let slide_dims: (u32, u32) = (
             self.dispatcher.deck().manifest.dimensions.width,
@@ -2394,6 +2457,7 @@ fn build_paste_command(
                 notes_ref: None,
                 animations: copy.animations.clone(),
                 background: copy.metadata.background.clone(),
+                background_image: copy.metadata.background_image.clone(),
                 notes: None,
             };
             let cmd: Box<dyn Command> = Box::new(InsertSlide {
@@ -2661,7 +2725,8 @@ fn build_slide_list_data(deck: &Deck, active_slide: Option<&SlideId>) -> SlideLi
             Some(entry) if !entry.title.trim().is_empty() => entry.title.clone(),
             _ => sid.clone(),
         };
-        let html: String = serialize_slide(slide);
+        let (fill, img) = deck.effective_slide_bg(slide);
+        let html: String = serialize_slide_themed(slide, fill.as_deref(), img.as_deref());
         slides.push(SlideListEntry {
             slide_id: sid.clone(),
             title,
@@ -2700,6 +2765,11 @@ fn build_slide_inspector_data(
         .get(sid)
         .and_then(|s| s.metadata.background.clone())
         .unwrap_or_default();
+    let background_image: String = deck
+        .slides
+        .get(sid)
+        .and_then(|s| s.metadata.background_image.clone())
+        .unwrap_or_default();
     let layouts: Vec<SlideInspectorLayout> = deck
         .theme
         .layout_order
@@ -2716,6 +2786,7 @@ fn build_slide_inspector_data(
         title,
         notes,
         background,
+        background_image,
         layout_id,
         layouts,
     })
@@ -3221,6 +3292,7 @@ fn build_insert_slide_after_active(
         notes_ref: None,
         animations: Vec::new(),
         background: None,
+        background_image: None,
         notes: None,
     };
 
@@ -3290,12 +3362,13 @@ fn build_layout_list_data(deck: &Deck, active_layout: Option<&LayoutId>) -> Layo
                 continue;
             }
         };
-        let transient: SlideNode =
-            SlideNode::new(layout.id.clone(), layout.id.clone(), layout.root.clone());
+        let transient: SlideNode = layout.preview_slide();
         layouts.push(LayoutListEntry {
             layout_id: lid.clone(),
             name: layout.name.clone(),
             html: serialize_slide(&transient),
+            background: layout.background.clone().unwrap_or_default(),
+            background_image: layout.background_image.clone().unwrap_or_default(),
         });
     }
     LayoutListData {
@@ -5009,6 +5082,7 @@ mod tests {
                 notes_ref: None,
                 animations: Vec::new(),
                 background: None,
+                background_image: None,
                 notes: None,
             },
         }

@@ -59,7 +59,9 @@ pub use set_geometry::{GeometryProperty, SetGeometryProperty};
 pub use set_inline_style::{RemoveInlineStyle, SetInlineStyle};
 // FileAction is re-exported below via the public InterpretResult enum.
 pub use insert_element::InsertElement;
-pub use layout_lifecycle::{InsertLayout, RemoveLayout, SetLayoutName};
+pub use layout_lifecycle::{
+    InsertLayout, RemoveLayout, SetLayoutBackground, SetLayoutBackgroundImage, SetLayoutName,
+};
 pub use move_element::MoveElement;
 pub use patch_buffer::PatchBuffer;
 pub use remove_element::RemoveElementCommand;
@@ -67,7 +69,9 @@ pub use set_element_id::SetElementId;
 pub use set_text::SetTextContent;
 pub use slide_lifecycle::{InsertSlide, RemoveSlide};
 pub use slide_metadata::SetSlideTitle;
-pub use slide_style::{SetSlideBackground, SetSlideLayout, SetSlideNotes};
+pub use slide_style::{
+    SetSlideBackground, SetSlideBackgroundImage, SetSlideLayout, SetSlideNotes,
+};
 pub use swap_theme::SwapTheme;
 pub use theme_globals::SetGlobalsCss;
 pub use transactions::{Transaction, TransactionSnapshot};

@@ -155,6 +155,42 @@
                 </button>
             </div>
 
+            <section id="slide-box" class="inspector__section slide-box">
+                <button type="button" class="inspector__section-header" id="slide-box-header">
+                    Slide
+                    <span class="inspector__chevron" aria-hidden="true"></span>
+                </button>
+                <div class="inspector__section-body">
+                    <div class="inspector__field inspector__field--full" data-slide-only>
+                        <label class="inspector__field-label" for="slide-title">Title</label>
+                        <input type="text" id="slide-title" class="inspector__input" spellcheck="false">
+                    </div>
+                    <div class="inspector__field inspector__field--full" data-slide-only>
+                        <label class="inspector__field-label" for="slide-layout">Layout</label>
+                        <select id="slide-layout" class="inspector__input inspector__select"></select>
+                    </div>
+                    <div class="inspector__field inspector__field--full">
+                        <label class="inspector__field-label">Fill</label>
+                        <div id="slide-bg-mount"></div>
+                    </div>
+                    <div class="inspector__field inspector__field--full">
+                        <label class="inspector__field-label">Image</label>
+                        <div class="slide-bg-well">
+                            <button type="button" id="slide-bg-image" class="slide-bg-well__pick"
+                                    title="Choose a background image">Choose…</button>
+                            <button type="button" id="slide-bg-image-clear" class="slide-bg-well__clear"
+                                    title="Remove background image" hidden>✕</button>
+                            <input type="file" id="slide-bg-image-file" accept="image/*" hidden>
+                        </div>
+                    </div>
+                    <div class="inspector__field inspector__field--full" data-slide-only>
+                        <label class="inspector__field-label" for="slide-notes">Notes</label>
+                        <textarea id="slide-notes" class="inspector__input slide-box__notes" spellcheck="false"
+                                  placeholder="Speaker notes…"></textarea>
+                    </div>
+                </div>
+            </section>
+
             <div class="inspector__scroll" id="inspector-scroll"></div>
 
             <section id="crop-box" class="crop-box" hidden>
@@ -210,27 +246,6 @@
                     <option value="object-fit"></option>
                 </datalist>
             </form>
-
-            <section id="slide-box" class="slide-box">
-                <h3 class="slide-box__title">Slide</h3>
-                <label class="slide-box__field">
-                    <span class="slide-box__label">Background</span>
-                    <input type="color" id="slide-bg" class="slide-box__swatch">
-                </label>
-                <label class="slide-box__field">
-                    <span class="slide-box__label">Layout</span>
-                    <select id="slide-layout" class="slide-box__select"></select>
-                </label>
-                <label class="slide-box__field">
-                    <span class="slide-box__label">Title</span>
-                    <input type="text" id="slide-title" class="slide-box__input" spellcheck="false">
-                </label>
-                <label class="slide-box__field slide-box__field--full">
-                    <span class="slide-box__label">Notes</span>
-                    <textarea id="slide-notes" class="slide-box__notes" spellcheck="false"
-                              placeholder="Speaker notes…"></textarea>
-                </label>
-            </section>
 
             <section id="animations-section" class="animations">
                 <header class="animations__header">

@@ -11,7 +11,7 @@
 
 use crate::deck::animation::{step_count, AnimationState};
 use crate::deck::{Deck, SlideId};
-use crate::html::serialize::serialize_slide;
+use crate::html::serialize::serialize_slide_themed;
 use crate::ipc::bridge::WebviewSender;
 use crate::ipc::present::{PresentSlidePayload, RevealPayload};
 use crate::present::reveal::{forward_reveal, snap_reveal};
@@ -142,7 +142,10 @@ fn slide_payload(deck: &Deck, sid: &str) -> PresentSlidePayload {
     let slide_html: String = deck
         .slides
         .get(sid)
-        .map(serialize_slide)
+        .map(|s| {
+            let (fill, img) = deck.effective_slide_bg(s);
+            serialize_slide_themed(s, fill.as_deref(), img.as_deref())
+        })
         .unwrap_or_default();
     PresentSlidePayload {
         slide_id: sid.to_string(),

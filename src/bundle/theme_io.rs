@@ -80,12 +80,15 @@ pub fn serialize_theme(theme: &ThemeData, assets: &AssetRegistry) -> BundleResul
             .layouts
             .get(lid)
             .ok_or_else(|| BundleError::MalformedManifest(format!("layout {lid} missing")))?;
-        layout_metas.push(LayoutMeta { id: lid.clone(), name: layout.name.clone() });
-        // Reuse the slide serializer via a transient SlideNode (a layout root
-        // is a Group, like a slide root).
-        let transient: SlideNode =
-            SlideNode::new(layout.id.clone(), layout.id.clone(), layout.root.clone());
-        layout_files.insert(theme_layout_path(lid), serialize_slide(&transient));
+        layout_metas.push(LayoutMeta {
+            id: lid.clone(),
+            name: layout.name.clone(),
+            background: layout.background.clone(),
+            background_image: layout.background_image.clone(),
+        });
+        // Reuse the slide serializer via a transient SlideNode carrying the
+        // layout's own background (a layout root is a Group, like a slide root).
+        layout_files.insert(theme_layout_path(lid), serialize_slide(&layout.preview_slide()));
     }
 
     let manifest = ThemeArchiveManifest {
@@ -227,7 +230,11 @@ pub fn deserialize_theme(src: SerializedTheme) -> BundleResult<(ThemeData, Asset
             })?;
             let parsed: SlideNode = parse_slide_fragment(html)
                 .map_err(|e| BundleError::SlideParse(format!("layout {}: {}", meta.id, e)))?;
-            layouts.insert(meta.id.clone(), LayoutNode::new(meta.id.clone(), meta.name.clone(), parsed.root));
+            let mut node: LayoutNode =
+                LayoutNode::new(meta.id.clone(), meta.name.clone(), parsed.root);
+            node.background = meta.background.clone();
+            node.background_image = meta.background_image.clone();
+            layouts.insert(meta.id.clone(), node);
             layout_order.push(meta.id.clone());
         }
         (layouts, layout_order)

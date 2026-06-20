@@ -350,6 +350,10 @@ pub enum InteractionEvent {
         height: u32,
         #[serde(default)]
         position: Option<Point>,
+        // When true, the import targets the active slide's background image
+        // (SetSlideBackgroundImage) instead of inserting a picture element.
+        #[serde(default)]
+        as_slide_background: bool,
     },
     // ---- Stage 11: layout editor ----
     // SetEditorMode
@@ -427,6 +431,9 @@ pub enum InteractionEvent {
     // Each targets the active slide (the Rust side supplies the id). An empty
     // string clears the field (background/notes → None).
     SetSlideBackgroundRequested { background: String },
+    // Clear the active slide's background image. Setting one happens via
+    // AssetImported with as_slide_background=true (it carries the bytes).
+    SetSlideBackgroundImageCleared,
     SetSlideNotesRequested { notes: String },
     SetSlideLayoutRequested { layout_id: LayoutId },
     // SetGroupLayout — patch a group's flex props (None = leave as-is).
@@ -699,6 +706,12 @@ pub struct LayoutListEntry {
     pub layout_id: LayoutId,
     pub name: String,
     pub html: String,
+    // Theme background of this layout, so the inspector's Slide box can show
+    // the layout's Fill/Image controls in layout mode.
+    #[serde(default)]
+    pub background: String,
+    #[serde(default)]
+    pub background_image: String,
 }
 
 // SlideAnimationsData
@@ -749,6 +762,10 @@ pub struct SlideInspectorData {
     pub title: String,
     pub notes: String,
     pub background: String,
+    // Background image as stored (e.g. "var(--asset-<id>)"); "" when none. The
+    // JS box resolves the asset id to a blob URL for the picker thumbnail.
+    #[serde(default)]
+    pub background_image: String,
     pub layout_id: LayoutId,
     pub layouts: Vec<SlideInspectorLayout>,
 }
@@ -904,6 +921,8 @@ mod tests {
                 layout_id: "blank".into(),
                 name: "Blank".into(),
                 html: "<section/>".into(),
+                background: String::new(),
+                background_image: String::new(),
             }],
             active_layout_id: Some("blank".into()),
             theme_css: ".x{}".into(),
@@ -940,6 +959,7 @@ mod tests {
             title: "Intro".into(),
             notes: "speak up".into(),
             background: "#222".into(),
+            background_image: String::new(),
             layout_id: "title".into(),
             layouts: vec![SlideInspectorLayout { id: "blank".into(), name: "Blank".into() }],
         };
@@ -1297,12 +1317,13 @@ mod tests {
             width: 800,
             height: 600,
             position: Some(Point { x: 100.0, y: 200.0 }),
+            as_slide_background: false,
         };
         let json = serde_json::to_string(&event).unwrap();
         let back: InteractionEvent = serde_json::from_str(&json).unwrap();
         match back {
             InteractionEvent::AssetImported {
-                content_base64, original_filename, media_type, width, height, position,
+                content_base64, original_filename, media_type, width, height, position, ..
             } => {
                 assert_eq!(content_base64, "ZmFrZS1ieXRlcw==");
                 assert_eq!(original_filename, "logo.png");

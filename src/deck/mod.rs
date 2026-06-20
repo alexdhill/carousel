@@ -94,6 +94,29 @@ pub struct Deck {
 }
 
 impl Deck {
+    // effective_slide_bg
+    // Inputs: a slide.
+    // Output: (fill, image) background values the slide should render with —
+    // the slide's own metadata, falling back to its layout's background for
+    // any field the slide leaves empty (layout→slide theme inheritance).
+    // Errors: none; a missing/empty layout simply yields no fallback.
+    pub fn effective_slide_bg(&self, slide: &SlideNode) -> (Option<String>, Option<String>) {
+        let layout: Option<&crate::deck::layout::LayoutNode> =
+            self.theme.layouts.get(&slide.layout_id);
+        let pick = |own: &Option<String>, lay: Option<&String>| -> Option<String> {
+            match own {
+                Some(s) if !s.is_empty() => Some(s.clone()),
+                _ => lay.filter(|s| !s.is_empty()).cloned(),
+            }
+        };
+        let fill = pick(&slide.metadata.background, layout.and_then(|l| l.background.as_ref()));
+        let img = pick(
+            &slide.metadata.background_image,
+            layout.and_then(|l| l.background_image.as_ref()),
+        );
+        (fill, img)
+    }
+
     // new_blank
     // Inputs: none.
     // Output: a fresh deck with one empty slide (the ROADMAP definition of
@@ -122,6 +145,7 @@ impl Deck {
                 notes_ref: None,
                 animations: Vec::new(),
                 background: None,
+                background_image: None,
                 notes: None,
             }],
             ..ManifestData::default()
@@ -212,6 +236,7 @@ impl Deck {
                 notes_ref: None,
                 animations: Vec::new(),
                 background: None,
+                background_image: None,
                 notes: None,
             }],
             ..ManifestData::default()

@@ -73,11 +73,8 @@ body {
     overflow: hidden;
 }
 
-/* Focus ring on the active region (object-panel uses .panel + is-focused;
-   the canvas stage and thumbs strip define their own below). */
-.panel.is-focused {
-    box-shadow: var(--shadow), inset 0 0 0 2px var(--acc-line);
-}
+/* Pane focus is shown by the active selection (accent bounding box / object
+   label / current-slide border), not by an inner glow on the focused pane. */
 
 .middle-row {
     flex: 1 1 auto;
@@ -525,7 +522,7 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 
 .objects__node[aria-selected="true"] {
     background: var(--acc-soft);
-    color: var(--acc-ink);
+    color: var(--acc);
     font-weight: 600;
     box-shadow: inset 3px 0 0 var(--acc);
 }
@@ -698,10 +695,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     inset: 0;
     pointer-events: none;
     z-index: 5;
-}
-
-.canvas-stage.is-focused {
-    box-shadow: inset 0 0 0 2px var(--acc-line);
 }
 
 /* ===================== Inspector (right) ===================== */
@@ -1094,6 +1087,13 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 
 .inspector__select {
     cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    padding-right: 26px;
+    /* Custom chevron drawn as an inline SVG background, tinted via --ink3. */
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none' stroke='%239a9384' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1l4 4 4-4'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 9px center;
 }
 
 .inspector__swatch {
@@ -1178,14 +1178,9 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     flex-direction: row;
     align-items: center;
     gap: 12px;
-    padding: 0 14px 8px;
+    padding: 6px 14px 8px;
     overflow-x: auto;
     overflow-y: hidden;
-}
-
-.thumbs-strip.is-focused {
-    box-shadow: inset 0 0 0 2px var(--acc-line);
-    border-radius: var(--r-field);
 }
 
 .thumb {
@@ -1194,7 +1189,7 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     display: flex;
     flex-direction: column;
     align-items: stretch;
-    gap: 5px;
+    gap: 6px;
     background: transparent;
     border: 0;
     padding: 0;
@@ -1212,18 +1207,23 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     overflow: hidden;
     position: relative;
     box-shadow: var(--shadow);
+    transition: transform .1s, box-shadow .1s, border-color .1s;
 }
 
+/* Current slide: slightly larger with a more pronounced drop shadow. This is
+   the always-on "you are here" cue and carries no accent. */
 .thumb[aria-current="true"] .thumb__preview {
-    border-color: var(--acc);
-    box-shadow: 0 0 0 2px var(--acc-soft), var(--shadow);
+    transform: scale(1.05);
+    box-shadow: 0 7px 18px rgba(0, 0, 0, .26), var(--shadow);
 }
 
 .thumb:hover .thumb__preview {
     border-color: var(--acc-line);
 }
 
-.thumb[aria-current="true"]:hover .thumb__preview {
+/* Slide-level selection: when nothing is selected at element level, the
+   focus is on the slide — the current thumbnail gets the accent border. */
+#thumbnail-row[data-slide-focus="true"] .thumb[aria-current="true"] .thumb__preview {
     border-color: var(--acc);
 }
 
@@ -1234,30 +1234,25 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     transform-origin: top left;
 }
 
-.thumb__index {
-    position: absolute;
-    top: 5px;
-    left: 6px;
-    font-size: 10px;
-    font-weight: 700;
-    color: var(--ink3);
-    background: rgba(255, 255, 255, .85);
-    padding: 1px 6px;
-    border-radius: 5px;
-    pointer-events: none;
-    z-index: 1;
+.thumb__caption {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    max-width: 160px;
+    padding: 0 2px;
 }
 
-.thumb[aria-current="true"] .thumb__index {
-    color: #fff;
-    background: var(--acc);
+.thumb__num {
+    flex: 0 0 auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: var(--acc);
 }
 
 .thumb__label {
     font-size: 11px;
     color: var(--ink3);
-    text-align: center;
-    max-width: 160px;
+    text-align: left;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1560,86 +1555,50 @@ body[data-mode="layout"] .globals {
     border-color: var(--acc);
 }
 
+/* Slide box: an inspector section shown only in slide mode with no
+   selection. JS toggles display (none ↔ block); chrome reuses the
+   .inspector__* field system. */
 .slide-box {
     display: none;
-    flex-direction: column;
-    gap: 8px;
-    padding: 12px 14px;
-    border-top: 1px solid var(--line);
-}
-
-.slide-box__title {
-    margin: 0;
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: .02em;
-    color: var(--ink2);
-}
-
-.slide-box__field {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.slide-box__field--full {
-    flex-direction: column;
-    align-items: stretch;
-}
-
-.slide-box__label {
-    flex: 0 0 80px;
-    font-size: 11px;
-    color: var(--label);
-    font-weight: 500;
-}
-
-.slide-box__select,
-.slide-box__input {
-    flex: 1;
-    background: var(--field);
-    color: var(--ink);
-    border: 1px solid transparent;
-    border-radius: var(--r-field);
-    padding: 6px 8px;
-    font: inherit;
-    font-size: 12px;
-}
-
-.slide-box__select:focus,
-.slide-box__input:focus {
-    outline: none;
-    background: var(--field-on);
-    border-color: var(--acc);
-}
-
-.slide-box__swatch {
-    width: 40px;
-    height: 28px;
-    padding: 0;
-    border: 1px solid var(--line);
-    border-radius: var(--r-field);
-    background: var(--field);
-    cursor: pointer;
 }
 
 .slide-box__notes {
-    width: 100%;
     min-height: 70px;
     resize: vertical;
-    background: var(--field);
-    color: var(--ink);
-    border: 1px solid transparent;
-    border-radius: var(--r-field);
-    padding: 7px 8px;
-    font: inherit;
-    font-size: 12px;
+    line-height: 1.4;
 }
 
-.slide-box__notes:focus {
-    outline: none;
-    background: var(--field-on);
-    border-color: var(--acc);
+.slide-bg-well {
+    display: flex;
+    align-items: stretch;
+    gap: 6px;
+}
+
+.slide-bg-well__pick {
+    flex: 1;
+    height: 56px;
+    border: 1px dashed #4a463d;
+    border-radius: 6px;
+    background-color: #1c1a16;
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    color: #9a9384;
+    font: inherit;
+    cursor: pointer;
+}
+
+.slide-bg-well__pick[data-has-image] {
+    border-style: solid;
+}
+
+.slide-bg-well__clear {
+    width: 28px;
+    border: 1px solid #4a463d;
+    border-radius: 6px;
+    background: #1c1a16;
+    color: #9a9384;
+    cursor: pointer;
 }
 
 .theme-actions {

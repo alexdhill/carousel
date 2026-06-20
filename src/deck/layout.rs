@@ -19,6 +19,13 @@ pub struct LayoutNode {
     pub id: LayoutId,
     pub name: String,
     pub root: ElementNode,
+    // Theme-level background for slides built on this layout. A slide inherits
+    // these when its own metadata leaves the field empty (see
+    // Deck::effective_slide_bg). `background_image` holds a var(--asset-<id>).
+    #[serde(default)]
+    pub background: Option<String>,
+    #[serde(default)]
+    pub background_image: Option<String>,
     pub dirty: bool,
 }
 
@@ -39,7 +46,22 @@ impl LayoutNode {
             matches!(root.element_type, crate::deck::element::ElementType::Group),
             "layout root must be a Group element"
         );
-        Self { id, name, root, dirty: false }
+        Self { id, name, root, background: None, background_image: None, dirty: false }
+    }
+
+    // preview_slide
+    // Output: a transient SlideNode wrapping this layout's root so it reuses
+    // the slide serializer / object-tree builder, carrying the layout's own
+    // background so the layout preview and its on-disk HTML show it.
+    pub fn preview_slide(&self) -> crate::deck::slide::SlideNode {
+        let mut s = crate::deck::slide::SlideNode::new(
+            self.id.clone(),
+            self.id.clone(),
+            self.root.clone(),
+        );
+        s.metadata.background = self.background.clone();
+        s.metadata.background_image = self.background_image.clone();
+        s
     }
 }
 

@@ -61,6 +61,50 @@ impl Command for SetSlideBackground {
     }
 }
 
+// SetSlideBackgroundImage — per-slide background image (drawn over the fill).
+// Same shape as SetSlideBackground: SlideNode-metadata authoritative, renders,
+// self-inverse, remounts, rebroadcasts the Slide box.
+#[derive(Debug, Clone)]
+pub struct SetSlideBackgroundImage {
+    pub slide_id: SlideId,
+    pub background_image: Option<String>,
+}
+
+impl Command for SetSlideBackgroundImage {
+    fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
+        assert!(!self.slide_id.is_empty(), "SetSlideBackgroundImage: empty slide_id");
+        let slide = deck
+            .slides
+            .get_mut(&self.slide_id)
+            .ok_or_else(|| CommandError::SlideNotFound(self.slide_id.clone()))?;
+        let prior: Option<String> = slide.metadata.background_image.clone();
+        slide.metadata.background_image = self.background_image.clone();
+        deck.manifest_dirty = true;
+        Ok(CommandOutput {
+            patches: Vec::new(),
+            inverse: Box::new(SetSlideBackgroundImage {
+                slide_id: self.slide_id.clone(),
+                background_image: prior,
+            }),
+            dirty_targets: vec![CanvasTarget::Slide(self.slide_id.clone())],
+            manifest_dirty: true,
+            warnings: Vec::new(),
+        })
+    }
+
+    fn label(&self) -> &'static str {
+        "Set Slide Background Image"
+    }
+
+    fn requires_remount(&self) -> bool {
+        true
+    }
+
+    fn affects_slide_meta(&self) -> bool {
+        true
+    }
+}
+
 // SetSlideNotes
 #[derive(Debug, Clone)]
 pub struct SetSlideNotes {
@@ -184,6 +228,24 @@ mod tests {
         assert!(cmd.affects_slide_meta());
         out.inverse.apply(&mut deck).unwrap();
         assert_eq!(deck.slides[&sid].metadata.background, None);
+    }
+
+    #[test]
+    fn background_image_sets_and_inverts() {
+        let (mut deck, sid) = sample();
+        let cmd = SetSlideBackgroundImage {
+            slide_id: sid.clone(),
+            background_image: Some("var(--asset-x)".into()),
+        };
+        let out = cmd.apply(&mut deck).unwrap();
+        assert_eq!(
+            deck.slides[&sid].metadata.background_image,
+            Some("var(--asset-x)".to_string())
+        );
+        assert!(cmd.requires_remount());
+        assert!(cmd.affects_slide_meta());
+        out.inverse.apply(&mut deck).unwrap();
+        assert_eq!(deck.slides[&sid].metadata.background_image, None);
     }
 
     #[test]

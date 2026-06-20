@@ -1,7 +1,7 @@
 // HTML export: assemble a self-contained playable folder for the deck.
 use crate::deck::animation::step_count;
 use crate::deck::Deck;
-use crate::html::serialize::{serialize_slide, ANIMATION_KEYFRAMES_CSS};
+use crate::html::serialize::{serialize_slide_themed, ANIMATION_KEYFRAMES_CSS};
 use crate::present::reveal::{forward_reveal, snap_reveal};
 use serde::Serialize;
 
@@ -72,7 +72,9 @@ pub fn build_html_export(deck: &Deck) -> Result<ExportBundle, serde_json::Error>
             }
             step += 1;
         }
-        slides.push(SlideData { html: serialize_slide(slide), snaps, forwards });
+        let (fill, img) = deck.effective_slide_bg(slide);
+        let html: String = serialize_slide_themed(slide, fill.as_deref(), img.as_deref());
+        slides.push(SlideData { html, snaps, forwards });
     }
     // Only assets whose bytes are present get written and listed.
     let mut assets: Vec<AssetFile> = Vec::new();

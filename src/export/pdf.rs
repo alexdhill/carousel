@@ -4,7 +4,7 @@
 // in the macOS print integration.
 use crate::deck::animation::step_count;
 use crate::deck::Deck;
-use crate::html::serialize::{serialize_slide, ANIMATION_KEYFRAMES_CSS};
+use crate::html::serialize::{serialize_slide_themed, ANIMATION_KEYFRAMES_CSS};
 use crate::present::reveal::snap_reveal;
 use base64::Engine;
 
@@ -60,7 +60,8 @@ pub fn build_pdf_print_html(deck: &Deck) -> String {
         let slide = &deck.slides[sid];
         let timeline = &slide.animations;
         let n: usize = step_count(timeline);
-        let html: String = serialize_slide(slide);
+        let (fill, img) = deck.effective_slide_bg(slide);
+        let html: String = serialize_slide_themed(slide, fill.as_deref(), img.as_deref());
         let mut step: usize = 0;
         while step < n {
             let reveal = snap_reveal(sid, timeline, step);

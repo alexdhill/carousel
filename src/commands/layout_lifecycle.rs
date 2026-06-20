@@ -189,6 +189,98 @@ impl Command for SetLayoutName {
     }
 }
 
+// SetLayoutBackground / SetLayoutBackgroundImage
+// Theme-level background for a layout. Slides built on the layout inherit
+// these when their own field is empty (Deck::effective_slide_bg). Mirrors the
+// slide background commands: self-inverse, remounts the layout canvas, and
+// reports affects_layout_list so the layout thumbnail re-renders. The theme is
+// persisted state, so manifest_dirty flags a save.
+#[derive(Debug, Clone)]
+pub struct SetLayoutBackground {
+    pub layout_id: LayoutId,
+    pub background: Option<String>,
+}
+
+impl Command for SetLayoutBackground {
+    fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
+        assert!(!self.layout_id.is_empty(), "SetLayoutBackground: layout id is empty");
+        let layout = deck
+            .theme
+            .layouts
+            .get_mut(&self.layout_id)
+            .ok_or_else(|| CommandError::LayoutNotFound(self.layout_id.clone()))?;
+        let prior: Option<String> = layout.background.clone();
+        layout.background = self.background.clone();
+        layout.dirty = true;
+        deck.manifest_dirty = true;
+        Ok(CommandOutput {
+            patches: Vec::new(),
+            inverse: Box::new(SetLayoutBackground {
+                layout_id: self.layout_id.clone(),
+                background: prior,
+            }),
+            dirty_targets: vec![CanvasTarget::Layout(self.layout_id.clone())],
+            manifest_dirty: true,
+            warnings: Vec::new(),
+        })
+    }
+
+    fn label(&self) -> &'static str {
+        "Set Layout Background"
+    }
+
+    fn requires_remount(&self) -> bool {
+        true
+    }
+
+    fn affects_layout_list(&self) -> bool {
+        true
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SetLayoutBackgroundImage {
+    pub layout_id: LayoutId,
+    pub background_image: Option<String>,
+}
+
+impl Command for SetLayoutBackgroundImage {
+    fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
+        assert!(!self.layout_id.is_empty(), "SetLayoutBackgroundImage: layout id is empty");
+        let layout = deck
+            .theme
+            .layouts
+            .get_mut(&self.layout_id)
+            .ok_or_else(|| CommandError::LayoutNotFound(self.layout_id.clone()))?;
+        let prior: Option<String> = layout.background_image.clone();
+        layout.background_image = self.background_image.clone();
+        layout.dirty = true;
+        deck.manifest_dirty = true;
+        Ok(CommandOutput {
+            patches: Vec::new(),
+            inverse: Box::new(SetLayoutBackgroundImage {
+                layout_id: self.layout_id.clone(),
+                background_image: prior,
+            }),
+            dirty_targets: vec![CanvasTarget::Layout(self.layout_id.clone())],
+            manifest_dirty: true,
+            warnings: Vec::new(),
+        })
+    }
+
+    fn label(&self) -> &'static str {
+        "Set Layout Background Image"
+    }
+
+    fn requires_remount(&self) -> bool {
+        true
+    }
+
+    fn affects_layout_list(&self) -> bool {
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -198,6 +290,37 @@ mod tests {
 
     fn blank_layout(id: &str, name: &str) -> LayoutNode {
         LayoutNode::new(id.into(), name.into(), group_element("el_layout_root", vec![]))
+    }
+
+    #[test]
+    fn layout_background_sets_and_inverts() {
+        let mut deck = Deck::default();
+        let lid = deck.theme.layout_order[0].clone();
+        let cmd = SetLayoutBackground { layout_id: lid.clone(), background: Some("#0af".into()) };
+        let out = cmd.apply(&mut deck).unwrap();
+        assert_eq!(deck.theme.layouts[&lid].background, Some("#0af".to_string()));
+        assert!(cmd.requires_remount());
+        assert!(cmd.affects_layout_list());
+        out.inverse.apply(&mut deck).unwrap();
+        assert_eq!(deck.theme.layouts[&lid].background, None);
+    }
+
+    #[test]
+    fn layout_background_image_sets_and_inverts() {
+        let mut deck = Deck::default();
+        let lid = deck.theme.layout_order[0].clone();
+        let out = SetLayoutBackgroundImage {
+            layout_id: lid.clone(),
+            background_image: Some("var(--asset-z)".into()),
+        }
+        .apply(&mut deck)
+        .unwrap();
+        assert_eq!(
+            deck.theme.layouts[&lid].background_image,
+            Some("var(--asset-z)".to_string())
+        );
+        out.inverse.apply(&mut deck).unwrap();
+        assert_eq!(deck.theme.layouts[&lid].background_image, None);
     }
 
     #[test]

@@ -27,6 +27,12 @@ pub struct SlideMetadata {
     // persisted via the manifest SlideEntry (synced like `animations`).
     #[serde(default)]
     pub background: Option<String>,
+    // Per-slide background image, drawn OVER the background fill. Holds a CSS
+    // image value — in practice `var(--asset-<id>)` referencing an imported
+    // asset. Option = no image (inherit/none). Persisted via the manifest like
+    // `background`.
+    #[serde(default)]
+    pub background_image: Option<String>,
 }
 
 // SlideNode

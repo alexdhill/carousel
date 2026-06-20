@@ -85,6 +85,19 @@ pub fn serialize_element(node: &ElementNode) -> String {
 // group receives a z-index equal to its sibling index — z is therefore
 // app-determined by tree position, not by any stored z_order field.
 pub fn serialize_slide(slide: &SlideNode) -> String {
+    serialize_slide_themed(slide, None, None)
+}
+
+// serialize_slide_themed
+// As serialize_slide, but `fb_fill` / `fb_img` are fallback background values
+// (typically the slide's layout) used when the slide's own metadata leaves the
+// matching field empty. This is the layout→slide background inheritance: the
+// slide's own value always wins; the fallback fills only the gaps.
+pub fn serialize_slide_themed(
+    slide: &SlideNode,
+    fb_fill: Option<&str>,
+    fb_img: Option<&str>,
+) -> String {
     assert!(
         slide.root.is_consistent(),
         "slide root must satisfy the element-triple invariant"
@@ -105,12 +118,34 @@ pub fn serialize_slide(slide: &SlideNode) -> String {
     // Per-slide background overrides the theme's .slide background via an inline
     // style (inline beats the class rule). Omitted when None so the slide
     // inherits the theme background.
-    if let Some(bg) = &slide.metadata.background {
-        if !bg.is_empty() {
-            out.push_str(" style=\"background:");
-            out.push_str(&escape_attr(bg));
-            out.push('"');
+    // Fill first (background shorthand), then the image as a longhand over it
+    // so the picture draws on top of the fill colour. cover/center give the
+    // expected full-bleed slide background.
+    let bg_fill: Option<&str> = slide
+        .metadata
+        .background
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .or_else(|| fb_fill.filter(|s| !s.is_empty()));
+    let bg_img: Option<&str> = slide
+        .metadata
+        .background_image
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .or_else(|| fb_img.filter(|s| !s.is_empty()));
+    if bg_fill.is_some() || bg_img.is_some() {
+        out.push_str(" style=\"");
+        if let Some(fill) = bg_fill {
+            out.push_str("background:");
+            out.push_str(&escape_attr(fill));
+            out.push(';');
         }
+        if let Some(img) = bg_img {
+            out.push_str("background-image:");
+            out.push_str(&escape_attr(img));
+            out.push_str(";background-size:cover;background-position:center;background-repeat:no-repeat;");
+        }
+        out.push('"');
     }
     out.push_str("><div class=\"slide__content\">");
     for (idx, child) in slide.root.children.iter().enumerate() {
@@ -398,7 +433,7 @@ mod tests {
         assert!(!serialize_slide(&slide).contains("background:"));
         slide.metadata.background = Some("#101820".into());
         let html = serialize_slide(&slide);
-        assert!(html.contains("style=\"background:#101820\""));
+        assert!(html.contains("style=\"background:#101820;\""));
     }
 
     #[test]
