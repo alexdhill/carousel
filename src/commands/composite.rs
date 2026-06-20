@@ -112,6 +112,22 @@ impl Command for CompositeCommand {
     fn affects_slide_list(&self) -> bool {
         self.commands.iter().any(|c| c.affects_slide_list())
     }
+
+    // Propagate the remaining rebroadcast flags so a bundled edit (e.g. a
+    // drag that reorders + retriggers an animation) still tells the editor to
+    // resync the relevant pane. Omitting these silently drops the refresh —
+    // the model changes but the UI never updates.
+    fn affects_layout_list(&self) -> bool {
+        self.commands.iter().any(|c| c.affects_layout_list())
+    }
+
+    fn affects_animations(&self) -> bool {
+        self.commands.iter().any(|c| c.affects_animations())
+    }
+
+    fn affects_slide_meta(&self) -> bool {
+        self.commands.iter().any(|c| c.affects_slide_meta())
+    }
 }
 
 #[cfg(test)]
@@ -251,6 +267,23 @@ mod tests {
         );
         let err = cc.apply(&mut deck).unwrap_err();
         assert!(matches!(err, CommandError::SlideNotFound(_)));
+    }
+
+    #[test]
+    fn propagates_affects_animations_from_children() {
+        use crate::commands::ReorderAnimation;
+        let (_, sid, _, _) = fresh_deck_with_two_children();
+        let cc = CompositeCommand::new(
+            vec![Box::new(ReorderAnimation {
+                slide_id: sid,
+                animation_id: "a1".into(),
+                new_position: 0,
+            })],
+            "Move Animation",
+        );
+        // ReorderAnimation reports affects_animations; the composite must too,
+        // else react_to_outcome never rebroadcasts the timeline.
+        assert!(cc.affects_animations());
     }
 
     #[test]

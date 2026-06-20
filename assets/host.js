@@ -1794,6 +1794,7 @@
         SlideAnimationsUpdate: function (payload) {
             slideAnimations = (payload && payload.entries) || [];
             refreshAnimationsSection();
+            renderSlideAnimations();
         },
         SlideInspectorUpdate: function (payload) {
             slideInspectorData = payload || null;
@@ -3033,6 +3034,10 @@
                 layout.appendChild(o);
             }
             layout.value = (data && data.layout_id) || "";
+        }
+        // Slide animation controller (slide mode only; the field is slide-only).
+        if (!layoutMode) {
+            renderSlideAnimations();
         }
     }
 
@@ -4460,12 +4465,14 @@
         body.kind = kind;
         window.__deck.send("Interaction", body);
     }
-    function animAdd(catalogId, direction) {
-        if (currentSelectionIds.length !== 1) {
+    function animAdd(catalogId, direction, elementId) {
+        const el = elementId
+            || (currentSelectionIds.length === 1 ? currentSelectionIds[0] : null);
+        if (!el) {
             return;
         }
         animSend("AddAnimation", {
-            element_id: currentSelectionIds[0],
+            element_id: el,
             catalog_id: catalogId,
             direction: direction || null,
         });
@@ -4476,9 +4483,13 @@
     function animRemove(animId) {
         animSend("RemoveAnimationRequested", { animation_id: animId });
     }
-    function animReplace(animId, catalogId, direction) {
+    // animReplace — swap an entry's effect. The effect cannot be patched in
+    // place, so remove + re-add with the new catalog id. elementId keeps the
+    // re-add on the right element (the slide controller edits any element, not
+    // just the selection).
+    function animReplace(animId, catalogId, direction, elementId) {
         animRemove(animId);
-        animAdd(catalogId, direction);
+        animAdd(catalogId, direction, elementId);
     }
 
     // animDirectionOf
@@ -4557,6 +4568,182 @@
         if (count) {
             count.textContent = String(mine.length);
         }
+    }
+
+    // ---------- slide animation controller (styles pane) ----------
+    // Shows the WHOLE slide's timeline, grouped into state changes: a run of
+    // consecutive "with previous" entries plays together, so each group is one
+    // rounded box. Items are draggable to reorder; dropping near the bottom of
+    // an item joins that item's group ("with previous"), dropping higher makes
+    // it a separate next step ("after previous").
+    let sacDragId = null;
+
+    // groupSlideAnimations — split the timeline into state-change groups.
+    function groupSlideAnimations(list) {
+        const groups = [];
+        for (let i = 0; i < list.length; i++) {
+            const a = list[i];
+            if (a.trigger === "with_previous" && groups.length > 0) {
+                groups[groups.length - 1].push(a);
+            } else {
+                groups.push([a]);
+            }
+        }
+        return groups;
+    }
+
+    // renderSlideAnimations — rebuild #sac-groups from the slide timeline.
+    function renderSlideAnimations() {
+        const host = document.getElementById("sac-groups");
+        if (!host) {
+            return;
+        }
+        host.replaceChildren();
+        if (!slideAnimations.length) {
+            const empty = document.createElement("div");
+            empty.className = "sac__empty";
+            empty.textContent = "No animations on this slide.";
+            host.appendChild(empty);
+            return;
+        }
+        const groups = groupSlideAnimations(slideAnimations);
+        for (let g = 0; g < groups.length && g < 1024; g++) {
+            const box = document.createElement("div");
+            box.className = "sac-group";
+            for (let i = 0; i < groups[g].length && i < 1024; i++) {
+                box.appendChild(buildSacItem(groups[g][i]));
+            }
+            host.appendChild(box);
+        }
+    }
+
+    // buildSacItem — one timeline entry: a drag-handle head (element · effect ·
+    // trigger, expand, remove) plus the shared expanded editor body.
+    function buildSacItem(entry) {
+        const item = document.createElement("div");
+        item.className = "sac-item";
+        item.dataset.animId = entry.animation_id;
+
+        const head = document.createElement("div");
+        head.className = "sac-item__head";
+        head.draggable = true;
+        head.dataset.animId = entry.animation_id;
+        const icon = document.createElement("span");
+        icon.className = "anim-bar__icon";
+        icon.textContent = ANIM_CAT_ICON[entry.category] || "•";
+        const label = document.createElement("span");
+        label.className = "sac-item__label";
+        label.textContent = entry.element_id + " · " + animEffectSummary(entry);
+        const trig = document.createElement("span");
+        trig.className = "anim-bar__trigger";
+        trig.textContent = animTriggerLabel(entry);
+        const chev = document.createElement("span");
+        chev.className = "anim-bar__btn";
+        chev.textContent = animExpanded[entry.animation_id] ? "▾" : "▸";
+        const rm = document.createElement("button");
+        rm.type = "button";
+        rm.className = "anim-bar__btn";
+        rm.dataset.sacRm = "1";
+        rm.textContent = "×";
+        rm.addEventListener("click", function (e) {
+            e.stopPropagation();
+            animRemove(entry.animation_id);
+        });
+        head.append(icon, label, trig, chev, rm);
+
+        // Click anywhere on the head (except the remove button) toggles expand.
+        head.addEventListener("click", function (e) {
+            if (e.target.closest && e.target.closest("[data-sac-rm]")) {
+                return;
+            }
+            animExpanded[entry.animation_id] = !animExpanded[entry.animation_id];
+            renderSlideAnimations();
+        });
+
+        // Drag handle AND drop target are the SAME element (the head), exactly
+        // like the object panel's rows. When they are split (handle = child,
+        // target = parent) WebKit does not deliver the drop event.
+        head.addEventListener("dragstart", function (e) {
+            sacDragId = entry.animation_id;
+            if (e.dataTransfer) {
+                e.dataTransfer.setData("text/plain", entry.animation_id);
+                e.dataTransfer.effectAllowed = "move";
+            }
+        });
+        head.addEventListener("dragend", function () {
+            sacDragId = null;
+            clearSacDropHint();
+        });
+        head.addEventListener("dragover", onSacDragOver);
+        head.addEventListener("drop", onSacDrop);
+        head.addEventListener("dragleave", function () {
+            delete head.dataset.sacDrop;
+        });
+
+        item.append(head);
+        if (animExpanded[entry.animation_id]) {
+            item.appendChild(buildAnimBody(entry));
+        }
+        return item;
+    }
+
+    // onSacDragOver — choose intent by cursor height in the target: the bottom
+    // ~35% joins the target's group (with previous), higher makes it the next
+    // separate step (after previous). Mirrors the hint on the item.
+    function onSacDragOver(e) {
+        if (!sacDragId) {
+            return;
+        }
+        const head = e.currentTarget;
+        if (head.dataset.animId === sacDragId) {
+            return;
+        }
+        e.preventDefault();
+        if (e.dataTransfer) {
+            e.dataTransfer.dropEffect = "move";
+        }
+        const rect = head.getBoundingClientRect();
+        const rel = (e.clientY - rect.top) / rect.height;
+        head.dataset.sacDrop = (rel > 0.65) ? "join" : "after";
+    }
+
+    function clearSacDropHint() {
+        const hinted = document.querySelectorAll("#sac-groups [data-sac-drop]");
+        for (let i = 0; i < hinted.length; i++) {
+            delete hinted[i].dataset.sacDrop;
+        }
+    }
+
+    // onSacDrop — reorder the dragged entry to just after the target and set its
+    // trigger from the drop zone, as one MoveAnimation (single undo).
+    function onSacDrop(e) {
+        if (!sacDragId) {
+            return;
+        }
+        const head = e.currentTarget;
+        const targetId = head.dataset.animId;
+        const mode = head.dataset.sacDrop || "after";
+        clearSacDropHint();
+        if (!targetId || targetId === sacDragId) {
+            sacDragId = null;
+            return;
+        }
+        e.preventDefault();
+        // Insertion index is computed in the list WITHOUT the dragged entry
+        // (ReorderAnimation removes then inserts), placed right after the target.
+        const ids = slideAnimations
+            .map(function (a) { return a.animation_id; })
+            .filter(function (id) { return id !== sacDragId; });
+        const at = ids.indexOf(targetId);
+        const newIndex = (at < 0) ? ids.length : (at + 1);
+        const trigger = (mode === "join") ? "with_previous" : "after_previous";
+        window.__deck.send("Interaction", {
+            kind: "MoveAnimation",
+            animation_id: sacDragId,
+            new_index: newIndex,
+            trigger: trigger,
+        });
+        sacDragId = null;
     }
 
     const FLEX_DIRS = [ { v: "row", t: "Row" }, { v: "column", t: "Column" } ];
@@ -4710,7 +4897,7 @@
         sel.addEventListener("change", function () {
             const item = animationCatalog.find(function (i) { return i.id === sel.value; });
             const dir = item && item.directional ? (animDirectionOf(entry) || "top") : null;
-            animReplace(entry.animation_id, sel.value, dir);
+            animReplace(entry.animation_id, sel.value, dir, entry.element_id);
         });
         return animField("Effect", sel);
     }
@@ -4728,7 +4915,7 @@
         });
         sel.addEventListener("change", function () {
             if (item) {
-                animReplace(entry.animation_id, item.id, sel.value);
+                animReplace(entry.animation_id, item.id, sel.value, entry.element_id);
             }
         });
         return animField("Direction", sel);

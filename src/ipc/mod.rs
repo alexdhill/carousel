@@ -422,6 +422,14 @@ pub enum InteractionEvent {
     RemoveAnimationRequested {
         animation_id: String,
     },
+    // MoveAnimation — drag-reorder in the slide animation controller. Moves the
+    // entry to `new_index` in the timeline AND sets its trigger (so a drag can
+    // both reorder and change how it plays), as one undoable step.
+    MoveAnimation {
+        animation_id: String,
+        new_index: usize,
+        trigger: String,
+    },
     // ---- Theme save/load ----
     // SaveThemeRequested / LoadThemeRequested — the layout-mode "Save Theme…" /
     // "Load Theme…" buttons. Map to FileAction::SaveTheme / LoadTheme.

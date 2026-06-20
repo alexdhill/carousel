@@ -976,6 +976,15 @@ impl ApplicationCore {
                     None => InterpretResult::Nothing,
                 }
             }
+            InteractionEvent::MoveAnimation { animation_id, new_index, trigger } => {
+                interpret_move_animation(
+                    self.dispatcher.deck(),
+                    self.active_slide.as_ref(),
+                    &animation_id,
+                    new_index,
+                    &trigger,
+                )
+            }
             InteractionEvent::SaveThemeRequested => {
                 InterpretResult::FileAction(FileAction::SaveTheme)
             }
@@ -3244,6 +3253,61 @@ fn interpret_update_animation(
     }))
 }
 
+// interpret_move_animation
+// Inputs: deck (read), active slide, target id, new timeline index, and the new
+// trigger ("on_click"|"with_previous"|"after_previous").
+// Output: a CompositeCommand [ReorderAnimation, SetAnimationProperty] so a
+// drag both reorders and re-triggers in a single undo. Nothing on no active
+// slide / unknown id.
+fn interpret_move_animation(
+    deck: &Deck,
+    active_slide: Option<&SlideId>,
+    animation_id: &str,
+    new_index: usize,
+    trigger: &str,
+) -> InterpretResult {
+    assert!(!animation_id.is_empty(), "interpret_move_animation: empty id");
+    let slide_id: SlideId = match active_slide {
+        Some(s) => s.clone(),
+        None => return InterpretResult::Nothing,
+    };
+    let slide = match deck.slides.get(&slide_id) {
+        Some(s) => s,
+        None => return InterpretResult::Nothing,
+    };
+    let prior = match slide.animations.iter().find(|e| e.id == animation_id) {
+        Some(e) => e.clone(),
+        None => return InterpretResult::Nothing,
+    };
+    let trig = match trigger {
+        "on_click" => AnimationTrigger::OnClick,
+        "with_previous" => AnimationTrigger::WithPrevious,
+        "after_previous" => AnimationTrigger::AfterPrevious,
+        _ => prior.trigger,
+    };
+    let new_entry = AnimationEntry::new(
+        prior.id.clone(),
+        prior.element_id.clone(),
+        prior.effect.clone(),
+        prior.category,
+        trig,
+        prior.timing.clone(),
+    );
+    let cmds: Vec<Box<dyn Command>> = vec![
+        Box::new(crate::commands::ReorderAnimation {
+            slide_id: slide_id.clone(),
+            animation_id: animation_id.to_string(),
+            new_position: new_index,
+        }),
+        Box::new(SetAnimationProperty {
+            slide_id,
+            animation_id: animation_id.to_string(),
+            new_entry,
+        }),
+    ];
+    InterpretResult::Command(Box::new(CompositeCommand::new(cmds, "Move Animation")))
+}
+
 // build_insert_slide_after_active
 // Inputs:
 //   dispatcher   — read access to the live deck (slide_order is consulted
@@ -5320,6 +5384,30 @@ mod tests {
         let e = &dispatcher.deck().slides[&sid].animations[0];
         assert_eq!(e.timing.duration_ms, 700);
         assert_eq!(e.trigger, AnimationTrigger::AfterPrevious);
+    }
+
+    #[test]
+    fn move_animation_reorders_and_retriggers() {
+        let (mut dispatcher, _sel, sid, eid) = fixture();
+        // Two entrance animations on the element → two timeline entries.
+        for kind in ["entrance", "exit"] {
+            if let InterpretResult::Command(c) = interpret_add_animation(
+                dispatcher.deck(), EditorMode::Slide, Some(&sid), eid.clone(),
+                if kind == "entrance" { "fade-in" } else { "fade-out" }, None) {
+                c.apply(dispatcher.deck_mut()).unwrap();
+            }
+        }
+        let second = dispatcher.deck().slides[&sid].animations[1].id.clone();
+        // Move the 2nd entry to index 0 and make it play with previous.
+        let cmd = match interpret_move_animation(
+            dispatcher.deck(), Some(&sid), &second, 0, "with_previous") {
+            InterpretResult::Command(c) => c,
+            other => panic!("expected Command, got {other:?}"),
+        };
+        cmd.apply(dispatcher.deck_mut()).unwrap();
+        let t = &dispatcher.deck().slides[&sid].animations;
+        assert_eq!(t[0].id, second);
+        assert_eq!(t[0].trigger, AnimationTrigger::WithPrevious);
     }
 
     #[test]

@@ -1780,6 +1780,72 @@ body[data-mode="layout"] .theme-actions {
     gap: 8px;
 }
 
+/* Slide animation controller (styles pane) */
+.sac {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+}
+
+.sac__empty {
+    font-size: 11px;
+    color: var(--ink3);
+    padding: 2px 0;
+}
+
+/* One state change (a "with previous" run) = one rounded box. */
+.sac-group {
+    border: 1px solid var(--line);
+    border-radius: var(--r-field);
+    background: var(--field);
+    overflow: hidden;
+}
+
+.sac-item {
+    position: relative;
+}
+
+/* Subtle separator between animations that share a state change. */
+.sac-item + .sac-item {
+    border-top: 1px solid var(--line);
+}
+
+.sac-item__head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    font-size: 12px;
+    color: var(--ink);
+    cursor: grab;
+    user-select: none;
+}
+
+.sac-item__head:active {
+    cursor: grabbing;
+}
+
+.sac-item__label {
+    flex: 1;
+    min-width: 0;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Drop hints: accent underline = "next step after"; full accent ring + tint =
+   "join this group (with previous)". */
+.sac-item__head[data-sac-drop="after"] {
+    box-shadow: inset 0 -2px 0 0 var(--acc);
+}
+
+.sac-item__head[data-sac-drop="join"] {
+    box-shadow: inset 0 0 0 2px var(--acc);
+    background: var(--acc-soft);
+}
+
 .anim-prop-row {
     display: flex;
     gap: 6px;
