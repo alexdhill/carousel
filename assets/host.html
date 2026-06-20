@@ -121,15 +121,15 @@
                     <span>Title</span>
                 </div>
                 <div class="canvas-head__zoom">
-                    <button type="button" class="icon-btn icon-btn--sm tt" data-stub data-tip="Zoom out" data-key="⌘ −" aria-label="Zoom out">
+                    <button type="button" id="zoom-out" class="icon-btn icon-btn--sm tt" data-tip="Zoom out" data-key="⌘ −" aria-label="Zoom out">
                         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 12h12"/></svg>
                     </button>
-                    <span class="canvas-head__pct" data-stub>Fit</span>
-                    <button type="button" class="icon-btn icon-btn--sm tt" data-stub data-tip="Zoom in" data-key="⌘ +" aria-label="Zoom in">
+                    <span id="zoom-pct" class="canvas-head__pct">Fit</span>
+                    <button type="button" id="zoom-in" class="icon-btn icon-btn--sm tt" data-tip="Zoom in" data-key="⌘ +" aria-label="Zoom in">
                         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 6v12M6 12h12"/></svg>
                     </button>
                     <span class="tbar-divider tbar-divider--sm"></span>
-                    <button type="button" class="icon-btn icon-btn--sm tt" data-stub data-tip="Fit to screen" data-key="⇧ 1" aria-label="Fit to screen">
+                    <button type="button" id="zoom-fit" class="icon-btn icon-btn--sm tt" data-tip="Fit to pane" data-key="⌘ 0" aria-label="Fit to pane">
                         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4H5a1 1 0 0 0-1 1v3m12-4h3a1 1 0 0 1 1 1v3M8 20H5a1 1 0 0 1-1-1v-3m12 4h3a1 1 0 0 0 1-1v-3"/></svg>
                     </button>
                 </div>

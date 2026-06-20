@@ -45,6 +45,14 @@
     // and the element selection empty, so nothing is highlighted. Managed by the
     // click handlers, NOT inferred from an empty element selection.
     let slideSelected = false;
+    // Slide zoom. "fit" recomputes a width-fit scale on every layout change;
+    // "manual" pins zoomManualPct (50–250, stepped by 10). The viewport's CSS
+    // transform is the single source of truth read back by getViewportScale.
+    let zoomMode = "fit";
+    let zoomManualPct = 100;
+    const ZOOM_MIN = 50;
+    const ZOOM_MAX = 250;
+    const ZOOM_STEP = 10;
     // focusChain — group ids the editor has entered (empty = top level). A
     // click resolves to the deepest focused group's child; double-click drills.
     let focusChain = [];
@@ -165,6 +173,9 @@
         // Selection from the previous slide does not transfer.
         currentSelectionIds = [];
         clearSelectionOverlay();
+        // Re-apply the current zoom to the fresh host (fit recomputes for the
+        // new slide's dimensions).
+        applyZoom();
     }
 
     // ingestAssetPayload
@@ -287,6 +298,82 @@
             return 1;
         }
         return a;
+    }
+
+    // ---------- slide zoom ----------
+    // computeFitScale
+    // Output: scale that fits the slide width inside the canvas pane (with a
+    // little breathing room), or null when the slide/pane is not measurable.
+    // The slide-host's offsetWidth is its UNSCALED layout width (the CSS
+    // transform does not affect layout boxes), so it is the true slide width.
+    function computeFitScale() {
+        const stage = document.getElementById("viewport-container");
+        const host = currentSlideHost;
+        if (!stage || !host) {
+            return null;
+        }
+        const w = host.offsetWidth;
+        const avail = stage.clientWidth - 32;
+        if (w <= 0 || avail <= 0) {
+            return null;
+        }
+        return avail / w;
+    }
+
+    // effectiveZoomScale
+    // Output: the scale to apply — the fit scale in "fit" mode (falling back to
+    // the manual pct if unmeasurable), else the manual pct as a fraction.
+    function effectiveZoomScale() {
+        if (zoomMode === "fit") {
+            const f = computeFitScale();
+            if (f && isFinite(f) && f > 0) {
+                return f;
+            }
+        }
+        return zoomManualPct / 100;
+    }
+
+    // applyZoom
+    // Output: side-effect; writes the viewport transform, updates the readout
+    // ("Fit" or "NN%"), and re-syncs the selection overlay (which is measured
+    // in screen pixels and so must follow the scale).
+    function applyZoom() {
+        const viewport = document.getElementById("viewport");
+        if (viewport) {
+            viewport.style.transform = "scale(" + effectiveZoomScale() + ")";
+        }
+        const pct = document.getElementById("zoom-pct");
+        if (pct) {
+            pct.textContent = (zoomMode === "fit")
+                ? "Fit"
+                : (Math.round(zoomManualPct) + "%");
+        }
+        if (currentSelectionIds.length > 0) {
+            updateSelectionOverlay();
+        }
+    }
+
+    // setZoomFit / zoomStep
+    // setZoomFit returns to width-fit. zoomStep leaves fit (snapping the fit
+    // percentage to the nearest 10 first so steps stay round) and nudges the
+    // manual zoom by ±ZOOM_STEP, clamped to [ZOOM_MIN, ZOOM_MAX].
+    function setZoomFit() {
+        zoomMode = "fit";
+        applyZoom();
+    }
+
+    function zoomStep(delta) {
+        let base = zoomManualPct;
+        if (zoomMode === "fit") {
+            const f = computeFitScale();
+            base = Math.round(((f || 1) * 100) / ZOOM_STEP) * ZOOM_STEP;
+        }
+        let next = base + delta;
+        if (next < ZOOM_MIN) { next = ZOOM_MIN; }
+        if (next > ZOOM_MAX) { next = ZOOM_MAX; }
+        zoomMode = "manual";
+        zoomManualPct = next;
+        applyZoom();
     }
 
     // ---------- patch applier ----------
@@ -4290,10 +4377,27 @@
         if (viewport) {
             viewport.classList.add("is-focused");
         }
+        // Zoom controls.
+        const zoomOutBtn = document.getElementById("zoom-out");
+        if (zoomOutBtn) {
+            zoomOutBtn.addEventListener("click", function () { zoomStep(-ZOOM_STEP); });
+        }
+        const zoomInBtn = document.getElementById("zoom-in");
+        if (zoomInBtn) {
+            zoomInBtn.addEventListener("click", function () { zoomStep(ZOOM_STEP); });
+        }
+        const zoomFitBtn = document.getElementById("zoom-fit");
+        if (zoomFitBtn) {
+            zoomFitBtn.addEventListener("click", setZoomFit);
+        }
+        applyZoom();
         window.addEventListener("mousemove", onMouseMove);
         window.addEventListener("mouseup", onMouseUp);
         window.addEventListener("resize", function () {
-            if (currentSelectionIds.length > 0) {
+            // In fit mode the scale tracks the pane width.
+            if (zoomMode === "fit") {
+                applyZoom();
+            } else if (currentSelectionIds.length > 0) {
                 updateSelectionOverlay();
             }
         });
@@ -5369,6 +5473,25 @@
             focusChain = [];
             updateSelectionOverlay();
             return;
+        }
+        // Zoom: Cmd/Ctrl with +/- steps by 10%, Cmd/Ctrl+0 fits to pane.
+        if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
+            const k = typeof e.key === "string" ? e.key : "";
+            if (k === "=" || k === "+" || e.code === "NumpadAdd") {
+                e.preventDefault();
+                zoomStep(ZOOM_STEP);
+                return;
+            }
+            if (k === "-" || k === "_" || e.code === "NumpadSubtract") {
+                e.preventDefault();
+                zoomStep(-ZOOM_STEP);
+                return;
+            }
+            if (k === "0" || e.code === "Numpad0") {
+                e.preventDefault();
+                setZoomFit();
+                return;
+            }
         }
         if (matchGridToggleShortcut(e)) {
             e.preventDefault();
