@@ -1248,6 +1248,12 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     top: 0;
     left: 0;
     transform-origin: top left;
+    /* The mount is the slide shadow's HOST; inherited properties (notably
+       text-align) cross into the shadow. The enclosing <button.thumb> defaults
+       text-align:center, which would centre default-aligned slide text. Reset to
+       match the viewport's .slide-host (start/left) so thumbnails render
+       identically. */
+    text-align: left;
 }
 
 .thumb__caption {
