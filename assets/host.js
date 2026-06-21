@@ -38,6 +38,9 @@
     let dragState = null;
     let pendingDrag = null;
     let dragRafScheduled = false;
+    // Marquee (drag-to-select) session, null when idle. Armed on a background
+    // press; becomes active once the pointer crosses DRAG_THRESHOLD.
+    let marquee = null;
     let currentSelectionIds = [];
     // slideSelected — true only when the slide itself is the selection (an
     // explicit thumbnail click), distinct from "nothing selected". Clicking
@@ -184,6 +187,10 @@
             + "<style id=\"globals-css\">" + currentGlobalsCss + "</style>"
             + "<style id=\"anim-kf\">" + builtinKeyframesCss + "</style>"
             + "<style id=\"asset-vars\"></style>"
+            // Edit-mode only: reveal content positioned beyond the slide bounds
+            // (the canvas scrim greys it). Present/export/thumbnails omit this,
+            // so the theme's .slide overflow:hidden crops them.
+            + "<style id=\"edit-overflow\">.slide{overflow:visible}</style>"
             + slideHtml;
         viewport.replaceChildren(host);
         currentShadow = shadow;
@@ -373,6 +380,7 @@
         }
         refreshRulers();
         renderRulerGuides();
+        renderCanvasScrim();
     }
 
     // setZoomFit / zoomStep
@@ -666,6 +674,49 @@
             scale: hr.width / w, slideW: w, slideH: h,
             stageW: sr.width, stageH: sr.height,
         };
+    }
+
+    // renderCanvasScrim — grey the area outside the slide bounds in edit mode.
+    // Four translucent canvas-colored rects fill the viewport minus the slide
+    // rect, so content positioned off-slide (shown via the edit-overflow style)
+    // fades toward the canvas colour. Pointer-events:none → interaction passes
+    // through. Present/export crop instead (no scrim, .slide overflow:hidden).
+    function renderCanvasScrim() {
+        const stage = document.getElementById("viewport-container");
+        if (!stage) {
+            return;
+        }
+        let layer = document.getElementById("canvas-scrim");
+        if (!layer) {
+            layer = document.createElement("div");
+            layer.id = "canvas-scrim";
+            for (let i = 0; i < 4; i++) {
+                const r = document.createElement("div");
+                r.className = "canvas-scrim__rect";
+                layer.appendChild(r);
+            }
+            stage.appendChild(layer);
+        }
+        const m = canvasMetrics();
+        if (!m) {
+            layer.style.display = "none";
+            return;
+        }
+        layer.style.display = "block";
+        const sw = m.slideW * m.scale;
+        const sh = m.slideH * m.scale;
+        const r = layer.children;
+        // top, bottom, left, right of the slide rect (clamped to >= 0).
+        const set = function (el, x, y, w, h) {
+            el.style.left = x + "px";
+            el.style.top = y + "px";
+            el.style.width = Math.max(0, w) + "px";
+            el.style.height = Math.max(0, h) + "px";
+        };
+        set(r[0], 0, 0, m.stageW, m.oy);
+        set(r[1], 0, m.oy + sh, m.stageW, m.stageH - (m.oy + sh));
+        set(r[2], 0, m.oy, m.ox, sh);
+        set(r[3], m.ox + sw, m.oy, m.stageW - (m.ox + sw), sh);
     }
 
     // ensureRulers — create the two ruler canvases + corner once, wiring the
@@ -1177,6 +1228,7 @@
         } else {
             refreshRulers();
             renderRulerGuides();
+            renderCanvasScrim();
             updateSelectionOverlay();
         }
     }
@@ -2029,34 +2081,25 @@
         // including a background click, which deselects everything (guides too).
         slideSelected = false;
         deselectGuide();
-        // A press in the canvas area but outside the slide deselects, just
-        // like clicking the slide's own background. The handler is bound to
-        // #viewport-container, so this never fires for the side panels.
+        // No element under the cursor (gray margin OR slide background) → arm a
+        // marquee. A no-drag release falls back to a deselect click; a drag
+        // selects overlapped elements. focusChain is snapshotted now and left
+        // untouched during the marquee (only the no-drag click drops focus).
+        const focusSnapshot = focusChain.slice();
         const slideHost = e.target.closest && e.target.closest(".slide-host");
-        if (!slideHost) {
-            focusChain = [];
-            window.__deck.send("Interaction", {
-                kind: "BackgroundClicked",
-                position: { x: e.clientX, y: e.clientY },
-            });
+        const target = slideHost ? findInteractionTarget(e) : null;
+        if (!target) {
+            armMarquee(e, focusSnapshot);
             return;
         }
-        const target = findInteractionTarget(e);
-        // Leaving the deepest focused group (background or an element outside
-        // it) drops back to top-level selection before sending.
+        // Element press. Leaving the deepest focused group (clicking an element
+        // outside it) drops back to top-level selection before sending.
         if (focusChain.length > 0) {
             const deep = focusChain[focusChain.length - 1];
-            const insideFocus = !!(target && elementChain(target).some(function (n) {
+            const insideFocus = elementChain(target).some(function (n) {
                 return n.dataset.elementId === deep;
-            }));
-            if (!insideFocus) { focusChain = []; }
-        }
-        if (!target) {
-            window.__deck.send("Interaction", {
-                kind: "BackgroundClicked",
-                position: { x: e.clientX, y: e.clientY },
             });
-            return;
+            if (!insideFocus) { focusChain = []; }
         }
         const elementId = target.dataset.elementId;
         window.__deck.send("Interaction", {
@@ -2084,7 +2127,167 @@
     // transforms the element and throttles an ElementDragged IPC via rAF.
     // Deltas are divided by the viewport scale so translate values are in
     // slide coordinates (1920px space), not screen pixels.
+    // ---------- marquee (drag-to-select) ----------
+    // armMarquee — start a marquee session on a background press. focusSnapshot
+    // is the level whose elements the marquee will select within.
+    function armMarquee(e, focusSnapshot) {
+        marquee = {
+            startX: e.clientX,
+            startY: e.clientY,
+            shift: !!e.shiftKey,
+            baseline: currentSelectionIds.slice(),
+            focusSnapshot: focusSnapshot,
+            active: false,
+        };
+        document.body.style.userSelect = "none";
+    }
+
+    function ensureMarqueeBox() {
+        const stage = document.getElementById("viewport-container");
+        if (!stage) {
+            return null;
+        }
+        let box = document.getElementById("marquee-box");
+        if (!box) {
+            box = document.createElement("div");
+            box.id = "marquee-box";
+            stage.appendChild(box);
+        }
+        return box;
+    }
+
+    function updateMarqueeBox(cx, cy) {
+        const stage = document.getElementById("viewport-container");
+        const box = ensureMarqueeBox();
+        if (!stage || !box) {
+            return;
+        }
+        const sr = stage.getBoundingClientRect();
+        box.style.display = "block";
+        box.style.left = (Math.min(marquee.startX, cx) - sr.left) + "px";
+        box.style.top = (Math.min(marquee.startY, cy) - sr.top) + "px";
+        box.style.width = Math.abs(cx - marquee.startX) + "px";
+        box.style.height = Math.abs(cy - marquee.startY) + "px";
+    }
+
+    function clearMarqueeBox() {
+        const box = document.getElementById("marquee-box");
+        if (box) {
+            box.style.display = "none";
+        }
+    }
+
+    function rectsIntersect(a, b) {
+        return !(b.right < a.left || b.left > a.right || b.bottom < a.top || b.top > a.bottom);
+    }
+
+    // marqueeCandidates — elements at the given focus level: top-level elements
+    // (no element ancestor) when the snapshot is empty, else the direct children
+    // of the deepest snapshot group.
+    function marqueeCandidates(focusSnapshot) {
+        if (!currentShadow) {
+            return [];
+        }
+        const levelParent = focusSnapshot.length
+            ? focusSnapshot[focusSnapshot.length - 1] : null;
+        const out = [];
+        const nodes = currentShadow.querySelectorAll("[data-element-id]");
+        for (let i = 0; i < nodes.length; i++) {
+            const node = nodes[i];
+            let p = node.parentElement;
+            let pid = null;
+            while (p && p !== currentShadow) {
+                if (p.classList && p.classList.contains("slide-host")) {
+                    break;
+                }
+                if (p.dataset && p.dataset.elementId) {
+                    pid = p.dataset.elementId;
+                    break;
+                }
+                p = p.parentElement;
+            }
+            if (pid === levelParent) {
+                out.push(node);
+            }
+        }
+        return out;
+    }
+
+    // marqueeIds — selection ids for the current box (Shift unions with the
+    // baseline). Pure read of the DOM + the marquee session.
+    function marqueeIds(cx, cy) {
+        const rect = {
+            left: Math.min(marquee.startX, cx),
+            top: Math.min(marquee.startY, cy),
+            right: Math.max(marquee.startX, cx),
+            bottom: Math.max(marquee.startY, cy),
+        };
+        const hits = [];
+        const cands = marqueeCandidates(marquee.focusSnapshot);
+        for (let i = 0; i < cands.length; i++) {
+            if (rectsIntersect(rect, cands[i].getBoundingClientRect())) {
+                hits.push(cands[i].dataset.elementId);
+            }
+        }
+        if (!marquee.shift) {
+            return hits;
+        }
+        const ids = marquee.baseline.slice();
+        for (let i = 0; i < hits.length; i++) {
+            if (ids.indexOf(hits[i]) < 0) {
+                ids.push(hits[i]);
+            }
+        }
+        return ids;
+    }
+
+    // sendMarqueeSelection — push the selection only when the id set changed,
+    // so a live-updating marquee does not flood the same selection every frame.
+    function sendMarqueeSelection(ids) {
+        const key = ids.join(",");
+        if (key === marquee.lastSentKey) {
+            return;
+        }
+        marquee.lastSentKey = key;
+        window.__deck.send("Interaction", {
+            kind: "SetSelectionFromPanel", element_ids: ids,
+        });
+    }
+
+    // finalizeMarquee — on release: a no-drag click deselects (as before); a
+    // drag commits the final overlapped selection.
+    function finalizeMarquee(e) {
+        const m = marquee;
+        const active = m.active;
+        if (active) {
+            sendMarqueeSelection(marqueeIds(e.clientX, e.clientY));
+        }
+        marquee = null;
+        document.body.style.userSelect = "";
+        clearMarqueeBox();
+        if (!active) {
+            focusChain = [];
+            window.__deck.send("Interaction", {
+                kind: "BackgroundClicked",
+                position: { x: e.clientX, y: e.clientY },
+            });
+        }
+    }
+
     function onMouseMove(e) {
+        if (marquee) {
+            const mdx = e.clientX - marquee.startX;
+            const mdy = e.clientY - marquee.startY;
+            if (!marquee.active) {
+                if (Math.hypot(mdx, mdy) < DRAG_THRESHOLD) {
+                    return;
+                }
+                marquee.active = true;
+            }
+            updateMarqueeBox(e.clientX, e.clientY);
+            sendMarqueeSelection(marqueeIds(e.clientX, e.clientY));
+            return;
+        }
         if (!dragState) {
             return;
         }
@@ -2196,6 +2399,10 @@
     // PENDING_TRANSFORM_TIMEOUT_MS. If no drag was in progress (click
     // only), clears dragState.
     function onMouseUp(e) {
+        if (marquee) {
+            finalizeMarquee(e);
+            return;
+        }
         if (!dragState) {
             return;
         }
@@ -2298,6 +2505,7 @@
             selectedGuideId = null;
             refreshRulers();
             renderRulerGuides();
+            renderCanvasScrim();
         },
         ApplyPatch: function (payload) {
             applyPatch(payload);
@@ -5001,6 +5209,7 @@
                 }
                 refreshRulers();
                 renderRulerGuides();
+                renderCanvasScrim();
             }
             positionDividers();
             refitThumbnails();
@@ -5038,6 +5247,7 @@
             captureCanvasMin();
             positionDividers();
             refitThumbnails();
+            renderCanvasScrim();
         });
         window.__deck.send("Ready", null);
     });

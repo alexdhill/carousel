@@ -701,6 +701,9 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     position: absolute;
     inset: 0;
     pointer-events: none;
+    /* Above the canvas scrim so handles/boxes stay crisp over off-slide
+       (greyed) elements. */
+    z-index: 8;
 }
 
 #snap-guides {
@@ -1534,6 +1537,33 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     inset: 0;
     z-index: 6;
     pointer-events: none;
+}
+
+/* Canvas scrim — greys content positioned outside the slide bounds (edit
+   mode). Four rects fill the viewport minus the slide rect. Below the
+   selection/guide/marquee overlays so those stay crisp over off-slide
+   elements; above the slide content (z 0). */
+#canvas-scrim {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+}
+
+.canvas-scrim__rect {
+    position: absolute;
+    background: var(--canvas);
+    opacity: 0.72;
+}
+
+/* Drag-to-select marquee box (editor overlay). */
+#marquee-box {
+    position: absolute;
+    display: none;
+    z-index: 7;
+    pointer-events: none;
+    border: 1px solid var(--acc);
+    background: color-mix(in srgb, var(--acc) 14%, transparent);
 }
 
 /* The guide div IS the visible accent line; a transparent ::before widens the
