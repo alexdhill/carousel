@@ -85,14 +85,14 @@
         }
         return out;
     }
-    // pendingDragEnd: when mouseup fires, we keep the optimistic
-    // transform on the dragged element so there is no visible flash
-    // between the transform clearing and the absolute-position patch
-    // landing. The transform is removed inside applyOnePatch the moment
-    // a SetStyle(left|top) patch for the same element arrives. A safety
-    // timeout clears it anyway after PENDING_TRANSFORM_TIMEOUT_MS so the
-    // element is never stuck if the patch never arrives.
-    let pendingDragEnd = null;
+    // pendingDragEnds: id -> DOM node. When mouseup fires we keep the
+    // optimistic transform on each dragged element so there is no visible flash
+    // between the transform clearing and the absolute-position patch landing.
+    // Each entry's transform is removed inside applyOnePatch the moment a
+    // SetStyle(left|top) patch for that id arrives. A safety timeout clears any
+    // stragglers after PENDING_TRANSFORM_TIMEOUT_MS. A map (not a single slot)
+    // so a multi-select drag can hold every moved element at once.
+    const pendingDragEnds = Object.create(null);
     // textEditState: non-null while a text element is being edited inline
     // (double-click). Holds the element id, the contenteditable DOM node,
     // its text at edit-start (for cancel), and the keydown/blur listeners
@@ -455,11 +455,10 @@
                 el.style.setProperty(patch.property, patch.value);
                 // Clear the optimistic drag transform the moment the
                 // authoritative absolute position arrives from Rust.
-                if (pendingDragEnd &&
-                        pendingDragEnd.element_id === patch.element_id &&
+                if (pendingDragEnds[patch.element_id] &&
                         (patch.property === "left" || patch.property === "top")) {
-                    pendingDragEnd.element.style.removeProperty("transform");
-                    pendingDragEnd = null;
+                    pendingDragEnds[patch.element_id].style.removeProperty("transform");
+                    delete pendingDragEnds[patch.element_id];
                 }
                 break;
             case "RemoveStyle":
@@ -574,6 +573,8 @@
         }
         const overlayRect = overlay.getBoundingClientRect();
         const showHandles = currentSelectionIds.length === 1;
+        const multi = currentSelectionIds.length > 1;
+        let unionL = Infinity, unionT = Infinity, unionR = -Infinity, unionB = -Infinity;
         for (let i = 0; i < currentSelectionIds.length; i++) {
             const id = currentSelectionIds[i];
             const safe = (window.CSS && window.CSS.escape) ? window.CSS.escape(id) : id;
@@ -582,6 +583,12 @@
                 continue;
             }
             const rect = el.getBoundingClientRect();
+            if (multi) {
+                unionL = Math.min(unionL, rect.left);
+                unionT = Math.min(unionT, rect.top);
+                unionR = Math.max(unionR, rect.right);
+                unionB = Math.max(unionB, rect.bottom);
+            }
             const outset = SELECTION_OUTSET_PX;
             const boxLeft = rect.left - overlayRect.left - outset;
             const boxTop = rect.top - overlayRect.top - outset;
@@ -614,6 +621,41 @@
                     handle.addEventListener("mousedown", onResizeHandleMouseDown);
                     overlay.appendChild(handle);
                 }
+            }
+        }
+        // Multi-selection: a union bounding box with corner-only handles for
+        // proportional scaling of the whole set.
+        if (multi && unionR > unionL && unionB > unionT) {
+            const bx = unionL - overlayRect.left;
+            const by = unionT - overlayRect.top;
+            const bw = unionR - unionL;
+            const bh = unionB - unionT;
+            const box = document.createElement("div");
+            box.className = "selection-box selection-box--multi";
+            box.style.position = "absolute";
+            box.style.left = bx + "px";
+            box.style.top = by + "px";
+            box.style.width = bw + "px";
+            box.style.height = bh + "px";
+            box.style.pointerEvents = "none";
+            box.style.boxSizing = "border-box";
+            overlay.appendChild(box);
+            const corners = [
+                { name: "nw", fx: 0, fy: 0 },
+                { name: "ne", fx: 1, fy: 0 },
+                { name: "se", fx: 1, fy: 1 },
+                { name: "sw", fx: 0, fy: 1 },
+            ];
+            for (let h = 0; h < corners.length; h++) {
+                const c = corners[h];
+                const handle = document.createElement("div");
+                handle.className = "selection-handle";
+                handle.dataset.handle = c.name;
+                handle.dataset.multiScale = "1";
+                handle.style.left = (bx + c.fx * bw) + "px";
+                handle.style.top = (by + c.fy * bh) + "px";
+                handle.addEventListener("mousedown", onMultiScaleMouseDown);
+                overlay.appendChild(handle);
             }
         }
     }
@@ -2102,18 +2144,42 @@
             if (!insideFocus) { focusChain = []; }
         }
         const elementId = target.dataset.elementId;
-        window.__deck.send("Interaction", {
-            kind: "ElementClicked",
-            element_id: elementId,
-            modifiers: readModifiers(e),
-            position: { x: e.clientX, y: e.clientY },
-        });
-        dragState = {
-            element_id: elementId,
-            start: { x: e.clientX, y: e.clientY },
-            started: false,
-            target: target,
-        };
+        // Pressing an already-selected element while several are selected (no
+        // Shift) starts a MULTI drag: keep the selection and drag them all. A
+        // no-drag release collapses to just this element (handled in mouseup).
+        const inSelection = currentSelectionIds.indexOf(elementId) >= 0;
+        const multi = inSelection && currentSelectionIds.length > 1 && !e.shiftKey;
+        if (multi) {
+            const targets = [];
+            for (let i = 0; i < currentSelectionIds.length; i++) {
+                const node = findElement(currentSelectionIds[i]);
+                if (node) {
+                    targets.push({ id: currentSelectionIds[i], node: node });
+                }
+            }
+            dragState = {
+                element_id: elementId,
+                start: { x: e.clientX, y: e.clientY },
+                started: false,
+                target: target,
+                multi: true,
+                targets: targets,
+                collapseId: elementId,
+            };
+        } else {
+            window.__deck.send("Interaction", {
+                kind: "ElementClicked",
+                element_id: elementId,
+                modifiers: readModifiers(e),
+                position: { x: e.clientX, y: e.clientY },
+            });
+            dragState = {
+                element_id: elementId,
+                start: { x: e.clientX, y: e.clientY },
+                started: false,
+                target: target,
+            };
+        }
         // Disable browser text selection for the duration of this gesture.
         // Cleared unconditionally in onMouseUp regardless of whether a drag started.
         document.body.style.userSelect = "none";
@@ -2373,9 +2439,17 @@
         }
         const scale = getViewportScale();
         dragState.lastMouse = { x: clientX, y: clientY };
+        // Delta is computed once from the primary element (snapping uses its
+        // rect); in a multi drag every selected element gets the same delta.
         const d = computeDragDelta(clientX, clientY, scale, shiftHeld, metaHeld, true);
-        optimisticTransform(dragState.target, d.x, d.y);
-        reportDragThrottled(dragState.element_id, { x: d.x, y: d.y }, { x: clientX, y: clientY });
+        if (dragState.multi) {
+            for (let i = 0; i < dragState.targets.length; i++) {
+                optimisticTransform(dragState.targets[i].node, d.x, d.y);
+            }
+        } else {
+            optimisticTransform(dragState.target, d.x, d.y);
+            reportDragThrottled(dragState.element_id, { x: d.x, y: d.y }, { x: clientX, y: clientY });
+        }
     }
 
     // onDragKeyChange
@@ -2412,26 +2486,43 @@
             const scale = getViewportScale();
             const snapped = computeDragDelta(
                 e.clientX, e.clientY, scale, e.shiftKey, e.metaKey, false);
-            window.__deck.send("Interaction", {
-                kind: "ElementDragEnded",
-                element_id: dragState.element_id,
-                delta: { x: snapped.x, y: snapped.y },
-            });
-            // Hold the optimistic transform so there is no flash between
-            // transform clear and the absolute-position patch landing.
-            // applyOnePatch clears it when SetStyle(left|top) arrives.
-            pendingDragEnd = {
-                element: dragState.target,
-                element_id: dragState.element_id,
-            };
-            (function (captured) {
+            // Hold each moved element's optimistic transform until its
+            // SetStyle(left|top) patch lands (applyOnePatch clears it); a safety
+            // timeout clears any straggler.
+            const held = dragState.multi
+                ? dragState.targets.slice()
+                : [{ id: dragState.element_id, node: dragState.target }];
+            for (let i = 0; i < held.length; i++) {
+                pendingDragEnds[held[i].id] = held[i].node;
+            }
+            (function (ids) {
                 setTimeout(function () {
-                    if (pendingDragEnd && pendingDragEnd.element_id === captured.element_id) {
-                        captured.element.style.removeProperty("transform");
-                        pendingDragEnd = null;
+                    for (let i = 0; i < ids.length; i++) {
+                        if (pendingDragEnds[ids[i]]) {
+                            pendingDragEnds[ids[i]].style.removeProperty("transform");
+                            delete pendingDragEnds[ids[i]];
+                        }
                     }
                 }, PENDING_TRANSFORM_TIMEOUT_MS);
-            }(pendingDragEnd));
+            }(held.map(function (h) { return h.id; })));
+            if (dragState.multi) {
+                window.__deck.send("Interaction", {
+                    kind: "ElementsDragEnded",
+                    element_ids: dragState.targets.map(function (t) { return t.id; }),
+                    delta: { x: snapped.x, y: snapped.y },
+                });
+            } else {
+                window.__deck.send("Interaction", {
+                    kind: "ElementDragEnded",
+                    element_id: dragState.element_id,
+                    delta: { x: snapped.x, y: snapped.y },
+                });
+            }
+        } else if (dragState.multi && !e.shiftKey) {
+            // No-drag click on one of several selected items → collapse to it.
+            window.__deck.send("Interaction", {
+                kind: "SetSelectionFromPanel", element_ids: [dragState.collapseId],
+            });
         }
         // Restore text selectability now that the gesture is over.
         document.body.style.userSelect = "";
@@ -2660,6 +2751,8 @@
     let resizeState = null;
     let resizeRafScheduled = false;
     let pendingResize = null;
+    // Multi-select proportional scale session (null when idle).
+    let multiScaleState = null;
     // Minimum visual size in slide pixels — mirrors the Rust-side
     // MIN_DIMENSION_PX safety clamp so the user can't drag an element
     // to a degenerate state mid-drag either.
@@ -3051,6 +3144,102 @@
         window.removeEventListener("mousemove", onResizeMouseMove);
         window.removeEventListener("mouseup", onResizeMouseUp);
         updateSelectionOverlay();
+    }
+
+    // ---------- multi-select proportional scale ----------
+    // onMultiScaleMouseDown — grab a corner of the multi-selection bbox. Builds
+    // the slide-space union box + per-element rects, anchors at the opposite
+    // corner, and previews via a per-element transform about that anchor.
+    function onMultiScaleMouseDown(e) {
+        if (e.button !== 0 || !currentShadow) {
+            return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        const items = [];
+        let ul = Infinity, ut = Infinity, ur = -Infinity, ub = -Infinity;
+        for (let i = 0; i < currentSelectionIds.length; i++) {
+            const node = findElement(currentSelectionIds[i]);
+            if (!node) {
+                continue;
+            }
+            const r = movingRectFromStyle(node);
+            items.push({ id: currentSelectionIds[i], node: node, rect: r });
+            ul = Math.min(ul, r.x); ut = Math.min(ut, r.y);
+            ur = Math.max(ur, r.x + r.w); ub = Math.max(ub, r.y + r.h);
+        }
+        if (items.length < 2 || ur <= ul || ub <= ut) {
+            return;
+        }
+        const name = e.currentTarget.dataset.handle;
+        // Grabbed corner + opposite corner (anchor) in slide coords.
+        const cornerX = name.indexOf("w") >= 0 ? ul : ur;
+        const cornerY = name.indexOf("n") >= 0 ? ut : ub;
+        const anchor = {
+            x: name.indexOf("w") >= 0 ? ur : ul,
+            y: name.indexOf("n") >= 0 ? ub : ut,
+        };
+        multiScaleState = { items: items, anchor: anchor, corner: { x: cornerX, y: cornerY } };
+        document.body.style.userSelect = "none";
+        window.addEventListener("mousemove", onMultiScaleMouseMove);
+        window.addEventListener("mouseup", onMultiScaleMouseUp);
+    }
+
+    // multiScaleFactor — uniform factor from the pointer vs the anchor, using
+    // the axis that moved most (so either-axis drag scales proportionally).
+    function multiScaleFactor(e) {
+        const stage = document.getElementById("viewport-container").getBoundingClientRect();
+        const m = canvasMetrics();
+        if (!m) {
+            return 1;
+        }
+        const px = (e.clientX - stage.left - m.ox) / m.scale;
+        const py = (e.clientY - stage.top - m.oy) / m.scale;
+        const s = multiScaleState;
+        const dx = s.corner.x - s.anchor.x;
+        const dy = s.corner.y - s.anchor.y;
+        const fx = Math.abs(dx) > 0.001 ? (px - s.anchor.x) / dx : 1;
+        const fy = Math.abs(dy) > 0.001 ? (py - s.anchor.y) / dy : 1;
+        return Math.max(0.05, Math.max(fx, fy));
+    }
+
+    function onMultiScaleMouseMove(e) {
+        if (!multiScaleState) {
+            return;
+        }
+        const f = multiScaleFactor(e);
+        const a = multiScaleState.anchor;
+        for (let i = 0; i < multiScaleState.items.length; i++) {
+            const it = multiScaleState.items[i];
+            it.node.style.transformOrigin = (a.x - it.rect.x) + "px " + (a.y - it.rect.y) + "px";
+            it.node.style.transform = "scale(" + f + ")";
+        }
+    }
+
+    function onMultiScaleMouseUp(e) {
+        window.removeEventListener("mousemove", onMultiScaleMouseMove);
+        window.removeEventListener("mouseup", onMultiScaleMouseUp);
+        document.body.style.userSelect = "";
+        const s = multiScaleState;
+        multiScaleState = null;
+        if (!s) {
+            return;
+        }
+        const f = multiScaleFactor(e);
+        // Clear the preview transforms; the remount re-bakes the geometry.
+        for (let i = 0; i < s.items.length; i++) {
+            s.items[i].node.style.removeProperty("transform");
+            s.items[i].node.style.removeProperty("transform-origin");
+        }
+        if (Math.abs(f - 1) < 0.001) {
+            return;
+        }
+        window.__deck.send("Interaction", {
+            kind: "ScaleElements",
+            element_ids: s.items.map(function (it) { return it.id; }),
+            factor: f,
+            anchor: { x: s.anchor.x, y: s.anchor.y },
+        });
     }
 
     // ---------- inspector ----------

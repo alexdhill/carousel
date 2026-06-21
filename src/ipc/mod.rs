@@ -177,6 +177,20 @@ pub enum InteractionEvent {
         element_id: ElementId,
         delta: Vec2,
     },
+    // ElementsDragEnded — multi-select drag commit: move every listed element
+    // by the same delta in one undoable step (CompositeCommand of MoveElement).
+    ElementsDragEnded {
+        element_ids: Vec<ElementId>,
+        delta: Vec2,
+    },
+    // ScaleElements — proportional multi-select scale commit. Each element is
+    // scaled by `factor` about `anchor` (slide px): box geometry scales, text
+    // font-size scales, groups' scale multiplies. One undoable step.
+    ScaleElements {
+        element_ids: Vec<ElementId>,
+        factor: f64,
+        anchor: Point,
+    },
     // ElementResizeStarted
     // Fired when the user mousedowns on a selection-overlay handle.
     // The interpret layer opens a transaction and snapshots geometry

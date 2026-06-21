@@ -30,6 +30,7 @@ pub mod remove_element;
 pub mod rename_element;
 pub mod reparent_element;
 pub mod resize_element;
+pub mod scale_elements;
 pub mod set_geometry;
 pub mod set_inline_style;
 pub mod set_element_id;
@@ -55,6 +56,7 @@ pub use history::{CommandHistory, DEFAULT_HISTORY_DEPTH, HistoryEntry, UndoOutpu
 pub use rename_element::RenameElement;
 pub use reparent_element::ReparentElement;
 pub use resize_element::ResizeElement;
+pub use scale_elements::{ElementTransform, SetElementsTransform};
 pub use set_geometry::{GeometryProperty, SetGeometryProperty};
 pub use set_inline_style::{RemoveInlineStyle, SetInlineStyle};
 // FileAction is re-exported below via the public InterpretResult enum.

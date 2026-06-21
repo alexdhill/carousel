@@ -1335,6 +1335,12 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 
 /* ===================== Selection handles ===================== */
 
+/* Union bounding box around a multi-selection (corner-scale handles sit on it).
+   Dashed to distinguish from the per-element solid boxes. */
+.selection-box--multi {
+    border: 1.5px dashed var(--acc);
+}
+
 .selection-handle {
     position: absolute;
     width: 10px;

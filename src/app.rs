@@ -21,8 +21,9 @@ use crate::bundle::{
 use crate::commands::{
     Command, CommandDispatcher, CompositeCommand, EditorMode, FileAction, GeometryProperty,
     GroupElements, InsertAnimation, InsertElement, InsertLayout, InsertSlide, InterpretResult, MoveElement,
-    RemoveAnimation, RemoveElementCommand, RemoveInlineStyle, RemoveSlide, RenameElement, ReparentElement,
-    ResizeElement, SetAnimationProperty, SetElementId, SetGeometryProperty, SetGlobalsCss, SetGroupLayout,
+    ElementTransform, RemoveAnimation, RemoveElementCommand, RemoveInlineStyle, RemoveSlide,
+    RenameElement, ReparentElement,
+    ResizeElement, SetElementsTransform, SetAnimationProperty, SetElementId, SetGeometryProperty, SetGlobalsCss, SetGroupLayout,
     SetGroupScale, SetInlineStyle, SetLayoutBackground, SetLayoutBackgroundImage, SetLayoutName,
     SetSlideBackground, SetSlideBackgroundImage, SetSlideLayout, SetSlideNotes, SetSlideTitle,
     SetTextContent, SwapTheme,
@@ -683,6 +684,40 @@ impl ApplicationCore {
                     previous_position: None,
                 };
                 InterpretResult::CommitTransactionWith(Box::new(cmd))
+            }
+            InteractionEvent::ElementsDragEnded { element_ids, delta } => {
+                let target: CanvasTarget = match self.active_canvas() {
+                    Some(t) => t,
+                    None => return InterpretResult::Nothing,
+                };
+                let mut cmds: Vec<Box<dyn Command>> = Vec::new();
+                if let Some(tx) = self.dispatcher.transaction() {
+                    for id in &element_ids {
+                        if let Some((sx, sy)) = tx.start_snapshot.position_of(&target, id) {
+                            cmds.push(Box::new(MoveElement {
+                                target: target.clone(),
+                                element_id: id.clone(),
+                                new_position: Point { x: sx + delta.x, y: sy + delta.y },
+                                previous_position: None,
+                            }));
+                        }
+                    }
+                }
+                if cmds.is_empty() {
+                    return InterpretResult::Nothing;
+                }
+                InterpretResult::CommitTransactionWith(Box::new(CompositeCommand::new(
+                    cmds, "Move Elements",
+                )))
+            }
+            InteractionEvent::ScaleElements { element_ids, factor, anchor } => {
+                interpret_scale_elements(
+                    self.dispatcher.deck(),
+                    self.active_canvas(),
+                    &element_ids,
+                    factor,
+                    anchor,
+                )
             }
             InteractionEvent::ElementResizeStarted { element_id, .. } => {
                 let snapshot: TransactionSnapshot = self.snapshot_for_drag(&element_id);
@@ -1624,10 +1659,11 @@ impl ApplicationCore {
     }
 
     // snapshot_for_drag
-    // Inputs: the element id being dragged.
-    // Output: a TransactionSnapshot pre-loaded with the element's current
-    // geometry. ElementDragged handlers read this to compute absolute
-    // positions from cumulative drag deltas.
+    // Inputs: the element id being dragged (the primary).
+    // Output: a TransactionSnapshot pre-loaded with the geometry of the primary
+    // AND every currently-selected element, so a multi-select drag can read
+    // each element's start position at commit (ElementsDragEnded). Single drags
+    // still record just the one element.
     fn snapshot_for_drag(&self, element_id: &str) -> TransactionSnapshot {
         let mut snap: TransactionSnapshot = TransactionSnapshot::empty();
         let target: CanvasTarget = match self.active_canvas() {
@@ -1638,11 +1674,15 @@ impl ApplicationCore {
             Some(c) => c,
             None => return snap,
         };
-        let el = match canvas.find_element(element_id) {
-            Some(e) => e,
-            None => return snap,
-        };
-        snap.record_geometry(target, element_id.to_string(), el.geometry.clone());
+        let mut ids: Vec<String> = self.selection.element_ids.clone();
+        if !ids.iter().any(|id| id == element_id) {
+            ids.push(element_id.to_string());
+        }
+        for id in &ids {
+            if let Some(el) = canvas.find_element(id) {
+                snap.record_geometry(target.clone(), id.clone(), el.geometry.clone());
+            }
+        }
         snap
     }
 
@@ -3306,6 +3346,61 @@ fn interpret_move_animation(
         }),
     ];
     InterpretResult::Command(Box::new(CompositeCommand::new(cmds, "Move Animation")))
+}
+
+// interpret_scale_elements
+// Inputs: deck (read), the active canvas, the selected ids, a uniform scale
+// factor, and the anchor (slide px). Output: a SetElementsTransform with each
+// element's absolute target geometry (scaled about the anchor), plus scaled
+// font-size for text and scaled uniform scale for groups. Nothing on no
+// canvas / non-positive factor / empty result.
+fn interpret_scale_elements(
+    deck: &Deck,
+    target_opt: Option<CanvasTarget>,
+    ids: &[ElementId],
+    factor: f64,
+    anchor: Point,
+) -> InterpretResult {
+    let target: CanvasTarget = match target_opt {
+        Some(t) => t,
+        None => return InterpretResult::Nothing,
+    };
+    if !(factor > 0.0) || ids.is_empty() {
+        return InterpretResult::Nothing;
+    }
+    let canvas = match deck.canvas(&target) {
+        Some(c) => c,
+        None => return InterpretResult::Nothing,
+    };
+    let mut items: Vec<ElementTransform> = Vec::with_capacity(ids.len());
+    for id in ids {
+        let el = match canvas.find_element(id) {
+            Some(e) => e,
+            None => continue,
+        };
+        let g = &el.geometry;
+        let font_size_px = match &el.style {
+            ElementStyle::Text(ts) => Some(ts.font_size.value * factor),
+            _ => None,
+        };
+        let group_scale = match &el.style {
+            ElementStyle::Group(gs) => Some(gs.scale * factor),
+            _ => None,
+        };
+        items.push(ElementTransform {
+            id: id.clone(),
+            x: anchor.x + (g.x - anchor.x) * factor,
+            y: anchor.y + (g.y - anchor.y) * factor,
+            width: g.width * factor,
+            height: g.height * factor,
+            font_size_px,
+            group_scale,
+        });
+    }
+    if items.is_empty() {
+        return InterpretResult::Nothing;
+    }
+    InterpretResult::Command(Box::new(SetElementsTransform { target, items }))
 }
 
 // build_insert_slide_after_active
