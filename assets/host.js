@@ -235,7 +235,18 @@
         if (prior && prior.url) {
             try { URL.revokeObjectURL(prior.url); } catch (_e) { /* noop */ }
         }
-        assetBlobCache[payload.asset_id] = { url: url, media_type: mediaType };
+        assetBlobCache[payload.asset_id] = {
+            url: url,
+            media_type: mediaType,
+            original_filename: payload.original_filename || "",
+        };
+    }
+
+    // assetFilename
+    // Inputs: an asset id. Output: its original filename, or "" when unknown.
+    function assetFilename(assetId) {
+        const entry = assetBlobCache[assetId];
+        return (entry && entry.original_filename) || "";
     }
 
     // base64ToUint8Array
@@ -3366,21 +3377,38 @@
             fields: [
                 { prop: "x", label: "X", kind: "number", suffix: "px" },
                 { prop: "y", label: "Y", kind: "number", suffix: "px" },
-                { prop: "width", label: "Width", kind: "number", suffix: "px" },
-                { prop: "height", label: "Height", kind: "number", suffix: "px" },
+                { prop: "size", label: "Size", kind: "size-row", full: true, composite: true },
                 { prop: "rotation", label: "Rotation", kind: "rotation-deg", suffix: "°" },
                 { prop: "opacity", label: "Opacity", kind: "number", suffix: "" },
             ],
         },
         {
-            id: "appearance",
-            label: "Appearance",
+            id: "fill",
+            label: "Fill",
             appliesTo: BOXY_TYPES,
             fields: [
-                { prop: "background-color", label: "Fill", kind: "css", full: true },
-                { prop: "border", label: "Border", kind: "css", full: true },
-                { prop: "border-radius", label: "Border Radius", kind: "css", suffix: "" },
-                { prop: "box-shadow", label: "Shadow", kind: "css", full: true },
+                { prop: "background-color", label: "Fill", kind: "swatch", full: true, composite: true },
+                { prop: "background-image", label: "Image", kind: "fill-image", full: true, composite: true },
+                { prop: "background-size", label: "Object fit", kind: "object-fit", full: true, composite: true },
+            ],
+        },
+        {
+            id: "border",
+            label: "Border",
+            appliesTo: BOXY_TYPES,
+            fields: [
+                { prop: "border-style", label: "Style", kind: "border-style", full: true, composite: true },
+                { prop: "border-width", label: "Width", kind: "cluster", full: true, composite: true, cluster: "width" },
+                { prop: "border-color", label: "Color", kind: "swatch", full: true, composite: true },
+                { prop: "border-radius", label: "Corner radius", kind: "cluster", full: true, composite: true, cluster: "radius" },
+            ],
+        },
+        {
+            id: "shadow",
+            label: "Shadow",
+            appliesTo: BOXY_TYPES,
+            fields: [
+                { prop: "box-shadow", label: "Shadow", kind: "shadow", full: true, composite: true },
             ],
         },
         {
@@ -3433,6 +3461,70 @@
     // re-syncs each from the selected element's declarations.
     const textStyleControls = [];
 
+    // Composite Fill/Border/Shadow controls (swatch+opacity, 4-cell clusters,
+    // shadow). Like text-style they wire their own commits and re-sync from the
+    // declaration map via `.syncDecls(decls)` rather than the single-prop
+    // populate path. Reset alongside textStyleControls in buildInspectorSections.
+    const compositeControls = [];
+
+    // Transform Width/Height aspect-ratio lock. Ephemeral UI state (default
+    // off); when on, editing one dimension scales the other by the element's
+    // live ratio (see onInspectorFieldCommit).
+    let sizeRatioLinked = false;
+
+    // Border style segmented options. "None" shows as a word; the three line
+    // styles render as a short stroked line preview (mirrors the mockup).
+    function borderLine(dash) {
+        const da = dash ? ' stroke-dasharray="' + dash + '"' : "";
+        const cap = dash === "2 4" ? ' stroke-linecap="round"' : "";
+        return '<svg width="26" height="2" viewBox="0 0 26 2"><line x1="1" y1="1"'
+            + ' x2="25" y2="1" stroke="currentColor" stroke-width="2"' + da + cap + "/></svg>";
+    }
+    const BORDER_STYLE_OPTIONS = [
+        { value: "none", icon: "None", tip: "No border" },
+        { value: "solid", icon: borderLine(""), tip: "Solid" },
+        { value: "dashed", icon: borderLine("5 4"), tip: "Dashed" },
+        { value: "dotted", icon: borderLine("2 4"), tip: "Dotted" },
+    ];
+
+    // Object-fit segmented options for a fill image. Values are the
+    // background-size each fit maps to ("fit" = natural size, see design spec).
+    const OBJECT_FIT_OPTIONS = [
+        { value: "100% 100%", icon: "Fill", tip: "Stretch to fill" },
+        { value: "cover", icon: "Cover", tip: "Cover the box" },
+        { value: "contain", icon: "Contain", tip: "Fit inside the box" },
+        { value: "auto", icon: "Fit", tip: "Natural size" },
+    ];
+
+    // Cluster cell specs: the four longhand props (in cell order) plus the short
+    // label each cell shows. `parse` reads the live values off a decl map.
+    const CLUSTER_SPECS = {
+        width: {
+            cells: [
+                { prop: "border-top-width", label: "T", tip: "Top" },
+                { prop: "border-right-width", label: "R", tip: "Right" },
+                { prop: "border-bottom-width", label: "B", tip: "Bottom" },
+                { prop: "border-left-width", label: "L", tip: "Left" },
+            ],
+            parse: function (decls) {
+                const w = window.__style.parseBorder(decls).widths;
+                return [w.t, w.r, w.b, w.l];
+            },
+        },
+        radius: {
+            cells: [
+                { prop: "border-top-left-radius", label: "TL", tip: "Top-left" },
+                { prop: "border-top-right-radius", label: "TR", tip: "Top-right" },
+                { prop: "border-bottom-right-radius", label: "BR", tip: "Bottom-right" },
+                { prop: "border-bottom-left-radius", label: "BL", tip: "Bottom-left" },
+            ],
+            parse: function (decls) {
+                const r = window.__style.parseRadius(decls);
+                return [r.tl, r.tr, r.br, r.bl];
+            },
+        },
+    };
+
     // The B/I/U/S toggle specs. `list` props (text-decoration) add/remove
     // their token within a space-separated list; `min` (font-weight) treats
     // any weight >= the threshold as "on".
@@ -3450,6 +3542,13 @@
         "position": 1, "display": 1, "left": 1, "top": 1, "right": 1, "bottom": 1,
         "width": 1, "height": 1, "transform": 1, "opacity": 1, "z-index": 1,
         "background-color": 1, "border": 1, "border-radius": 1, "box-shadow": 1,
+        "background-image": 1, "background-size": 1, "background-repeat": 1,
+        "background-position": 1,
+        "border-style": 1, "border-color": 1, "border-width": 1,
+        "border-top-width": 1, "border-right-width": 1,
+        "border-bottom-width": 1, "border-left-width": 1,
+        "border-top-left-radius": 1, "border-top-right-radius": 1,
+        "border-bottom-right-radius": 1, "border-bottom-left-radius": 1,
         "font-family": 1, "font-size": 1, "font-weight": 1, "color": 1,
         "text-align": 1, "justify-content": 1, "line-height": 1,
         "letter-spacing": 1, "font-style": 1, "text-decoration": 1,
@@ -3470,6 +3569,7 @@
         }
         root.replaceChildren();
         textStyleControls.length = 0;
+        compositeControls.length = 0;
         for (let i = 0; i < INSPECTOR_SECTIONS.length; i++) {
             const section = INSPECTOR_SECTIONS[i];
             root.appendChild(buildSection(section));
@@ -3538,7 +3638,10 @@
         const control = buildFieldControl(field);
         control.dataset.prop = field.prop;
         control.dataset.kind = field.kind;
-        if (!field.readonly) {
+        // Composite controls (swatch/cluster/shadow/border-style/size-row) wire
+        // their own commits internally, so skip the single-prop change handler
+        // that would double-post.
+        if (!field.readonly && !field.composite) {
             control.addEventListener("change", onInspectorFieldCommit);
         }
         const id = "inspector-input-" + field.prop.replace(/[^a-z0-9]/gi, "-");
@@ -3576,6 +3679,27 @@
         }
         if (field.kind === "color") {
             return makeColorControl();
+        }
+        if (field.kind === "swatch") {
+            return makeSwatchOpacityControl(field.prop);
+        }
+        if (field.kind === "border-style") {
+            return makeBorderStyleControl();
+        }
+        if (field.kind === "cluster") {
+            return makeClusterControl(CLUSTER_SPECS[field.cluster]);
+        }
+        if (field.kind === "shadow") {
+            return makeShadowControl();
+        }
+        if (field.kind === "size-row") {
+            return makeSizeRowControl();
+        }
+        if (field.kind === "fill-image") {
+            return makeFillImageControl();
+        }
+        if (field.kind === "object-fit") {
+            return makeObjectFitControl();
         }
         const input = document.createElement("input");
         input.className = "inspector__input";
@@ -3673,6 +3797,379 @@
                 }
             },
         });
+        return box;
+    }
+
+    // Chain glyph shared by the cluster link toggle and the ratio lock.
+    const LINK_ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none"'
+        + ' stroke="currentColor" stroke-width="2" stroke-linecap="round"'
+        + ' stroke-linejoin="round"><path d="M10 13a4 4 0 0 0 5.6.5l2.5-2.5a4 4 0 0'
+        + ' 0-5.6-5.6L11 7"/><path d="M14 11a4 4 0 0 0-5.6-.5L5.9 13a4 4 0 0 0 5.6'
+        + ' 5.6L13 17"/></svg>';
+
+    // numOr0 / clampPct: coerce an inspector input string to a finite number
+    // (0 fallback) and to an integer percent in 0..100 (100 fallback).
+    function numOr0(v) {
+        const n = Number(String(v == null ? "" : v).replace(/px$/i, "").trim());
+        return isFinite(n) ? n : 0;
+    }
+    function clampPct(v) {
+        const n = Math.round(Number(String(v == null ? "" : v).replace(/%$/, "").trim()));
+        if (!isFinite(n)) {
+            return 100;
+        }
+        return Math.max(0, Math.min(100, n));
+    }
+    function setIfIdle(input, value) {
+        if (input && document.activeElement !== input) {
+            input.value = value;
+        }
+    }
+
+    // makeSwatchOpacityControl
+    // Inputs: the CSS property the control owns (background-color / border-color).
+    // Output: a composite control — a colour swatch (native picker) plus an
+    // opacity % field — that commits `prop: rgba(...)` on either change and
+    // re-syncs from the declaration map via syncDecls. Registered in
+    // compositeControls. Errors: asserts a non-empty prop.
+    function makeSwatchOpacityControl(prop) {
+        console.assert(typeof prop === "string" && prop !== "", "swatch prop required");
+        const box = document.createElement("div");
+        box.className = "inspector__swatchrow";
+        const color = makeColorControl();
+        color.classList.add("inspector__swatchrow-color");
+        const op = document.createElement("input");
+        op.className = "inspector__swatchrow-opacity";
+        op.spellcheck = false;
+        const pct = document.createElement("span");
+        pct.className = "inspector__swatchrow-pct";
+        pct.textContent = "%";
+        box.appendChild(color);
+        box.appendChild(op);
+        box.appendChild(pct);
+        function commit() {
+            sendPropertyChanged(prop, window.__style.composeRgba(color.value, clampPct(op.value)));
+        }
+        color.addEventListener("change", commit);
+        op.addEventListener("change", commit);
+        op.addEventListener("keydown", function (e) {
+            if (e.key === "Enter") { e.preventDefault(); op.blur(); }
+        });
+        box.syncDecls = function (decls) {
+            const c = window.__style.parseRgba(decls[prop] || "");
+            color.value = c.hex;
+            setIfIdle(op, String(c.alpha));
+        };
+        Object.defineProperty(box, "value", { get: function () { return ""; }, set: function () {} });
+        compositeControls.push(box);
+        return box;
+    }
+
+    // makeBorderStyleControl
+    // Output: a segmented None/solid/dashed/dotted selector that commits
+    // `border-style` and re-syncs from parseBorder (so a legacy `border`
+    // shorthand still lights the right segment). Registered in compositeControls.
+    function makeBorderStyleControl() {
+        const box = makeSegmentControl(BORDER_STYLE_OPTIONS);
+        box.addEventListener("change", function () {
+            sendPropertyChanged("border-style", box.value);
+        });
+        box.syncDecls = function (decls) {
+            box.value = window.__style.parseBorder(decls).style;
+        };
+        compositeControls.push(box);
+        return box;
+    }
+
+    // makeClusterCell
+    // Inputs: a { label, tip } cell spec. Output: { wrap, input } — a labelled
+    // mini number field used by the border-width / corner-radius clusters and
+    // the shadow grid.
+    function makeClusterCell(cell) {
+        const wrap = document.createElement("div");
+        wrap.className = "inspector__cluster-cell tt";
+        wrap.setAttribute("data-tip", cell.tip || "");
+        wrap.setAttribute("data-key", "");
+        const lab = document.createElement("span");
+        lab.className = "inspector__cluster-cell-label";
+        lab.textContent = cell.label;
+        const input = document.createElement("input");
+        input.className = "inspector__cluster-input";
+        input.spellcheck = false;
+        wrap.appendChild(lab);
+        wrap.appendChild(input);
+        return { wrap: wrap, input: input };
+    }
+
+    // makeClusterControl
+    // Inputs: a CLUSTER_SPECS entry (four longhand props + a parse fn).
+    // Output: a 4-cell number cluster with a link toggle. Linked edits write
+    // the value to all four longhands; unlinked edits write only the touched
+    // cell. The link auto-reflects uniformity on sync; clicking it while
+    // unlinked collapses all cells to the first and re-links. Registered in
+    // compositeControls. Errors: asserts a well-formed spec.
+    function makeClusterControl(spec) {
+        console.assert(spec && Array.isArray(spec.cells), "cluster spec required");
+        const box = document.createElement("div");
+        box.className = "inspector__cluster";
+        let linked = true;
+        const inputs = [];
+        const link = document.createElement("button");
+        link.type = "button";
+        link.className = "inspector__cluster-link tt";
+        link.setAttribute("data-tip", "Link sides");
+        link.setAttribute("data-key", "");
+        link.innerHTML = LINK_ICON;
+        const grid = document.createElement("div");
+        grid.className = "inspector__cluster-grid";
+        function emitAll(v) {
+            for (let j = 0; j < inputs.length; j++) {
+                inputs[j].value = String(v);
+                sendPropertyChanged(spec.cells[j].prop, v + "px");
+            }
+        }
+        for (let i = 0; i < spec.cells.length; i++) {
+            const cell = makeClusterCell(spec.cells[i]);
+            inputs.push(cell.input);
+            grid.appendChild(cell.wrap);
+            (function (idx, input) {
+                input.addEventListener("change", function () {
+                    const v = numOr0(input.value);
+                    if (linked) {
+                        emitAll(v);
+                    } else {
+                        sendPropertyChanged(spec.cells[idx].prop, v + "px");
+                    }
+                });
+                input.addEventListener("keydown", function (e) {
+                    if (e.key === "Enter") { e.preventDefault(); input.blur(); }
+                });
+            }(i, cell.input));
+        }
+        link.addEventListener("click", function () {
+            linked = !linked;
+            box.dataset.linked = linked ? "true" : "false";
+            if (linked) {
+                emitAll(numOr0(inputs[0].value));
+            }
+        });
+        box.appendChild(link);
+        box.appendChild(grid);
+        box.syncDecls = function (decls) {
+            const vals = spec.parse(decls);
+            let uniform = true;
+            for (let j = 0; j < inputs.length; j++) {
+                setIfIdle(inputs[j], vals[j]);
+                if (vals[j] !== vals[0]) {
+                    uniform = false;
+                }
+            }
+            linked = uniform;
+            box.dataset.linked = linked ? "true" : "false";
+        };
+        box.dataset.linked = "true";
+        Object.defineProperty(box, "value", { get: function () { return ""; }, set: function () {} });
+        compositeControls.push(box);
+        return box;
+    }
+
+    // makeShadowControl
+    // Output: an X/Y/Blur/Spread number grid plus a colour swatch that commit a
+    // single composed `box-shadow` on any change and re-sync from
+    // parseBoxShadow. Shadow colour is hex only (no alpha) for now. Registered
+    // in compositeControls.
+    function makeShadowControl() {
+        const box = document.createElement("div");
+        box.className = "inspector__shadow";
+        const grid = document.createElement("div");
+        grid.className = "inspector__shadow-grid";
+        const order = [
+            { key: "x", label: "X" }, { key: "y", label: "Y" },
+            { key: "blur", label: "Blur" }, { key: "spread", label: "Spread" },
+        ];
+        const inputs = {};
+        const color = makeColorControl();
+        color.classList.add("inspector__shadow-color");
+        function commit() {
+            sendPropertyChanged("box-shadow", window.__style.composeBoxShadow({
+                x: numOr0(inputs.x.value), y: numOr0(inputs.y.value),
+                blur: numOr0(inputs.blur.value), spread: numOr0(inputs.spread.value),
+                color: color.value,
+            }));
+        }
+        for (let i = 0; i < order.length; i++) {
+            const cell = makeClusterCell({ label: order[i].label, tip: order[i].label });
+            inputs[order[i].key] = cell.input;
+            grid.appendChild(cell.wrap);
+            cell.input.addEventListener("change", commit);
+            (function (input) {
+                input.addEventListener("keydown", function (e) {
+                    if (e.key === "Enter") { e.preventDefault(); input.blur(); }
+                });
+            }(cell.input));
+        }
+        color.addEventListener("change", commit);
+        box.appendChild(grid);
+        box.appendChild(color);
+        box.syncDecls = function (decls) {
+            const s = window.__style.parseBoxShadow(decls["box-shadow"] || "");
+            setIfIdle(inputs.x, s.x);
+            setIfIdle(inputs.y, s.y);
+            setIfIdle(inputs.blur, s.blur);
+            setIfIdle(inputs.spread, s.spread);
+            color.value = window.__style.parseRgba(s.color).hex;
+        };
+        Object.defineProperty(box, "value", { get: function () { return ""; }, set: function () {} });
+        compositeControls.push(box);
+        return box;
+    }
+
+    // parseAssetId
+    // Inputs: a background-image value. Output: the asset id inside a
+    // var(--asset-<id>) reference, or "" when none.
+    function parseAssetId(bg) {
+        const m = /var\(--asset-([^)]+)\)/.exec(String(bg == null ? "" : bg));
+        return m ? m[1] : "";
+    }
+
+    // makeFillImageControl
+    // Output: a no-preview image picker (same field chrome as other rows) for
+    // the element's fill image. Clicking opens a file dialog; the upload routes
+    // through importImageFile with the selected element id (as_element_fill),
+    // so Rust writes background-image over background-color. syncDecls shows the
+    // asset filename (or "Choose…") and toggles the clear button. Registered in
+    // compositeControls.
+    function makeFillImageControl() {
+        const box = document.createElement("div");
+        box.className = "inspector__fillimage";
+        const name = document.createElement("span");
+        name.className = "inspector__fillimage-name";
+        name.textContent = "Choose…";
+        const clear = document.createElement("button");
+        clear.type = "button";
+        clear.className = "inspector__fillimage-clear tt";
+        clear.setAttribute("data-tip", "Remove image");
+        clear.setAttribute("data-key", "");
+        clear.hidden = true;
+        clear.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none"'
+            + ' stroke="currentColor" stroke-width="2.2" stroke-linecap="round">'
+            + '<path d="M6 6l12 12M18 6 6 18"/></svg>';
+        const file = document.createElement("input");
+        file.type = "file";
+        file.accept = "image/*";
+        file.style.display = "none";
+        box.appendChild(name);
+        box.appendChild(clear);
+        box.appendChild(file);
+        box.addEventListener("click", function (e) {
+            if (e.target === clear || clear.contains(e.target)) {
+                return;
+            }
+            file.click();
+        });
+        file.addEventListener("change", function () {
+            const f = file.files && file.files[0];
+            if (f && currentSelectionIds.length === 1) {
+                importImageFile(f, null, false, currentSelectionIds[0]);
+            }
+            file.value = "";
+        });
+        clear.addEventListener("click", function () {
+            sendPropertyChanged("background-image", "");
+            sendPropertyChanged("background-size", "");
+            sendPropertyChanged("background-repeat", "");
+            sendPropertyChanged("background-position", "");
+        });
+        box.syncDecls = function (decls) {
+            const id = parseAssetId(decls["background-image"] || "");
+            if (id !== "") {
+                name.textContent = assetFilename(id) || "Image";
+                name.classList.add("inspector__fillimage-name--set");
+                clear.hidden = false;
+            } else {
+                name.textContent = "Choose…";
+                name.classList.remove("inspector__fillimage-name--set");
+                clear.hidden = true;
+            }
+        };
+        Object.defineProperty(box, "value", { get: function () { return ""; }, set: function () {} });
+        compositeControls.push(box);
+        return box;
+    }
+
+    // makeObjectFitControl
+    // Output: a segmented Fill/Cover/Contain/Fit selector that maps to
+    // background-size. The whole field hides when the element has no fill image.
+    // Registered in compositeControls.
+    function makeObjectFitControl() {
+        const box = makeSegmentControl(OBJECT_FIT_OPTIONS);
+        box.addEventListener("change", function () {
+            sendPropertyChanged("background-size", box.value);
+        });
+        box.syncDecls = function (decls) {
+            const hasImage = parseAssetId(decls["background-image"] || "") !== "";
+            const field = box.closest(".inspector__field");
+            if (field) {
+                field.style.display = hasImage ? "" : "none";
+            }
+            box.value = decls["background-size"] || "";
+        };
+        compositeControls.push(box);
+        return box;
+    }
+
+    // makeSizeInput
+    // Inputs: the geometry prop ("width"/"height") and its short label.
+    // Output: { wrap, input } — a labelled number field wired to the generic
+    // single-prop commit path (dataset.prop/kind drive onInspectorFieldCommit).
+    function makeSizeInput(prop, label) {
+        const wrap = document.createElement("div");
+        wrap.className = "inspector__sizerow-cell";
+        const lab = document.createElement("span");
+        lab.className = "inspector__sizerow-label";
+        lab.textContent = label;
+        const input = document.createElement("input");
+        input.className = "inspector__sizerow-input";
+        input.spellcheck = false;
+        input.dataset.prop = prop;
+        input.dataset.kind = "number";
+        input.addEventListener("change", onInspectorFieldCommit);
+        input.addEventListener("keydown", function (e) {
+            if (e.key === "Enter") { e.preventDefault(); input.blur(); }
+        });
+        wrap.appendChild(lab);
+        wrap.appendChild(input);
+        return { wrap: wrap, input: input };
+    }
+
+    // makeSizeRowControl
+    // Output: the Width [chain] Height row. The two inputs register directly in
+    // inspectorInputs (so populate/commit reach them by prop) and the centre
+    // chain toggles the module-level sizeRatioLinked aspect lock that
+    // maybeScaleSibling reads. The wrapper is composite (its own children are
+    // wired), so buildField skips the wrapper-level change handler.
+    function makeSizeRowControl() {
+        const box = document.createElement("div");
+        box.className = "inspector__sizerow";
+        const w = makeSizeInput("width", "W");
+        const h = makeSizeInput("height", "H");
+        const link = document.createElement("button");
+        link.type = "button";
+        link.className = "inspector__sizerow-link tt";
+        link.setAttribute("data-tip", "Lock width/height ratio");
+        link.setAttribute("data-key", "");
+        link.innerHTML = LINK_ICON;
+        link.dataset.on = sizeRatioLinked ? "true" : "false";
+        link.addEventListener("click", function () {
+            sizeRatioLinked = !sizeRatioLinked;
+            link.dataset.on = sizeRatioLinked ? "true" : "false";
+        });
+        box.appendChild(w.wrap);
+        box.appendChild(link);
+        box.appendChild(h.wrap);
+        inspectorInputs.width = w.input;
+        inspectorInputs.height = h.input;
+        Object.defineProperty(box, "value", { get: function () { return ""; }, set: function () {} });
         return box;
     }
 
@@ -3835,6 +4332,40 @@
             return;
         }
         sendPropertyChanged(prop, wire);
+        maybeScaleSibling(prop, wire);
+    }
+
+    // maybeScaleSibling
+    // Inputs: the committed property and its wire value. Output: side-effect;
+    // when the aspect lock is on and a width/height was committed, scales the
+    // paired dimension by the element's live ratio and commits it too (option A
+    // — ratio recomputed from the pre-edit geometry on every edit).
+    function maybeScaleSibling(prop, wire) {
+        if (!sizeRatioLinked || (prop !== "width" && prop !== "height")) {
+            return;
+        }
+        if (currentSelectionIds.length !== 1) {
+            return;
+        }
+        const el = findElement(currentSelectionIds[0]);
+        if (!el) {
+            return;
+        }
+        const decls = parseStyleAttr(el.getAttribute("style") || "");
+        const curW = numOr0(stripPx(decls.width));
+        const curH = numOr0(stripPx(decls.height));
+        const next = numOr0(wire);
+        if (curW <= 0 || curH <= 0 || next <= 0) {
+            return;
+        }
+        const isWidth = prop === "width";
+        const ratio = isWidth ? (curH / curW) : (curW / curH);
+        const other = String(Math.round(next * ratio));
+        const otherProp = isWidth ? "height" : "width";
+        if (inspectorInputs[otherProp]) {
+            inspectorInputs[otherProp].value = other;
+        }
+        sendPropertyChanged(otherProp, other);
     }
 
     // encodeForWire
@@ -4207,6 +4738,9 @@
         for (let i = 0; i < textStyleControls.length; i++) {
             textStyleControls[i].syncDecls({});
         }
+        for (let i = 0; i < compositeControls.length; i++) {
+            compositeControls[i].syncDecls({});
+        }
         renderCustomDeclarations({});
     }
 
@@ -4229,7 +4763,8 @@
         setIfNotPending("rotation", radiansToDegreesStr(extractRotationRad(decls.transform)));
         setIfNotPending("z-index", decls["z-index"] || "");
         const cssOnly = [
-            "background-color", "border", "border-radius", "box-shadow",
+            // Fill/Border/Shadow now drive composite controls (below), not these
+            // verbatim fields.
             // Typography props whose inspector name IS the CSS property, set
             // verbatim (select tokens, color hex, family string, unitless nums).
             "font-family", "font-weight", "color", "text-align",
@@ -4245,6 +4780,9 @@
         // Composite controls + the Custom CSS declarations list.
         for (let i = 0; i < textStyleControls.length; i++) {
             textStyleControls[i].syncDecls(decls);
+        }
+        for (let i = 0; i < compositeControls.length; i++) {
+            compositeControls[i].syncDecls(decls);
         }
         renderCustomDeclarations(decls);
     }
@@ -5397,7 +5935,7 @@
     // Dataflow: FileReader → ArrayBuffer → base64 string in parallel
     // with an Image() decode for natural width/height; once both are
     // ready, dispatch.
-    function importImageFile(file, slidePos, asSlideBackground) {
+    function importImageFile(file, slidePos, asSlideBackground, elementFill) {
         const reader = new FileReader();
         reader.onerror = function () {
             console.error("importImageFile: read failed for", file.name);
@@ -5418,6 +5956,7 @@
                     height: dims.height,
                     position: slidePos,
                     as_slide_background: !!asSlideBackground,
+                    as_element_fill: elementFill || null,
                 });
             });
         };

@@ -995,15 +995,18 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 
 .inspector__segment-btn {
     flex: 1 1 0;
+    min-width: 0;
     height: 26px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 0;
+    padding: 0 2px;
     border: 0;
     border-radius: 6px;
     background: transparent;
     color: var(--ink2);
+    font-size: 11px;
+    font-weight: 500;
     cursor: pointer;
 }
 
@@ -1098,6 +1101,246 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+/* ---- Swatch + opacity row (Fill, Border colour) ---- */
+.inspector__swatchrow {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.inspector__swatchrow-color {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.inspector__swatchrow-opacity {
+    width: 52px;
+    flex: 0 0 auto;
+    height: 30px;
+    background: var(--field);
+    border: 1px solid transparent;
+    border-radius: var(--r-field);
+    color: var(--ink);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    text-align: right;
+    padding: 0 4px 0 8px;
+}
+
+.inspector__swatchrow-opacity:hover { background: #efebe3; }
+.inspector__swatchrow-opacity:focus {
+    outline: none;
+    background: var(--field-on);
+    border-color: var(--acc);
+}
+
+.inspector__swatchrow-pct {
+    flex: 0 0 auto;
+    color: var(--ink3);
+    font-size: 11px;
+    font-weight: 500;
+}
+
+/* ---- Fill image picker (no preview) ---- */
+.inspector__fillimage {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 30px;
+    padding: 0 4px 0 10px;
+    background: var(--field);
+    border-radius: var(--r-field);
+    cursor: pointer;
+}
+
+.inspector__fillimage:hover { background: #efebe3; }
+
+.inspector__fillimage-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ink3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.inspector__fillimage-name--set { color: var(--ink); }
+
+.inspector__fillimage-clear {
+    width: 22px;
+    height: 22px;
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--ink3);
+    cursor: pointer;
+}
+
+.inspector__fillimage-clear:hover { background: #e7dad3; color: var(--acc-ink); }
+
+/* ---- 4-cell cluster (border width, corner radius) ---- */
+.inspector__cluster {
+    position: relative;
+}
+
+.inspector__cluster-link {
+    position: absolute;
+    top: -21px;
+    right: 0;
+    width: 18px;
+    height: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--ink3);
+    cursor: pointer;
+}
+
+.inspector__cluster-link:hover { background: var(--hover); color: var(--ink2); }
+
+.inspector__cluster[data-linked="true"] .inspector__cluster-link {
+    background: var(--acc-soft);
+    color: var(--acc-ink);
+}
+
+.inspector__cluster-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+}
+
+.inspector__cluster-cell {
+    display: flex;
+    align-items: center;
+    height: 30px;
+    background: var(--field);
+    border: 1px solid transparent;
+    border-radius: var(--r-field);
+    min-width: 0;
+}
+
+.inspector__cluster-cell:hover { background: #efebe3; }
+.inspector__cluster-cell:focus-within {
+    background: var(--field-on);
+    border-color: var(--acc);
+}
+
+.inspector__cluster-cell-label {
+    width: 20px;
+    flex: 0 0 auto;
+    text-align: center;
+    color: var(--ink3);
+    font-size: 10px;
+    font-weight: 600;
+}
+
+.inspector__cluster-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    width: 100%;
+    border: 0;
+    background: transparent;
+    outline: none;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ink);
+    padding: 0 4px 0 0;
+}
+
+/* ---- Shadow grid + colour ---- */
+.inspector__shadow {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.inspector__shadow-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+}
+
+/* ---- Transform Width [chain] Height row ---- */
+.inspector__sizerow {
+    display: grid;
+    grid-template-columns: 1fr 24px 1fr;
+    gap: 0 6px;
+    align-items: center;
+}
+
+.inspector__sizerow-cell {
+    display: flex;
+    align-items: center;
+    height: 30px;
+    background: var(--field);
+    border: 1px solid transparent;
+    border-radius: var(--r-field);
+    min-width: 0;
+}
+
+.inspector__sizerow-cell:hover { background: #efebe3; }
+.inspector__sizerow-cell:focus-within {
+    background: var(--field-on);
+    border-color: var(--acc);
+}
+
+.inspector__sizerow-label {
+    width: 22px;
+    flex: 0 0 auto;
+    text-align: center;
+    color: var(--ink3);
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.inspector__sizerow-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    width: 100%;
+    border: 0;
+    background: transparent;
+    outline: none;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ink);
+    padding: 0 6px 0 0;
+}
+
+.inspector__sizerow-link {
+    width: 24px;
+    height: 30px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--ink3);
+    cursor: pointer;
+}
+
+.inspector__sizerow-link:hover { color: var(--acc-ink); }
+
+.inspector__sizerow-link[data-on="true"] {
+    background: var(--acc-soft);
+    color: var(--acc-ink);
 }
 
 .inspector__empty {

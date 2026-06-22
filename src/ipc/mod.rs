@@ -368,6 +368,12 @@ pub enum InteractionEvent {
         // (SetSlideBackgroundImage) instead of inserting a picture element.
         #[serde(default)]
         as_slide_background: bool,
+        // When set, the import becomes the named element's fill image: the new
+        // asset is written as `background-image: var(--asset-<id>)` on that
+        // element (layered over its background-color) instead of inserting a
+        // picture element. Mutually exclusive with as_slide_background.
+        #[serde(default)]
+        as_element_fill: Option<String>,
     },
     // ---- Stage 11: layout editor ----
     // SetEditorMode
@@ -671,6 +677,9 @@ pub struct AssetPayload {
     pub asset_id: String,
     pub media_type: String,
     pub content_base64: String,
+    // Display name JS shows when the asset is used as an element fill image.
+    #[serde(default)]
+    pub original_filename: String,
 }
 
 // AssetsBundle
@@ -1340,6 +1349,7 @@ mod tests {
             height: 600,
             position: Some(Point { x: 100.0, y: 200.0 }),
             as_slide_background: false,
+            as_element_fill: None,
         };
         let json = serde_json::to_string(&event).unwrap();
         let back: InteractionEvent = serde_json::from_str(&json).unwrap();
@@ -1381,6 +1391,7 @@ mod tests {
             asset_id: "asset_abc".into(),
             media_type: "image/png".into(),
             content_base64: "ZmFrZS1ieXRlcw==".into(),
+            original_filename: "logo.png".into(),
         };
         let msg_one = IpcMessage::new(MessageKind::AssetAdded(payload.clone()));
         let back_one: IpcMessage = serde_json::from_str(&serde_json::to_string(&msg_one).unwrap()).unwrap();

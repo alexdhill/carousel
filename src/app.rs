@@ -441,6 +441,7 @@ impl ApplicationCore {
             asset_id: entry.id.clone(),
             media_type: entry.media_type.clone(),
             content_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+            original_filename: entry.original_filename.clone(),
         }))
     }
 
@@ -890,6 +891,7 @@ impl ApplicationCore {
                 height,
                 position,
                 as_slide_background,
+                as_element_fill,
             } => self.interpret_asset_imported(
                 content_base64,
                 original_filename,
@@ -898,6 +900,7 @@ impl ApplicationCore {
                 height,
                 position,
                 as_slide_background,
+                as_element_fill,
             ),
             InteractionEvent::SlideThumbnailClicked { slide_id } => {
                 if slide_id.is_empty() {
@@ -1725,6 +1728,7 @@ impl ApplicationCore {
         height: u32,
         position: Option<Point>,
         as_slide_background: bool,
+        as_element_fill: Option<String>,
     ) -> InterpretResult {
         // Target the active canvas (slide OR layout) so media drops into the
         // layout being edited in layout mode, not the hidden active slide.
@@ -1778,6 +1782,37 @@ impl ApplicationCore {
                 }
                 None => InterpretResult::Nothing,
             };
+        }
+
+        // Element fill: write the asset as the named element's background image
+        // (over its background-color) plus sane fit defaults, in one undoable
+        // op. The object-fit panel later edits background-size.
+        if let Some(element_id) = as_element_fill {
+            if element_id.is_empty() {
+                return InterpretResult::Nothing;
+            }
+            let img: String = format!("var(--asset-{})", entry.id);
+            let decls: [(&str, String); 4] = [
+                ("background-image", img),
+                ("background-size", "cover".to_string()),
+                ("background-repeat", "no-repeat".to_string()),
+                ("background-position", "center".to_string()),
+            ];
+            let cmds: Vec<Box<dyn Command>> = decls
+                .into_iter()
+                .map(|(prop, value)| {
+                    Box::new(SetInlineStyle {
+                        target: target.clone(),
+                        element_id: element_id.clone(),
+                        property: prop.to_string(),
+                        new_value: value,
+                    }) as Box<dyn Command>
+                })
+                .collect();
+            return InterpretResult::Command(Box::new(CompositeCommand::new(
+                cmds,
+                "Set fill image",
+            )));
         }
 
         let slide_dims: (u32, u32) = (
@@ -2245,6 +2280,7 @@ fn build_assets_bundle(deck: &Deck) -> Option<AssetsBundle> {
             asset_id: entry.id.clone(),
             media_type: entry.media_type.clone(),
             content_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+            original_filename: entry.original_filename.clone(),
         });
     }
     if payloads.is_empty() {
