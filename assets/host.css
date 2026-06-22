@@ -634,6 +634,12 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     margin-left: 16px;
 }
 
+/* Collapsed group: hide its child subtree (children stay built for cheap
+   toggling). */
+.objects__node-wrap[data-collapsed="true"] > .objects__children {
+    display: none;
+}
+
 .objects__empty {
     padding: 14px;
     color: var(--ink3);

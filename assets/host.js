@@ -56,6 +56,14 @@
     const ZOOM_MIN = 50;
     const ZOOM_MAX = 250;
     const ZOOM_STEP = 10;
+    // Pan offset (screen px) applied as a translate alongside the zoom scale.
+    // Clamped so the slide edge never pulls past the pane edge; always 0 when
+    // the scaled slide fits the pane (so panning has no effect when fitted).
+    let panX = 0;
+    let panY = 0;
+    // Active canvas tool: "select" (default) or "hand" (drag pans, no select).
+    let activeTool = "select";
+    let panSession = null;
     // Rulers & guides (editor-only overlay; never serialized / presented /
     // exported). Guides are session-ephemeral, keyed by slide id. A guide is
     // { id, orient: "h"|"v", pos } where pos is in slide pixels (0 at the
@@ -364,10 +372,36 @@
     // Output: side-effect; writes the viewport transform, updates the readout
     // ("Fit" or "NN%"), and re-syncs the selection overlay (which is measured
     // in screen pixels and so must follow the scale).
+    // panBounds — max |pan| on each axis = half the overflow of the scaled
+    // slide past the pane (the viewport is centred, so it can shift each way by
+    // that much). Zero when the slide fits → panning is a no-op when fitted.
+    function panBounds() {
+        const stage = document.getElementById("viewport-container");
+        const host = currentSlideHost;
+        if (!stage || !host) {
+            return { x: 0, y: 0 };
+        }
+        const s = effectiveZoomScale();
+        const sw = (host.offsetWidth || 1920) * s;
+        const sh = (host.offsetHeight || 1080) * s;
+        return {
+            x: Math.max(0, (sw - stage.clientWidth) / 2),
+            y: Math.max(0, (sh - stage.clientHeight) / 2),
+        };
+    }
+
+    function clampPan() {
+        const b = panBounds();
+        panX = Math.max(-b.x, Math.min(b.x, panX));
+        panY = Math.max(-b.y, Math.min(b.y, panY));
+    }
+
     function applyZoom() {
+        clampPan();
         const viewport = document.getElementById("viewport");
         if (viewport) {
-            viewport.style.transform = "scale(" + effectiveZoomScale() + ")";
+            viewport.style.transform =
+                "translate(" + panX + "px," + panY + "px) scale(" + effectiveZoomScale() + ")";
         }
         const pct = document.getElementById("zoom-pct");
         if (pct) {
@@ -389,6 +423,8 @@
     // manual zoom by ±ZOOM_STEP, clamped to [ZOOM_MIN, ZOOM_MAX].
     function setZoomFit() {
         zoomMode = "fit";
+        panX = 0;
+        panY = 0;
         applyZoom();
     }
 
@@ -404,6 +440,39 @@
         zoomMode = "manual";
         zoomManualPct = next;
         applyZoom();
+    }
+
+    // ---------- hand / pan tool ----------
+    // setTool — switch between "select" and "hand". Updates the toolbar pressed
+    // state and the canvas cursor (grab in hand mode).
+    function setTool(name) {
+        activeTool = (name === "hand") ? "hand" : "select";
+        const sel = document.getElementById("tool-select");
+        const hand = document.getElementById("tool-hand");
+        if (sel) { sel.classList.toggle("is-on", activeTool === "select"); }
+        if (hand) { hand.classList.toggle("is-on", activeTool === "hand"); }
+        const stage = document.getElementById("viewport-container");
+        if (stage) {
+            stage.style.cursor = activeTool === "hand" ? "grab" : "";
+        }
+    }
+
+    function onPanMouseMove(e) {
+        if (!panSession) {
+            return;
+        }
+        panX = panSession.basePanX + (e.clientX - panSession.startX);
+        panY = panSession.basePanY + (e.clientY - panSession.startY);
+        applyZoom();
+    }
+
+    function onPanMouseUp() {
+        panSession = null;
+        document.body.style.userSelect = "";
+        const stage = document.getElementById("viewport-container");
+        if (stage && activeTool === "hand") { stage.style.cursor = "grab"; }
+        window.removeEventListener("mousemove", onPanMouseMove);
+        window.removeEventListener("mouseup", onPanMouseUp);
     }
 
     // ---------- patch applier ----------
@@ -2118,6 +2187,18 @@
                 return;
             }
             commitTextEdit();
+        }
+        // Hand tool: a press starts a pan instead of any selection/drag. No
+        // effect when the slide already fits (panBounds is then 0,0).
+        if (activeTool === "hand") {
+            e.preventDefault();
+            panSession = { startX: e.clientX, startY: e.clientY, basePanX: panX, basePanY: panY };
+            document.body.style.userSelect = "none";
+            const stage = document.getElementById("viewport-container");
+            if (stage) { stage.style.cursor = "grabbing"; }
+            window.addEventListener("mousemove", onPanMouseMove);
+            window.addEventListener("mouseup", onPanMouseUp);
+            return;
         }
         // Any canvas press is element-level focus, never a slide selection —
         // including a background click, which deselects everything (guides too).
@@ -4242,6 +4323,9 @@
     // Last ObjectTreeUpdate payload, retained so we can re-render
     // selection highlights without a fresh tree payload arriving.
     let lastObjectTree = null;
+    // Object-pane collapse state: group element ids whose children are hidden
+    // (absent = expanded). Session-only; survives ObjectTreeUpdate re-renders.
+    const collapsedGroups = new Set();
     // Long-click timer + the threshold (in ms and px) that distinguishes
     // a click from a press-and-hold to rename.
     const LONG_CLICK_MS = 500;
@@ -4284,6 +4368,51 @@
         updateObjectPanelSelection();
     }
 
+    // collectGroupIds — every group element id at any depth in the tree.
+    function collectGroupIds(nodes, out) {
+        const list = nodes || (lastObjectTree && lastObjectTree.nodes) || [];
+        const acc = out || [];
+        for (let i = 0; i < list.length; i++) {
+            if (list[i].element_type === "group") {
+                acc.push(list[i].id);
+            }
+            if (Array.isArray(list[i].children) && list[i].children.length > 0) {
+                collectGroupIds(list[i].children, acc);
+            }
+        }
+        return acc;
+    }
+
+    // toggleGroupCollapsed — flip one group's collapse state and re-render.
+    function toggleGroupCollapsed(id) {
+        if (collapsedGroups.has(id)) {
+            collapsedGroups.delete(id);
+        } else {
+            collapsedGroups.add(id);
+        }
+        renderObjectPanel(lastObjectTree);
+    }
+
+    // toggleAllGroups — the header button. If more than one group is expanded,
+    // collapse every group (any depth); otherwise expand all.
+    function toggleAllGroups() {
+        const ids = collectGroupIds();
+        let expanded = 0;
+        for (let i = 0; i < ids.length; i++) {
+            if (!collapsedGroups.has(ids[i])) {
+                expanded += 1;
+            }
+        }
+        if (expanded > 1) {
+            for (let i = 0; i < ids.length; i++) {
+                collapsedGroups.add(ids[i]);
+            }
+        } else {
+            collapsedGroups.clear();
+        }
+        renderObjectPanel(lastObjectTree);
+    }
+
     // buildObjectNode
     // Inputs: an ObjectTreeNode (id, element_type, children), the depth
     // (used purely so future styling can target nesting level).
@@ -4306,12 +4435,20 @@
         // alignment stays consistent.
         const disclosure = document.createElement("span");
         disclosure.className = "objects__disclosure";
+        const collapsed = node.element_type === "group" && collapsedGroups.has(node.id);
         if (node.element_type === "group") {
-            disclosure.textContent = "▾";
+            disclosure.textContent = collapsed ? "▸" : "▾";
             disclosure.dataset.role = "disclosure";
+            disclosure.addEventListener("click", function (e) {
+                e.stopPropagation();
+                toggleGroupCollapsed(node.id);
+            });
         } else {
             disclosure.classList.add("objects__disclosure--empty");
             disclosure.textContent = "•";
+        }
+        if (collapsed) {
+            wrap.dataset.collapsed = "true";
         }
         row.appendChild(disclosure);
 
@@ -4756,6 +4893,10 @@
                     element_type: type,
                 });
             });
+        }
+        const collapseAll = document.getElementById("objects-collapse-all");
+        if (collapseAll) {
+            collapseAll.addEventListener("click", toggleAllGroups);
         }
     }
 
@@ -5383,6 +5524,14 @@
         const zoomFitBtn = document.getElementById("zoom-fit");
         if (zoomFitBtn) {
             zoomFitBtn.addEventListener("click", setZoomFit);
+        }
+        const toolSelectBtn = document.getElementById("tool-select");
+        if (toolSelectBtn) {
+            toolSelectBtn.addEventListener("click", function () { setTool("select"); });
+        }
+        const toolHandBtn = document.getElementById("tool-hand");
+        if (toolHandBtn) {
+            toolHandBtn.addEventListener("click", function () { setTool("hand"); });
         }
         applyZoom();
         window.addEventListener("mousemove", onMouseMove);
@@ -6700,6 +6849,13 @@
                 setZoomFit();
                 return;
             }
+        }
+        // Tool shortcuts: V = select, H = hand (no modifiers, not while typing).
+        if (!isEditableFocus() && !e.metaKey && !e.ctrlKey && !e.altKey
+            && typeof e.key === "string") {
+            const k = e.key.toLowerCase();
+            if (k === "v") { e.preventDefault(); setTool("select"); return; }
+            if (k === "h") { e.preventDefault(); setTool("hand"); return; }
         }
         if (matchGridToggleShortcut(e)) {
             e.preventDefault();

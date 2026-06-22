@@ -31,10 +31,10 @@
         <!-- center cluster: tools -->
         <div class="top-bar__center">
             <div class="tbar-group">
-                <button type="button" class="tbar-btn is-on tt" data-stub data-tip="Select" data-key="V" aria-label="Select">
+                <button type="button" id="tool-select" class="tbar-btn is-on tt" data-tip="Select" data-key="V" aria-label="Select">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M5.5 3.2 12 19.5l2.3-6.5 6.5-2.3L5.5 3.2z"/></svg>
                 </button>
-                <button type="button" class="tbar-btn tt" data-stub data-tip="Hand / pan" data-key="H" aria-label="Hand">
+                <button type="button" id="tool-hand" class="tbar-btn tt" data-tip="Hand / pan" data-key="H" aria-label="Hand">
                     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 11V5.5a1.5 1.5 0 0 1 3 0V11m0-1V4.5a1.5 1.5 0 0 1 3 0V11m0-.5V6a1.5 1.5 0 0 1 3 0v7c0 3.3-2.2 6-6 6-2.2 0-3.5-.8-4.7-2.3L5 14c-.7-1-.2-2.2 1-2.4.7-.1 1.4.2 1.9.8L8 13"/></svg>
                 </button>
             </div>
@@ -101,7 +101,7 @@
             <div class="panel-head">
                 <h2 class="panel-head__title">Layers</h2>
                 <div class="panel-head__tools">
-                    <button type="button" class="icon-btn icon-btn--sm tt" data-stub data-tip="Collapse all" data-key="" aria-label="Collapse all">
+                    <button type="button" id="objects-collapse-all" class="icon-btn icon-btn--sm tt" data-tip="Collapse / expand all" data-key="" aria-label="Collapse or expand all groups">
                         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M8 9l4-4 4 4M8 15l4 4 4-4"/></svg>
                     </button>
                     <button type="button" class="icon-btn icon-btn--sm tt" data-stub data-tip="Search layers" data-key="⌘ F" aria-label="Search layers">
