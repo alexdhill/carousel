@@ -619,7 +619,7 @@
     // slide host's transform (e.g., scale).
     // Selection box outline offset (px) so the blue rectangle sits a
     // hair outside the element rather than clipping its edge.
-    const SELECTION_OUTSET_PX = 3;
+    const SELECTION_OUTSET_PX = 0;
     // Handle order matches CSS [data-handle="…"]. The (dx, dy) pair is
     // the handle's offset within the selection box, expressed as
     // fractions (0..1) of width/height.
@@ -681,8 +681,7 @@
             box.style.top = boxTop + "px";
             box.style.width = boxWidth + "px";
             box.style.height = boxHeight + "px";
-            box.style.border = "2px solid var(--theme-accent, #0066ff)";
-            box.style.boxShadow = "0 0 0 1px rgba(255,255,255,0.7)";
+            box.style.border = "1.5px dashed var(--acc)";
             box.style.pointerEvents = "none";
             box.style.boxSizing = "border-box";
             overlay.appendChild(box);
@@ -5770,6 +5769,33 @@
         const collapseAll = document.getElementById("objects-collapse-all");
         if (collapseAll) {
             collapseAll.addEventListener("click", toggleAllGroups);
+        }
+        // Add image: pick a file, then import it as a centered new image
+        // element (position null -> Rust centers it on the slide).
+        const addImage = document.getElementById("tool-add-image");
+        if (addImage) {
+            const picker = document.createElement("input");
+            picker.type = "file";
+            picker.accept = "image/*";
+            picker.style.display = "none";
+            addImage.appendChild(picker);
+            addImage.addEventListener("click", function () { picker.click(); });
+            picker.addEventListener("change", function () {
+                const f = picker.files && picker.files[0];
+                if (f) {
+                    importImageFile(f, null);
+                }
+                picker.value = "";
+            });
+        }
+        // Undo / redo: reuse the synthetic-key path the accelerators use.
+        const undoBtn = document.getElementById("undo-btn");
+        if (undoBtn) {
+            undoBtn.addEventListener("click", function () { sendSyntheticKey("undo", {}); });
+        }
+        const redoBtn = document.getElementById("redo-btn");
+        if (redoBtn) {
+            redoBtn.addEventListener("click", function () { sendSyntheticKey("redo", {}); });
         }
     }
 

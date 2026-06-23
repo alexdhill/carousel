@@ -51,7 +51,7 @@
                 <button type="button" class="tbar-btn objects__add tt" data-element-type="group" data-tip="Add group" data-key="⌘ G" aria-label="Add group">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="6" width="9" height="9" rx="2"/><rect x="11" y="11" width="9" height="9" rx="2" fill="#fff"/></svg>
                 </button>
-                <button type="button" class="tbar-btn tt" data-stub data-tip="Add image" data-key="⇧ I" aria-label="Add image">
+                <button type="button" id="tool-add-image" class="tbar-btn tt" data-tip="Add image" data-key="⇧ I" aria-label="Add image">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="M5.5 17.5 10 13l3 3 2.5-2.5 3 3"/></svg>
                 </button>
                 <button type="button" class="tbar-btn tt" data-stub data-tip="Add code" data-key="⇧ C" aria-label="Add code block">
@@ -71,10 +71,10 @@
 
         <!-- right cluster -->
         <div class="top-bar__right">
-            <button type="button" class="icon-btn tt" data-stub data-tip="Undo" data-key="⌘ Z" aria-label="Undo">
+            <button type="button" id="undo-btn" class="icon-btn tt" data-tip="Undo" data-key="⌘ Z" aria-label="Undo">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7 4 11l4 4M4 11h10a5 5 0 0 1 0 10h-2"/></svg>
             </button>
-            <button type="button" class="icon-btn tt" data-stub data-tip="Redo" data-key="⌘ ⇧ Z" aria-label="Redo">
+            <button type="button" id="redo-btn" class="icon-btn tt" data-tip="Redo" data-key="⌘ ⇧ Z" aria-label="Redo">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 7l4 4-4 4M20 11H10a5 5 0 0 0 0 10h2"/></svg>
             </button>
             <span class="tbar-divider"></span>
