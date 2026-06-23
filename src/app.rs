@@ -671,6 +671,19 @@ impl ApplicationCore {
         self.sender.send(MessageKind::LayoutListUpdate(data))
     }
 
+    // send_slide_layout_picker
+    // Inputs: none.
+    // Output: Ok(()) after sending one SlideLayoutPickerData — the same layout
+    // payload as send_layout_list but a distinct kind so JS pops the new-slide
+    // layout picker. Works in any editor mode (the picker is reachable from the
+    // slide thumbnail row).
+    fn send_slide_layout_picker(&self) -> AppResult<()> {
+        let data: LayoutListData =
+            build_layout_list_data(self.dispatcher.deck(), self.active_layout.as_ref());
+        debug!(layout_count = data.layouts.len(), "ipc -> SlideLayoutPickerData");
+        self.sender.send(MessageKind::SlideLayoutPickerData(data))
+    }
+
     // interpret
     // Inputs: an InteractionEvent.
     // Output: an InterpretResult describing what should happen next.
@@ -953,9 +966,12 @@ impl ApplicationCore {
                     InterpretResult::SetActiveSlide(slide_id)
                 }
             }
-            InteractionEvent::AddSlideRequested => {
-                match build_insert_slide_after_active(&self.dispatcher, self.active_slide.as_ref())
-                {
+            InteractionEvent::AddSlideRequested { layout_id } => {
+                match build_insert_slide_after_active(
+                    &self.dispatcher,
+                    self.active_slide.as_ref(),
+                    &layout_id,
+                ) {
                     Some((cmd, new_id)) => {
                         // react_to_outcome switches to this slide once
                         // the InsertSlide command has applied.
@@ -964,6 +980,9 @@ impl ApplicationCore {
                     }
                     None => InterpretResult::Nothing,
                 }
+            }
+            InteractionEvent::SlideLayoutPickerRequested => {
+                InterpretResult::SendSlideLayoutPicker
             }
             InteractionEvent::SlideTitleEditRequested { slide_id, new_title } => {
                 match build_set_slide_title_command(&self.dispatcher, &slide_id, &new_title) {
@@ -1291,6 +1310,7 @@ impl ApplicationCore {
                 self.start_presentation();
                 Ok(())
             }
+            InterpretResult::SendSlideLayoutPicker => self.send_slide_layout_picker(),
             InterpretResult::Nothing => Ok(()),
         }
     }
@@ -3527,6 +3547,7 @@ fn interpret_scale_elements(
 fn build_insert_slide_after_active(
     dispatcher: &CommandDispatcher,
     active_slide: Option<&SlideId>,
+    layout_id: &str,
 ) -> Option<(Box<dyn Command>, SlideId)> {
     use crate::bundle::SlideEntry;
     use crate::bundle::manifest::slide_path_for;
@@ -3539,15 +3560,35 @@ fn build_insert_slide_after_active(
         None => order.len(),
     };
 
+    // Seed from the chosen theme layout when given (clone its template
+    // elements with fresh ids so the slide is independently editable); empty
+    // or unknown layout id falls back to a blank slide.
+    let layout = dispatcher.deck().theme.layouts.get(layout_id);
+    let seed_layout: String =
+        if layout.is_some() { layout_id.to_string() } else { "blank".into() };
+    let children: Vec<ElementNode> = layout
+        .map(|l| {
+            l.root
+                .children
+                .iter()
+                .map(|c| {
+                    let mut copy: ElementNode = c.clone();
+                    crate::deck::element::regenerate_ids(&mut copy);
+                    copy
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     let slide_id: SlideId = new_slide_id();
     assert!(!slide_id.is_empty(), "build_insert_slide_after_active: minted empty slide id");
-    let root: ElementNode = group_element(new_element_id(), vec![]);
-    let slide: SlideNode = SlideNode::new(slide_id.clone(), "blank".into(), root);
+    let root: ElementNode = group_element(new_element_id(), children);
+    let slide: SlideNode = SlideNode::new(slide_id.clone(), seed_layout.clone(), root);
 
     let manifest_entry: SlideEntry = SlideEntry {
         id: slide_id.clone(),
         path: slide_path_for(&slide_id),
-        layout_id: "blank".into(),
+        layout_id: seed_layout,
         title: String::new(),
         thumbnail: None,
         transition: None,
@@ -4516,7 +4557,7 @@ mod tests {
     #[test]
     fn remove_slide_drops_slide_when_more_than_one() {
         let (mut d, _sel, sid, _eid) = fixture();
-        let (add_cmd, new_id) = build_insert_slide_after_active(&d, Some(&sid)).unwrap();
+        let (add_cmd, new_id) = build_insert_slide_after_active(&d, Some(&sid), "").unwrap();
         d.dispatch(add_cmd).unwrap();
         match interpret_remove_slide(d.deck(), &new_id) {
             InterpretResult::Command(cmd) => {
@@ -5354,7 +5395,7 @@ mod tests {
         let dispatcher = CommandDispatcher::new(deck);
 
         let (cmd, new_id) =
-            build_insert_slide_after_active(&dispatcher, Some(&orig)).unwrap();
+            build_insert_slide_after_active(&dispatcher, Some(&orig), "").unwrap();
         assert!(!new_id.is_empty());
         assert_eq!(cmd.label(), "Add Slide");
         assert!(cmd.affects_slide_list());
@@ -5375,7 +5416,7 @@ mod tests {
         let len_before: usize = deck.slide_order.len();
         let dispatcher = CommandDispatcher::new(deck);
 
-        let (cmd, new_id) = build_insert_slide_after_active(&dispatcher, None).unwrap();
+        let (cmd, new_id) = build_insert_slide_after_active(&dispatcher, None, "").unwrap();
         let mut deck2 = dispatcher.deck().clone();
         cmd.apply(&mut deck2).unwrap();
         assert_eq!(deck2.slide_order.len(), len_before + 1);
@@ -5388,7 +5429,7 @@ mod tests {
         let active: SlideId = deck.slide_order[0].clone();
         let dispatcher = CommandDispatcher::new(deck);
         let (cmd, new_id) =
-            build_insert_slide_after_active(&dispatcher, Some(&active)).unwrap();
+            build_insert_slide_after_active(&dispatcher, Some(&active), "").unwrap();
 
         let mut deck2 = dispatcher.deck().clone();
         cmd.apply(&mut deck2).unwrap();
@@ -5396,6 +5437,27 @@ mod tests {
         assert_eq!(slide.layout_id, "blank");
         // A brand-new slide carries an empty root group (no elements yet).
         assert!(slide.root.children.is_empty());
+    }
+
+    #[test]
+    fn build_insert_slide_after_active_seeds_from_chosen_layout() {
+        // A light deck carries the title/hero/text layouts (hero = 3 elements).
+        let deck = crate::deck::templates::new_deck(crate::deck::templates::light_theme(), "title");
+        let active: SlideId = deck.slide_order[0].clone();
+        let dispatcher = CommandDispatcher::new(deck);
+        let (cmd, new_id) =
+            build_insert_slide_after_active(&dispatcher, Some(&active), "hero").unwrap();
+
+        let mut deck2 = dispatcher.deck().clone();
+        cmd.apply(&mut deck2).unwrap();
+        let slide = deck2.slides.get(&new_id).unwrap();
+        assert_eq!(slide.layout_id, "hero");
+        assert_eq!(slide.root.children.len(), 3);
+        // Seeded elements get fresh ids (no collision with the layout template).
+        let layout = &deck2.theme.layouts["hero"];
+        for (a, b) in slide.root.children.iter().zip(layout.root.children.iter()) {
+            assert_ne!(a.id, b.id);
+        }
     }
 
     #[test]

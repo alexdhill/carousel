@@ -2746,6 +2746,9 @@
                 }
             }
         },
+        SlideLayoutPickerData: function (payload) {
+            openLayoutPicker(payload);
+        },
         SetMode: function (payload) {
             const mode = (payload && payload.mode) || "slide";
             currentMode = mode;
@@ -5835,6 +5838,9 @@
             renameKind: "SlideTitleEditRequested",
             renameField: "new_title",
             addKind: "AddSlideRequested",
+            // Slides open a layout picker first (previews of the theme's
+            // layouts) instead of inserting a blank slide outright.
+            pickerKind: "SlideLayoutPickerRequested",
             emptyText: "No slides.",
             addTitle: "New slide",
         },
@@ -5938,9 +5944,107 @@
         btn.appendChild(label);
 
         btn.addEventListener("click", function () {
-            window.__deck.send("Interaction", { kind: spec.addKind });
+            window.__deck.send("Interaction", { kind: spec.pickerKind || spec.addKind });
         });
         return btn;
+    }
+
+    // closeLayoutPicker
+    // Output: side-effect; removes the new-slide layout picker overlay and its
+    // Esc listener, if present.
+    function closeLayoutPicker() {
+        const existing = document.getElementById("layout-picker");
+        if (existing) {
+            existing.remove();
+        }
+        document.removeEventListener("keydown", onLayoutPickerKey, true);
+    }
+
+    // onLayoutPickerKey — Esc dismisses the picker (capture so it wins over
+    // other global keydown handlers).
+    function onLayoutPickerKey(e) {
+        if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            closeLayoutPicker();
+        }
+    }
+
+    // pickLayoutTile
+    // Inputs: a layout id ("" for blank), a display label, and the optional
+    // entry HTML for the preview (empty -> a plain blank tile).
+    // Output: a button mounting a scaled preview that, on click, inserts a new
+    // slide seeded from that layout and closes the picker.
+    function pickLayoutTile(layoutId, label, html) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "layout-picker__tile";
+        const preview = document.createElement("div");
+        preview.className = "thumb__preview layout-picker__preview";
+        const mount = document.createElement("div");
+        mount.className = "thumb__mount";
+        const shadow = mount.attachShadow({ mode: "open" });
+        shadow.innerHTML = "<style>" + thumbnailThemeCss + "</style>"
+            + "<style class=\"globals-css\">" + currentGlobalsCss + "</style>"
+            + "<style class=\"anim-kf\">" + builtinKeyframesCss + "</style>"
+            + "<style class=\"asset-vars\">" + buildAssetVarCss() + "</style>"
+            + (html || "");
+        preview.appendChild(mount);
+        const cap = document.createElement("span");
+        cap.className = "layout-picker__label";
+        cap.textContent = label;
+        btn.appendChild(preview);
+        btn.appendChild(cap);
+        window.requestAnimationFrame(function () { applyThumbnailScale(preview, mount); });
+        btn.addEventListener("click", function () {
+            window.__deck.send("Interaction", { kind: "AddSlideRequested", layout_id: layoutId });
+            closeLayoutPicker();
+        });
+        return btn;
+    }
+
+    // openLayoutPicker
+    // Inputs: a SlideLayoutPickerData payload (theme layouts + preview HTML,
+    // theme/globals CSS, dimensions).
+    // Output: side-effect; pops a modal overlay of layout previews (plus a
+    // Blank option). Choosing one inserts a new slide on that layout. Backdrop
+    // click or Esc dismisses.
+    function openLayoutPicker(payload) {
+        closeLayoutPicker();
+        thumbnailDims = {
+            width: (payload && payload.width) || 1920,
+            height: (payload && payload.height) || 1080,
+        };
+        thumbnailThemeCss = (payload && payload.theme_css) || "";
+        if (payload && typeof payload.globals_css === "string") {
+            currentGlobalsCss = payload.globals_css;
+        }
+        const layouts = (payload && Array.isArray(payload.layouts)) ? payload.layouts : [];
+        const overlay = document.createElement("div");
+        overlay.id = "layout-picker";
+        overlay.className = "layout-picker";
+        const panel = document.createElement("div");
+        panel.className = "layout-picker__panel";
+        const title = document.createElement("h2");
+        title.className = "layout-picker__title";
+        title.textContent = "Choose a layout";
+        const grid = document.createElement("div");
+        grid.className = "layout-picker__grid";
+        grid.appendChild(pickLayoutTile("", "Blank", ""));
+        for (let i = 0; i < layouts.length; i++) {
+            const l = layouts[i];
+            grid.appendChild(pickLayoutTile(l.layout_id, l.name || l.layout_id, l.html));
+        }
+        panel.appendChild(title);
+        panel.appendChild(grid);
+        overlay.appendChild(panel);
+        overlay.addEventListener("mousedown", function (e) {
+            if (e.target === overlay) {
+                closeLayoutPicker();
+            }
+        });
+        document.body.appendChild(overlay);
+        document.addEventListener("keydown", onLayoutPickerKey, true);
     }
 
     // buildThumbnail

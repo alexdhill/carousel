@@ -298,6 +298,9 @@ pub enum InterpretResult {
     // the active slide. Non-undoable editor action: the handler asks the event
     // loop (via a wake) to build the presentation window.
     StartPresentation,
+    // SendSlideLayoutPicker — ship the theme layouts to JS so the new-slide
+    // layout picker can render previews. Non-undoable editor request.
+    SendSlideLayoutPicker,
     Nothing,
 }
 
@@ -317,6 +320,7 @@ impl std::fmt::Debug for InterpretResult {
             Self::SetEditorMode(m) => write!(f, "SetEditorMode({m:?})"),
             Self::SetActiveLayout(id) => write!(f, "SetActiveLayout({id})"),
             Self::StartPresentation => f.write_str("StartPresentation"),
+            Self::SendSlideLayoutPicker => f.write_str("SendSlideLayoutPicker"),
             Self::Nothing => f.write_str("Nothing"),
         }
     }

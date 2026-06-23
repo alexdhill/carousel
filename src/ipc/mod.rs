@@ -109,6 +109,11 @@ pub enum MessageKind {
     // when entering layout mode and after any command that reports
     // affects_layout_list / affects_globals.
     LayoutListUpdate(LayoutListData),
+    // SlideLayoutPickerData
+    // Reply to SlideLayoutPickerRequested: the same layout payload as
+    // LayoutListUpdate, but a distinct kind so JS pops the new-slide layout
+    // picker instead of rebuilding the thumbnail row.
+    SlideLayoutPickerData(LayoutListData),
     // SetMode
     // Stage 11 — editor mode echo. Tells JS which mode is now active
     // ("slide" | "layout") so it can flip `body[data-mode]` and swap the
@@ -330,9 +335,19 @@ pub enum InteractionEvent {
         new_position: usize,
     },
     // AddSlideRequested
-    // Stage 10 — thumbnail "+" tile / Cmd+Shift+N. Inserts a blank
-    // slide directly after the active slide and makes it active.
-    AddSlideRequested,
+    // Stage 10 — thumbnail "+" tile / Cmd+Shift+N. Inserts a slide directly
+    // after the active slide and makes it active. `layout_id` seeds the new
+    // slide from that theme layout (its template elements + tag); empty (the
+    // Cmd+Shift+N fast path) inserts a blank slide.
+    AddSlideRequested {
+        #[serde(default)]
+        layout_id: String,
+    },
+    // SlideLayoutPickerRequested
+    // The thumbnail "+" tile in slide mode. Asks Rust to ship the theme's
+    // layouts (id + name + preview HTML) so JS can pop the layout picker; the
+    // user's choice comes back as AddSlideRequested { layout_id }.
+    SlideLayoutPickerRequested,
     // SlideTitleEditRequested
     // Double-click a thumbnail label. The Rust side dispatches a
     // SetSlideTitle command (manifest title) and rebroadcasts the slide
