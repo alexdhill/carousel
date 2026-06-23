@@ -162,6 +162,10 @@ pub struct ApplicationCore {
     // Asks the event loop to build the hidden print webview (window creation
     // needs the EventLoopWindowTarget).
     request_pdf_print: Box<dyn Fn()>,
+    // Lazily-enumerated installed font families for the styles pane combobox.
+    // Computed on first send_font_list (the Ready handler) and cached for the
+    // session.
+    font_families: Option<Vec<String>>,
 }
 
 impl ApplicationCore {
@@ -179,10 +183,34 @@ impl ApplicationCore {
         request_present_close: Box<dyn Fn()>,
         request_pdf_print: Box<dyn Fn()>,
     ) -> Self {
-        let deck: Deck = Deck::sample();
+        Self::new_with_deck(
+            Deck::sample(),
+            sender,
+            schedule_flush,
+            io_thread,
+            request_present_open,
+            request_present_close,
+            request_pdf_print,
+        )
+    }
+
+    // new_with_deck
+    // Like `new`, but starts from a caller-supplied deck (the landing window
+    // builds the editor on a chosen template / placeholder deck). The deck must
+    // contain at least one slide.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_deck(
+        deck: Deck,
+        sender: WebviewSender,
+        schedule_flush: Box<dyn Fn()>,
+        io_thread: IoThread,
+        request_present_open: Box<dyn Fn()>,
+        request_present_close: Box<dyn Fn()>,
+        request_pdf_print: Box<dyn Fn()>,
+    ) -> Self {
         let active_slide: Option<SlideId> = deck.slide_order.first().cloned();
         let active_layout: Option<LayoutId> = deck.theme.layout_order.first().cloned();
-        assert!(active_slide.is_some(), "sample deck must contain a slide");
+        assert!(active_slide.is_some(), "deck must contain a slide");
         Self {
             dispatcher: CommandDispatcher::new(deck),
             active_slide,
@@ -202,7 +230,22 @@ impl ApplicationCore {
             pending_paste_selection: None,
             pending_pdf_print: None,
             request_pdf_print,
+            font_families: None,
         }
+    }
+
+    // send_font_list
+    // Inputs: none. Output: Ok(()) after sending one FontList envelope with the
+    // installed font families. Enumerates once (font-kit) and caches the result
+    // for the session. ponytail: enumeration is synchronous on the main thread;
+    // if it ever lags first paint, move it to a worker thread delivering via an
+    // EventLoopProxy user event (WebviewSender is main-thread-only).
+    fn send_font_list(&mut self) -> AppResult<()> {
+        if self.font_families.is_none() {
+            self.font_families = Some(crate::fonts::enumerate_families());
+        }
+        let families: Vec<String> = self.font_families.clone().unwrap_or_default();
+        self.sender.send(MessageKind::FontList { families })
     }
 
     // active_canvas
@@ -256,6 +299,7 @@ impl ApplicationCore {
                 }))?;
                 self.send_slide_list()?;
                 self.send_assets_bundle()?;
+                self.send_font_list()?;
                 self.send_active_slide()?;
                 self.send_slide_animations()
             }
@@ -1078,6 +1122,7 @@ impl ApplicationCore {
                         Some(sid) => InterpretResult::Command(Box::new(SetSlideLayout {
                             slide_id: sid.clone(),
                             new_layout_id: layout_id,
+                            restore_root: None,
                         })),
                         None => InterpretResult::Nothing,
                     }
@@ -2012,6 +2057,17 @@ impl ApplicationCore {
         Ok(())
     }
 
+    // load_path
+    // Inputs: a bundle path. Output: side-effect; queues a Load IoRequest for
+    // that path (the deck is swapped in when IoResponse::Loaded returns). Used
+    // by the landing window when opening a recent deck.
+    pub fn load_path(&mut self, path: PathBuf) {
+        info!(path = %path.display(), "landing: open recent");
+        if self.io_thread.submit(IoRequest::Load { path }).is_err() {
+            warn!("landing: open recent could not be queued (io thread closed)");
+        }
+    }
+
     // theme_save
     // Inputs: none.
     // Output: Ok(()) once the export was queued (or the dialog cancelled).
@@ -2085,6 +2141,7 @@ impl ApplicationCore {
             }
             IoResponse::Saved { path } => {
                 info!(path = %path.display(), "file: save committed");
+                crate::recents::record(&path, &recent_title(&path));
                 {
                     let deck = self.dispatcher.deck_mut();
                     deck.bundle_path = Some(path);
@@ -2095,6 +2152,7 @@ impl ApplicationCore {
             }
             IoResponse::Loaded { serialized, path } => {
                 info!(path = %path.display(), "file: load received");
+                crate::recents::record(&path, &recent_title(&path));
                 let mut deck: Deck = deserialize_deck(serialized)?;
                 deck.bundle_path = Some(path);
                 self.adopt_deck(deck);
@@ -2173,6 +2231,16 @@ impl ApplicationCore {
         self.active_slide = active;
         self.selection = SelectionState::empty();
     }
+}
+
+// recent_title
+// Inputs: a bundle path. Output: the display title for the recents list — the
+// file stem, falling back to the file name, then "Untitled".
+fn recent_title(path: &std::path::Path) -> String {
+    path.file_stem()
+        .or_else(|| path.file_name())
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "Untitled".to_string())
 }
 
 // prompt_save_as

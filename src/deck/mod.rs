@@ -17,6 +17,7 @@ pub mod ids;
 pub mod layout;
 pub mod slide;
 pub mod style;
+pub mod templates;
 pub mod theme;
 
 use crate::bundle::{AssetRegistry, ManifestData, SlideEntry, manifest::slide_path_for};

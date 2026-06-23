@@ -1,4 +1,5 @@
 // Deck export pipelines (playable HTML folder; per-stage PDF).
+pub mod fonts;
 pub mod html;
 pub mod pdf;
 pub use html::build_html_export;

@@ -1,0 +1,166 @@
+/* Landing window chrome — warm paper palette, a compact subset of host.css
+   (the landing webview is its own document, no shared stylesheet). */
+:root {
+    --bg: #f2f0eb;
+    --panel: #ffffff;
+    --ink: #362a28;
+    --ink2: #6b6258;
+    --ink3: #9a9384;
+    --line: #ece8e0;
+    --field: #e9e6df;
+    --accent: #f19035;
+    --accent-soft: #fbe0c7;
+    --accent-ink: #c3742b;
+    --r: 12px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+    height: 100%;
+    margin: 0;
+    font-family: "Inter", "Helvetica Neue", system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    background: var(--bg);
+    color: var(--ink);
+    overflow: hidden;
+}
+
+body {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    padding: 18px 22px;
+    gap: 14px;
+}
+
+.landing__header {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+}
+
+.landing__brand { font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
+.landing__tagline { font-size: 12.5px; color: var(--ink3); }
+
+.landing__main {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+.landing__row { display: flex; flex-direction: column; gap: 8px; }
+
+.landing__row-title {
+    margin: 0;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--ink3);
+}
+
+.landing__cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 12px;
+}
+
+.landing__empty {
+    grid-column: 1 / -1;
+    padding: 18px;
+    color: var(--ink3);
+    font-size: 12.5px;
+    font-style: italic;
+}
+
+.landing__card {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 7px;
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    background: var(--panel);
+    cursor: pointer;
+    transition: border-color .12s ease, box-shadow .12s ease;
+}
+
+.landing__card:hover { border-color: #d9d4ca; }
+
+.landing__card[aria-selected="true"] {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+/* 16:9 preview tile; layout previews paint bars into it via inline styles. */
+.landing__tile {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    border-radius: 7px;
+    overflow: hidden;
+    background: var(--field);
+}
+
+.landing__tile-bar { position: absolute; border-radius: 3px; }
+
+.landing__card-label {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 0 2px;
+}
+
+.landing__card-title {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--ink);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.landing__card-sub { font-size: 11px; color: var(--ink3); }
+
+.landing__footer {
+    flex: 0 0 auto;
+    display: flex;
+    justify-content: flex-end;
+}
+
+.landing__seg {
+    display: inline-flex;
+    gap: 2px;
+    padding: 3px;
+    background: var(--field);
+    border-radius: 10px;
+}
+
+.landing__seg-btn {
+    height: 32px;
+    padding: 0 18px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--ink2);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.landing__seg-btn:hover { background: #e7e2d9; color: var(--ink); }
+
+.landing__seg-btn--primary {
+    background: var(--accent);
+    color: #fff;
+    box-shadow: 0 1px 2px rgba(181, 86, 58, .3);
+}
+
+.landing__seg-btn--primary:hover { background: #e0852f; color: #fff; }

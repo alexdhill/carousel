@@ -11,7 +11,8 @@
 // affects_slide_meta so the editor rebroadcasts SlideInspectorUpdate.
 
 use crate::commands::{Command, CommandError, CommandOutput};
-use crate::deck::{CanvasTarget, SlideId};
+use crate::deck::element::regenerate_ids;
+use crate::deck::{CanvasTarget, ElementNode, SlideId};
 
 // SetSlideBackground
 #[derive(Debug, Clone)]
@@ -155,28 +156,58 @@ impl Command for SetSlideNotes {
 pub struct SetSlideLayout {
     pub slide_id: SlideId,
     pub new_layout_id: String,
+    // Undo payload: the exact slide root to restore. None on a forward
+    // (user-driven) apply — the slide is re-stamped from the chosen layout's
+    // template elements. Some(_) only when this command is an inverse.
+    pub restore_root: Option<ElementNode>,
 }
 
 impl Command for SetSlideLayout {
     // apply
     // Inputs: &self, &mut Deck.
-    // Output: CommandOutput; sets both the manifest entry and the SlideNode
-    // layout_id (rendered as data-layout), requires a remount, returns the
-    // inverse with the prior layout id.
+    // Output: CommandOutput; retags the slide + manifest entry with the new
+    // layout id and stamps that layout's template elements on top of the slide's
+    // existing content (the layout's elements are appended, not replaced, so the
+    // user's prior edits survive). Each stamped subtree gets fresh element ids so
+    // re-applying the same layout never collides. The layout's text styles ride
+    // along baked inline on those elements; its background inherits via
+    // Deck::effective_slide_bg. Requires a remount. The returned inverse carries
+    // the prior layout id and the prior root so undo restores both.
     // Errors: SlideNotFound (missing slide).
-    // Note: the layout id is NOT validated against the theme. It is an
-    // associative tag until the deferred layout-binding feature, and slides may
-    // legitimately reference ids absent from the current theme (so validating
-    // would break undo, which restores the prior tag). The inspector's Layout
-    // picker constrains forward choices to real layouts.
+    // Note: the layout id is NOT validated against the theme — slides may
+    // legitimately reference ids absent from the current theme (validating would
+    // break undo). A forward apply whose layout id is unknown to the theme
+    // retags only and leaves the root untouched. The inspector's Layout picker
+    // constrains forward choices to real layouts.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(!self.slide_id.is_empty(), "SetSlideLayout: empty slide_id");
+        // Forward apply: clone the chosen layout's template children (with fresh
+        // ids so re-stamping the same layout can't collide) before the mutable
+        // slide borrow. Inverse apply (restore_root set) skips this.
+        let mut template: Vec<ElementNode> = if self.restore_root.is_none() {
+            deck.theme
+                .layouts
+                .get(&self.new_layout_id)
+                .map(|l| l.root.children.clone())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        for child in template.iter_mut() {
+            regenerate_ids(child);
+        }
         let slide = deck
             .slides
             .get_mut(&self.slide_id)
             .ok_or_else(|| CommandError::SlideNotFound(self.slide_id.clone()))?;
-        let prior: String = slide.layout_id.clone();
+        let prior_layout: String = slide.layout_id.clone();
+        let prior_root: ElementNode = slide.root.clone();
         slide.layout_id = self.new_layout_id.clone();
+        if let Some(root) = &self.restore_root {
+            slide.root = root.clone();
+        } else {
+            slide.root.children.extend(template);
+        }
         if let Some(entry) = deck.manifest.slides.iter_mut().find(|e| e.id == self.slide_id) {
             entry.layout_id = self.new_layout_id.clone();
         }
@@ -185,7 +216,8 @@ impl Command for SetSlideLayout {
             patches: Vec::new(),
             inverse: Box::new(SetSlideLayout {
                 slide_id: self.slide_id.clone(),
-                new_layout_id: prior,
+                new_layout_id: prior_layout,
+                restore_root: Some(prior_root),
             }),
             dirty_targets: vec![CanvasTarget::Slide(self.slide_id.clone())],
             manifest_dirty: true,
@@ -264,9 +296,13 @@ mod tests {
     fn layout_sets_both_slide_and_manifest_and_inverts() {
         let (mut deck, sid) = sample();
         // The default theme seeds a "blank" layout; the sample slide uses "title".
-        let out = SetSlideLayout { slide_id: sid.clone(), new_layout_id: "blank".into() }
-            .apply(&mut deck)
-            .unwrap();
+        let out = SetSlideLayout {
+            slide_id: sid.clone(),
+            new_layout_id: "blank".into(),
+            restore_root: None,
+        }
+        .apply(&mut deck)
+        .unwrap();
         assert_eq!(deck.slides[&sid].layout_id, "blank");
         assert_eq!(
             deck.manifest.slides.iter().find(|e| e.id == sid).unwrap().layout_id,
@@ -274,6 +310,33 @@ mod tests {
         );
         out.inverse.apply(&mut deck).unwrap();
         assert_eq!(deck.slides[&sid].layout_id, "title");
+    }
+
+    #[test]
+    fn layout_appends_template_elements_keeping_edits_and_undo_restores() {
+        use crate::deck::templates::{light_theme, new_deck};
+        // A blank one-slide light deck; its slide starts seeded with "title".
+        let mut deck = new_deck(light_theme(), "title");
+        let sid = deck.slide_order[0].clone();
+        let before = deck.slides[&sid].root.children.len();
+        // Switch to "hero" (title + copy + accent block = 3): appended on top,
+        // not replacing the existing content.
+        let out = SetSlideLayout {
+            slide_id: sid.clone(),
+            new_layout_id: "hero".into(),
+            restore_root: None,
+        }
+        .apply(&mut deck)
+        .unwrap();
+        assert_eq!(deck.slides[&sid].layout_id, "hero");
+        assert_eq!(deck.slides[&sid].root.children.len(), before + 3);
+        // Fresh ids: no duplicates after stamping on top.
+        let ids: std::collections::HashSet<&String> =
+            deck.slides[&sid].root.children.iter().map(|c| &c.id).collect();
+        assert_eq!(ids.len(), before + 3);
+        out.inverse.apply(&mut deck).unwrap();
+        assert_eq!(deck.slides[&sid].layout_id, "title");
+        assert_eq!(deck.slides[&sid].root.children.len(), before);
     }
 
     #[test]

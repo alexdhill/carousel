@@ -2790,6 +2790,10 @@
             refreshAssetVarStyle();
             refreshThumbnailAssetVars();
         },
+        FontList: function (payload) {
+            availableFonts = (payload && Array.isArray(payload.families))
+                ? payload.families : [];
+        },
     };
 
     // ---------- __deck bridge ----------
@@ -3383,6 +3387,14 @@
             ],
         },
         {
+            id: "presets",
+            label: "Presets",
+            appliesTo: ALL_TYPES,
+            fields: [
+                { prop: "preset", label: "Style preset", kind: "presets", full: true, composite: true },
+            ],
+        },
+        {
             id: "fill",
             label: "Fill",
             appliesTo: BOXY_TYPES,
@@ -3416,7 +3428,7 @@
             label: "Typography",
             appliesTo: TEXT_TYPES,
             fields: [
-                { prop: "font-family", label: "Font", kind: "css", full: true },
+                { prop: "font-family", label: "Font", kind: "font-combo", full: true, composite: true },
                 { prop: "font-size", label: "Size", kind: "number", suffix: "px" },
                 { prop: "font-weight", label: "Weight", kind: "number", suffix: "" },
                 { prop: "line-height", label: "Line Height", kind: "number", suffix: "" },
@@ -3471,6 +3483,11 @@
     // off); when on, editing one dimension scales the other by the element's
     // live ratio (see onInspectorFieldCommit).
     let sizeRatioLinked = false;
+
+    // Installed font families delivered by the Rust FontList message. The
+    // font-family combobox reads this live, so a list arriving after the
+    // inspector is built needs no rebuild.
+    let availableFonts = [];
 
     // Border style segmented options. "None" shows as a word; the three line
     // styles render as a short stroked line preview (mirrors the mockup).
@@ -3700,6 +3717,12 @@
         }
         if (field.kind === "object-fit") {
             return makeObjectFitControl();
+        }
+        if (field.kind === "font-combo") {
+            return makeFontComboControl();
+        }
+        if (field.kind === "presets") {
+            return makePresetsControl();
         }
         const input = document.createElement("input");
         input.className = "inspector__input";
@@ -4114,6 +4137,317 @@
             }
             box.value = decls["background-size"] || "";
         };
+        compositeControls.push(box);
+        return box;
+    }
+
+    // fontUnquote
+    // Inputs: a font-family value. Output: the first family with surrounding
+    // quotes stripped (the combobox shows a single bare name).
+    function fontUnquote(v) {
+        const s = String(v == null ? "" : v).trim();
+        const first = s.split(",")[0].trim();
+        return first.replace(/^["']|["']$/g, "").trim();
+    }
+
+    // makeFontComboControl
+    // Output: a searchable font-family combobox — a text input plus a filtered
+    // popover over the installed families (availableFonts). Typing filters;
+    // ArrowUp/Down move the highlight; Enter or click commits; Esc/blur closes.
+    // A free-typed value still commits (manual entry survives when a font is not
+    // enumerated). Commits send a quoted font-family. Registered in
+    // compositeControls; syncDecls fills the input from the element.
+    function makeFontComboControl() {
+        const box = document.createElement("div");
+        box.className = "inspector__fontcombo";
+        const input = document.createElement("input");
+        input.className = "inspector__input inspector__fontcombo-input";
+        input.spellcheck = false;
+        input.setAttribute("autocomplete", "off");
+        input.placeholder = "System default";
+        const pop = document.createElement("ul");
+        pop.className = "inspector__fontcombo-pop";
+        pop.hidden = true;
+        box.appendChild(input);
+        box.appendChild(pop);
+        // Buffered rendering: matches holds the full filtered list, `shown` how
+        // many <li> are mounted. The popover scrolls the rest in by the chunk.
+        const FONT_CHUNK = 80;
+        let matches = [];
+        let shown = 0;
+        let current = "";
+        let highlight = -1;
+        function closePop() {
+            pop.hidden = true;
+            highlight = -1;
+        }
+        function commit(value) {
+            const v = fontUnquote(value);
+            input.value = v;
+            closePop();
+            if (v === current) {
+                return;
+            }
+            current = v;
+            sendPropertyChanged("font-family", v === "" ? "" : '"' + v + '"');
+        }
+        function computeMatches() {
+            const q = input.value.trim().toLowerCase();
+            matches = [];
+            for (let i = 0; i < availableFonts.length; i++) {
+                if (q === "" || availableFonts[i].toLowerCase().indexOf(q) >= 0) {
+                    matches.push(availableFonts[i]);
+                }
+            }
+        }
+        function appendChunk() {
+            const end = Math.min(shown + FONT_CHUNK, matches.length);
+            for (let i = shown; i < end; i++) {
+                pop.appendChild(buildFontItem(matches[i], commit));
+            }
+            shown = end;
+        }
+        function reflectHighlight() {
+            for (let i = 0; i < pop.children.length; i++) {
+                pop.children[i].setAttribute("aria-selected", i === highlight ? "true" : "false");
+            }
+            if (highlight >= 0 && pop.children[highlight]) {
+                pop.children[highlight].scrollIntoView({ block: "nearest" });
+            }
+        }
+        function renderPop() {
+            computeMatches();
+            pop.replaceChildren();
+            shown = 0;
+            appendChunk();
+            highlight = matches.length > 0 ? 0 : -1;
+            pop.hidden = matches.length === 0;
+            reflectHighlight();
+        }
+        pop.addEventListener("scroll", function () {
+            if (shown < matches.length
+                    && pop.scrollTop + pop.clientHeight >= pop.scrollHeight - 48) {
+                appendChunk();
+            }
+        });
+        input.addEventListener("input", renderPop);
+        input.addEventListener("focus", renderPop);
+        input.addEventListener("keydown", function (e) {
+            onFontComboKey(e, pop, input, commit, function (n) {
+                highlight = n;
+                reflectHighlight();
+            }, function () { return highlight; }, renderPop, closePop);
+        });
+        input.addEventListener("blur", function () {
+            window.setTimeout(closePop, 120);
+            commit(input.value);
+        });
+        box.syncDecls = function (decls) {
+            const raw = String(decls["font-family"] || "").trim();
+            // A theme binding (var(--theme-*)) or no value means "system
+            // default" — show the placeholder, not the raw token. Committing an
+            // empty value clears the inline override back to that default.
+            const isDefault = raw === "" || raw.indexOf("var(") === 0;
+            current = isDefault ? "" : fontUnquote(raw);
+            if (document.activeElement !== input) {
+                input.value = current;
+            }
+        };
+        Object.defineProperty(box, "value", { get: function () { return ""; }, set: function () {} });
+        compositeControls.push(box);
+        return box;
+    }
+
+    // buildFontItem
+    // Inputs: a family name and the commit callback. Output: a popover <li>
+    // previewing the family in its own face; mousedown commits (preventDefault
+    // keeps input focus so no blur-close race).
+    function buildFontItem(name, commit) {
+        const li = document.createElement("li");
+        li.className = "inspector__fontcombo-item";
+        li.textContent = name;
+        li.style.fontFamily = '"' + name + '"';
+        li.addEventListener("mousedown", function (e) {
+            e.preventDefault();
+            commit(name);
+        });
+        return li;
+    }
+
+    // onFontComboKey
+    // Inputs: the keydown event plus the combobox parts and highlight
+    // get/set/render/close helpers. Output: side-effect; arrow keys move the
+    // highlight, Enter commits the highlighted (or typed) value, Esc closes.
+    function onFontComboKey(e, pop, input, commit, setHi, getHi, renderPop, closePop) {
+        if (pop.hidden && e.key === "ArrowDown") {
+            renderPop();
+            return;
+        }
+        if (e.key === "ArrowDown") {
+            e.preventDefault();
+            setHi(Math.min(getHi() + 1, pop.children.length - 1));
+        } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            setHi(Math.max(getHi() - 1, 0));
+        } else if (e.key === "Enter") {
+            e.preventDefault();
+            const hi = getHi();
+            if (!pop.hidden && hi >= 0 && pop.children[hi]) {
+                commit(pop.children[hi].textContent);
+            } else {
+                commit(input.value);
+            }
+        } else if (e.key === "Escape") {
+            closePop();
+        }
+    }
+
+    // Declarations excluded when saving a preset: layout/identity plus the
+    // element-bound fill image (an asset ref + placement belong to one element,
+    // not a reusable style).
+    const PRESET_EXCLUDE = {
+        "left": 1, "top": 1, "width": 1, "height": 1, "transform": 1,
+        "opacity": 1, "z-index": 1, "position": 1, "display": 1,
+        "background-image": 1, "background-size": 1, "background-repeat": 1,
+        "background-position": 1,
+    };
+
+    // capturePresetDecls
+    // Inputs: an element node. Output: its style-attribute declarations minus
+    // the excluded set — the reusable "look" to store in a preset rule.
+    function capturePresetDecls(el) {
+        const all = parseStyleAttr(el.getAttribute("style") || "");
+        const out = {};
+        const keys = Object.keys(all);
+        for (let i = 0; i < keys.length; i++) {
+            if (!PRESET_EXCLUDE[keys[i]]) {
+                out[keys[i]] = all[keys[i]];
+            }
+        }
+        return out;
+    }
+
+    // selectedElementType
+    // Output: the data-element-type of the single selected element, or "".
+    function selectedElementType() {
+        if (currentSelectionIds.length !== 1) {
+            return "";
+        }
+        const el = findElement(currentSelectionIds[0]);
+        return (el && el.dataset.elementType) || "";
+    }
+
+    // applyPreset
+    // Inputs: an element type and preset class name. Output: side-effect;
+    // replays the preset's declarations as PropertyChanged commits (injecting
+    // over the element's inline styles, exactly like manual field edits).
+    function applyPreset(type, className) {
+        const presets = window.__preset.parsePresets(currentGlobalsCss);
+        let hit = null;
+        for (let i = 0; i < presets.length; i++) {
+            if (presets[i].type === type && presets[i].className === className) {
+                hit = presets[i];
+                break;
+            }
+        }
+        if (!hit) {
+            return;
+        }
+        const keys = Object.keys(hit.declarations);
+        for (let i = 0; i < keys.length; i++) {
+            sendPropertyChanged(keys[i], hit.declarations[keys[i]]);
+        }
+    }
+
+    // onSavePreset
+    // Inputs: the name input. Output: side-effect; captures the selected
+    // element's look, upserts a [data-element-type].class rule into the globals
+    // CSS, and ships GlobalsCssEditRequested. No-op without a single selection,
+    // a name, or any capturable declaration.
+    function onSavePreset(nameInput) {
+        if (currentSelectionIds.length !== 1) {
+            return;
+        }
+        const name = String(nameInput.value).trim();
+        if (name === "") {
+            return;
+        }
+        const el = findElement(currentSelectionIds[0]);
+        if (!el) {
+            return;
+        }
+        const type = el.dataset.elementType || "";
+        const decls = capturePresetDecls(el);
+        if (Object.keys(decls).length === 0) {
+            return;
+        }
+        const className = window.__preset.slugifyClass(name);
+        currentGlobalsCss = window.__preset.upsertPresetRule(currentGlobalsCss, type, className, decls);
+        window.__deck.send("Interaction", {
+            kind: "GlobalsCssEditRequested", new_css: currentGlobalsCss,
+        });
+        nameInput.value = "";
+    }
+
+    // makePresetsControl
+    // Output: the Presets section — an Apply dropdown (filtered to the selected
+    // element's type) and a name+Save row. Registered in compositeControls;
+    // syncDecls repopulates the dropdown from the live globals CSS.
+    function makePresetsControl() {
+        const box = document.createElement("div");
+        box.className = "inspector__presets";
+        let currentType = "";
+        const select = document.createElement("select");
+        select.className = "inspector__input inspector__select inspector__presets-apply";
+        const saveRow = document.createElement("div");
+        saveRow.className = "inspector__presets-save";
+        const nameInput = document.createElement("input");
+        nameInput.className = "inspector__input inspector__presets-name";
+        nameInput.placeholder = "Save current as…";
+        nameInput.spellcheck = false;
+        const saveBtn = document.createElement("button");
+        saveBtn.type = "button";
+        saveBtn.className = "inspector__presets-savebtn";
+        saveBtn.textContent = "Save";
+        saveRow.appendChild(nameInput);
+        saveRow.appendChild(saveBtn);
+        box.appendChild(select);
+        box.appendChild(saveRow);
+        function rebuild() {
+            const presets = window.__preset.parsePresets(currentGlobalsCss)
+                .filter(function (p) { return p.type === currentType; });
+            select.replaceChildren();
+            const ph = document.createElement("option");
+            ph.value = "";
+            ph.textContent = presets.length ? "Apply preset…" : "No presets for this type";
+            select.appendChild(ph);
+            for (let i = 0; i < presets.length; i++) {
+                const o = document.createElement("option");
+                o.value = presets[i].className;
+                o.textContent = presets[i].className;
+                select.appendChild(o);
+            }
+            select.value = "";
+        }
+        select.addEventListener("change", function () {
+            const cls = select.value;
+            select.value = "";
+            if (cls !== "" && currentType !== "") {
+                applyPreset(currentType, cls);
+            }
+        });
+        saveBtn.addEventListener("click", function () { onSavePreset(nameInput); });
+        nameInput.addEventListener("keydown", function (e) {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                onSavePreset(nameInput);
+            }
+        });
+        box.syncDecls = function () {
+            currentType = selectedElementType();
+            rebuild();
+        };
+        Object.defineProperty(box, "value", { get: function () { return ""; }, set: function () {} });
         compositeControls.push(box);
         return box;
     }
@@ -4766,8 +5100,9 @@
             // Fill/Border/Shadow now drive composite controls (below), not these
             // verbatim fields.
             // Typography props whose inspector name IS the CSS property, set
-            // verbatim (select tokens, color hex, family string, unitless nums).
-            "font-family", "font-weight", "color", "text-align",
+            // verbatim (select tokens, color hex, unitless nums). font-family
+            // drives the combobox composite (syncDecls), not this path.
+            "font-weight", "color", "text-align",
             "justify-content", "line-height",
         ];
         for (let i = 0; i < cssOnly.length; i++) {

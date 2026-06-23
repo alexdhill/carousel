@@ -9,6 +9,7 @@
 // to be idempotent so they can be applied without coordination.
 
 pub mod bridge;
+pub mod landing;
 pub mod present;
 
 use serde::{Deserialize, Serialize};
@@ -117,6 +118,10 @@ pub enum MessageKind {
     // Stage: animations — the active slide's timeline (id/element/category
     // per entry) so the inspector's Appear/Disappear toggles reflect state.
     SlideAnimationsUpdate(SlideAnimationsData),
+    // FontList
+    // The installed font families (sorted, de-duplicated) for the styles
+    // pane font-family combobox. Sent once after the editor webview is Ready.
+    FontList { families: Vec<String> },
     // Notice
     // A non-fatal advisory message (e.g. an add-time ordering accommodation).
     // `detail` is an optional longer description the toast reveals on click.

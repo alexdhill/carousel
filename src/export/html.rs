@@ -85,11 +85,20 @@ pub fn build_html_export(deck: &Deck) -> Result<ExportBundle, serde_json::Error>
             asset_files.push((entry.path.clone(), bytes.clone()));
         }
     }
+    // Bundle the fonts the deck actually uses: append their @font-face rules to
+    // globals_css and write the face files alongside the assets, so the export
+    // renders identically on a machine without those fonts installed.
+    let (font_css, font_files) = crate::export::fonts::build_font_faces(deck);
+    let globals_css: String = if font_css.is_empty() {
+        deck.theme.globals_css.clone()
+    } else {
+        format!("{}\n{}", deck.theme.globals_css, font_css)
+    };
     let data = DeckData {
         width: deck.manifest.dimensions.width,
         height: deck.manifest.dimensions.height,
         theme_css: deck.theme.theme_css.clone(),
-        globals_css: deck.theme.globals_css.clone(),
+        globals_css,
         keyframes_css: ANIMATION_KEYFRAMES_CSS.to_string(),
         assets,
         slides,
@@ -103,6 +112,7 @@ pub fn build_html_export(deck: &Deck) -> Result<ExportBundle, serde_json::Error>
         ("deck.js".to_string(), deck_js.into_bytes()),
     ];
     files.extend(asset_files);
+    files.extend(font_files);
     Ok(ExportBundle { files })
 }
 

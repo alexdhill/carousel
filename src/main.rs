@@ -4,15 +4,20 @@ mod commands;
 mod deck;
 mod error;
 mod export;
+mod fonts;
 mod html;
+mod recents;
 mod ipc;
 mod present;
 
 use app::ApplicationCore;
 use bundle::{IoResponse, IoThread};
+use deck::Deck;
 use ipc::IpcMessage;
 use ipc::bridge::WebviewSender;
+use ipc::landing::{LandingData, LandingInbound, LandingRecent, LandingTemplate};
 use ipc::present::PresentInbound;
+use std::path::PathBuf;
 use tao::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoopBuilder, EventLoopWindowTarget},
@@ -27,9 +32,13 @@ const HOST_JS: &str = include_str!("../assets/host.js");
 const SNAP_JS: &str = include_str!("../assets/snap.js");
 const CROP_JS: &str = include_str!("../assets/crop.js");
 const STYLE_PROPS_JS: &str = include_str!("../assets/style_props.js");
+const PRESET_CSS_JS: &str = include_str!("../assets/preset_css.js");
 const PRESENT_HTML_TEMPLATE: &str = include_str!("../assets/present.html");
 const PRESENT_CSS: &str = include_str!("../assets/present.css");
 const PRESENT_JS: &str = include_str!("../assets/present.js");
+const LANDING_HTML_TEMPLATE: &str = include_str!("../assets/landing.html");
+const LANDING_CSS: &str = include_str!("../assets/landing.css");
+const LANDING_JS: &str = include_str!("../assets/landing.js");
 
 // UserEvent
 // Custom events injected into the Tao event loop.
@@ -60,6 +69,10 @@ enum UserEvent {
     // The headless print operation finished (carries success). Posted by the
     // print completion delegate so the loop can toast + tear the webview down.
     PdfPrintDone(bool),
+    // The landing webview pushed a control (Ready / Open* / Cancel) onto its
+    // channel; the main thread drains it and either sends the landing data,
+    // builds the editor, or exits.
+    LandingIpcReceived,
 }
 
 // init_tracing
@@ -172,17 +185,19 @@ fn install_main_menu() {
 // Output: assembled HTML string ready for the webview.
 // Errors: asserts all five placeholders are present.
 fn assemble_host_html(template: &str, css: &str, js: &str, snap: &str, crop: &str,
-        style_props: &str) -> String {
+        style_props: &str, preset_css: &str) -> String {
     assert!(template.contains("__HOST_CSS__"), "template missing CSS marker");
     assert!(template.contains("__HOST_JS__"), "template missing JS marker");
     assert!(template.contains("__SNAP_JS__"), "template missing snap JS marker");
     assert!(template.contains("__CROP_JS__"), "template missing crop JS marker");
     assert!(template.contains("__STYLE_PROPS_JS__"), "template missing style-props JS marker");
+    assert!(template.contains("__PRESET_CSS_JS__"), "template missing preset-css JS marker");
     template
         .replace("__HOST_CSS__", css)
         .replace("__CROP_JS__", crop)
         .replace("__SNAP_JS__", snap)
         .replace("__STYLE_PROPS_JS__", style_props)
+        .replace("__PRESET_CSS_JS__", preset_css)
         .replace("__HOST_JS__", js)
 }
 
@@ -419,24 +434,75 @@ fn start_pdf_print(
 //      - IpcReceived  → drain channel, handle each message
 //      - FlushPatches → drain coalesced patches, send Patch::Batch
 //      - CloseRequested → exit
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    init_tracing();
-    info!("starting carousel");
+// assemble_landing_html
+// Inputs: the landing template (CSS + JS placeholders) and the two bodies.
+// Output: the assembled landing HTML. Errors: asserts both placeholders.
+fn assemble_landing_html(template: &str, css: &str, js: &str) -> String {
+    assert!(template.contains("__LANDING_CSS__"), "landing template missing CSS marker");
+    assert!(template.contains("__LANDING_JS__"), "landing template missing JS marker");
+    template.replace("__LANDING_CSS__", css).replace("__LANDING_JS__", js)
+}
 
-    let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
-    let proxy = event_loop.create_proxy();
-    let proxy_for_app = proxy.clone();
-    let (ipc_tx, ipc_rx) = std::sync::mpsc::channel::<IpcMessage>();
+// build_landing
+// Inputs: the event-loop target, a proxy, and the landing inbound channel.
+// Output: the landing window + webview. The webview's IPC handler decodes each
+// body into a LandingInbound, forwards it, and wakes LandingIpcReceived.
+fn build_landing(
+    target: &EventLoopWindowTarget<UserEvent>,
+    proxy: tao::event_loop::EventLoopProxy<UserEvent>,
+    landing_tx: std::sync::mpsc::Sender<LandingInbound>,
+) -> Result<(Window, WebView), Box<dyn std::error::Error>> {
+    let window = WindowBuilder::new()
+        .with_title("carousel")
+        .with_inner_size(tao::dpi::LogicalSize::new(960.0, 640.0))
+        .build(target)?;
+    let html: String = assemble_landing_html(LANDING_HTML_TEMPLATE, LANDING_CSS, LANDING_JS);
+    assert!(!html.is_empty(), "assembled landing html is empty");
+    let webview = WebViewBuilder::new(&window)
+        .with_html(html)
+        .with_devtools(true)
+        .with_ipc_handler(move |request: wry::http::Request<String>| {
+            match serde_json::from_str::<LandingInbound>(request.body()) {
+                Ok(inbound) => {
+                    if landing_tx.send(inbound).is_err() {
+                        error!("landing ipc channel closed; dropping control");
+                        return;
+                    }
+                    if proxy.send_event(UserEvent::LandingIpcReceived).is_err() {
+                        error!("event loop proxy closed; cannot dispatch landing control");
+                    }
+                }
+                Err(e) => error!("landing ipc parse error: {} body={}", e, request.body()),
+            }
+        })
+        .build()?;
+    Ok((window, webview))
+}
 
+// build_editor
+// Inputs: the event-loop target, a proxy, the editor IPC channel sender, the
+// starting deck, and the app's flush/io/present/pdf wiring. Output: the editor
+// window + a ready ApplicationCore. Moves the (formerly eager) editor
+// construction so the landing window can build it lazily on Open.
+#[allow(clippy::too_many_arguments)]
+fn build_editor(
+    target: &EventLoopWindowTarget<UserEvent>,
+    proxy: tao::event_loop::EventLoopProxy<UserEvent>,
+    ipc_tx: std::sync::mpsc::Sender<IpcMessage>,
+    deck: Deck,
+    schedule_flush: Box<dyn Fn()>,
+    io_thread: IoThread,
+    request_present_open: Box<dyn Fn()>,
+    request_present_close: Box<dyn Fn()>,
+    request_pdf_print: Box<dyn Fn()>,
+) -> Result<(Window, ApplicationCore), Box<dyn std::error::Error>> {
     let window = WindowBuilder::new()
         .with_title("carousel")
         .with_inner_size(tao::dpi::LogicalSize::new(1400.0, 900.0))
-        .build(&event_loop)?;
-
+        .build(target)?;
     let html: String = assemble_host_html(HOST_HTML_TEMPLATE, HOST_CSS, HOST_JS, SNAP_JS, CROP_JS,
-        STYLE_PROPS_JS);
+        STYLE_PROPS_JS, PRESET_CSS_JS);
     assert!(!html.is_empty(), "assembled host html is empty");
-
     let webview = WebViewBuilder::new(&window)
         .with_html(html)
         .with_devtools(true)
@@ -456,6 +522,105 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         })
         .build()?;
+    let app = ApplicationCore::new_with_deck(
+        deck,
+        WebviewSender::new(webview),
+        schedule_flush,
+        io_thread,
+        request_present_open,
+        request_present_close,
+        request_pdf_print,
+    );
+    Ok((window, app))
+}
+
+// send_landing
+// Inputs: the landing webview + the data payload. Output: side-effect; calls
+// window.__landing.receive(<json>) in the landing webview.
+fn send_landing(webview: &WebView, data: &LandingData) {
+    let json: String = match serde_json::to_string(data) {
+        Ok(j) => j,
+        Err(e) => {
+            error!("landing serialize failed: {}", e);
+            return;
+        }
+    };
+    let escaped: String = serde_json::to_string(&json).unwrap_or_else(|_| "\"\"".to_string());
+    let script: String = format!("window.__landing.receive({});", escaped);
+    if let Err(e) = webview.evaluate_script(&script) {
+        error!("landing evaluate_script failed: {}", e);
+    }
+}
+
+// landing_data
+// Output: the recents + template rows for the landing webview.
+fn landing_data() -> LandingData {
+    let recents: Vec<LandingRecent> = recents::load()
+        .into_iter()
+        .map(|r| LandingRecent { path: r.path, title: r.title, modified: r.modified })
+        .collect();
+    let templates: Vec<LandingTemplate> = deck::templates::catalog()
+        .into_iter()
+        .map(|e| {
+            let (background, foreground, accent) = deck::templates::theme_palette(&e.theme_id);
+            LandingTemplate {
+                theme_id: e.theme_id,
+                theme_name: e.theme_name,
+                layout_id: e.layout_id,
+                layout_name: e.layout_name,
+                background,
+                foreground,
+                accent,
+            }
+        })
+        .collect();
+    LandingData { recents, templates }
+}
+
+// deck_for_open
+// Inputs: an Open* landing control. Output: the starting deck plus, for a
+// recent, the path to load asynchronously (the deck is a light placeholder
+// swapped out when the load returns). None means "abort, stay on the landing"
+// — used when the OpenDefault file dialog is cancelled.
+fn deck_for_open(inbound: &LandingInbound) -> Option<(Deck, Option<PathBuf>)> {
+    use deck::templates::{light_theme, new_deck, new_deck_all_layouts, theme_by_id};
+    match inbound {
+        LandingInbound::OpenTemplate { theme_id, .. } => {
+            Some((new_deck_all_layouts(theme_by_id(theme_id)), None))
+        }
+        LandingInbound::OpenRecent { path } => {
+            Some((new_deck(light_theme(), "title"), Some(PathBuf::from(path))))
+        }
+        // No selection: let the user pick an existing .slidedeck from disk.
+        // Cancel -> None (stay on landing). The placeholder light deck is
+        // swapped out when the load returns.
+        LandingInbound::OpenDefault => {
+            let path: PathBuf = rfd::FileDialog::new()
+                .add_filter("Slide Deck", &["slidedeck"])
+                .pick_file()?;
+            Some((new_deck(light_theme(), "title"), Some(path)))
+        }
+        _ => None,
+    }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    init_tracing();
+    info!("starting carousel");
+
+    let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
+    let proxy = event_loop.create_proxy();
+    let proxy_for_app = proxy.clone();
+    let (ipc_tx, ipc_rx) = std::sync::mpsc::channel::<IpcMessage>();
+
+    // Landing window first. The editor is built lazily when the landing posts
+    // an Open control (window + deck construction needs the
+    // EventLoopWindowTarget, only reachable in the run closure). `ipc_tx` and
+    // `proxy` are kept for build_editor.
+    let (landing_tx, landing_rx) = std::sync::mpsc::channel::<LandingInbound>();
+    let (landing_win, landing_wv) = build_landing(&event_loop, proxy.clone(), landing_tx)?;
+    let mut landing_window: Option<Window> = Some(landing_win);
+    let mut landing_webview: Option<WebView> = Some(landing_wv);
 
     let schedule_flush: Box<dyn Fn()> = {
         let p = proxy_for_app.clone();
@@ -510,14 +675,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let io_thread: IoThread = IoThread::spawn(io_tx, io_wake)?;
 
-    let mut app: ApplicationCore = ApplicationCore::new(
-        WebviewSender::new(webview),
-        schedule_flush,
-        io_thread,
-        request_present_open,
-        request_present_close,
-        request_pdf_print,
-    );
+    // Editor ingredients, moved into build_editor on the first Open.
+    let mut schedule_flush_opt: Option<Box<dyn Fn()>> = Some(schedule_flush);
+    let mut io_thread_opt: Option<IoThread> = Some(io_thread);
+    let mut request_present_open_opt: Option<Box<dyn Fn()>> = Some(request_present_open);
+    let mut request_present_close_opt: Option<Box<dyn Fn()>> = Some(request_present_close);
+    let mut request_pdf_print_opt: Option<Box<dyn Fn()>> = Some(request_pdf_print);
+    let mut app: Option<ApplicationCore> = None;
+    let mut editor_window: Option<Window> = None;
 
     // Install the standard Mac main menu (Quit / Minimize / Close). This
     // also gives wry's keyDown forwarding a valid performKeyEquivalent:
@@ -528,7 +693,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Presentation-window lifetime holders. The presentation WebView is owned
     // by the app's session (via its WebviewSender); the OS Window is held here
     // and dropped only after the session (and its webview) on close.
-    let editor_window_id = window.id();
     let mut present_window: Option<Window> = None;
     // Holds the transient PDF-print window+webview (and its optional destination)
     // while it loads and prints; dropped once printing finishes.
@@ -542,56 +706,70 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         match event {
             Event::UserEvent(UserEvent::IpcReceived) => {
                 while let Ok(msg) = ipc_rx.try_recv() {
-                    if let Err(e) = app.handle_ipc(msg) {
-                        error!("handle_ipc failed: {}", e);
+                    if let Some(app) = app.as_mut() {
+                        if let Err(e) = app.handle_ipc(msg) {
+                            error!("handle_ipc failed: {}", e);
+                        }
                     }
                 }
             }
             Event::UserEvent(UserEvent::FlushPatches) => {
-                if let Err(e) = app.flush_patches() {
-                    error!("flush_patches failed: {}", e);
+                if let Some(app) = app.as_mut() {
+                    if let Err(e) = app.flush_patches() {
+                        error!("flush_patches failed: {}", e);
+                    }
                 }
             }
             Event::UserEvent(UserEvent::IoResponse) => {
                 while let Ok(resp) = io_rx.try_recv() {
-                    if let Err(e) = app.handle_io_response(resp) {
-                        error!("handle_io_response failed: {}", e);
+                    if let Some(app) = app.as_mut() {
+                        if let Err(e) = app.handle_io_response(resp) {
+                            error!("handle_io_response failed: {}", e);
+                        }
                     }
                 }
             }
             Event::UserEvent(UserEvent::OpenPresentation) => {
-                if present_window.is_some() {
-                    warn!("OpenPresentation ignored; already presenting");
-                } else {
-                    match build_presentation(target, proxy_present.clone(), present_tx.clone()) {
-                        Ok((win, wv)) => {
-                            app.begin_presentation(WebviewSender::new(wv));
-                            present_window = Some(win);
+                if let Some(app) = app.as_mut() {
+                    if present_window.is_some() {
+                        warn!("OpenPresentation ignored; already presenting");
+                    } else {
+                        match build_presentation(target, proxy_present.clone(), present_tx.clone()) {
+                            Ok((win, wv)) => {
+                                app.begin_presentation(WebviewSender::new(wv));
+                                present_window = Some(win);
+                            }
+                            Err(e) => error!("failed to build presentation window: {}", e),
                         }
-                        Err(e) => error!("failed to build presentation window: {}", e),
                     }
                 }
             }
             Event::UserEvent(UserEvent::PresentIpcReceived) => {
                 while let Ok(ctrl) = present_rx.try_recv() {
-                    if let Err(e) = app.handle_present_control(ctrl) {
-                        error!("handle_present_control failed: {}", e);
+                    if let Some(app) = app.as_mut() {
+                        if let Err(e) = app.handle_present_control(ctrl) {
+                            error!("handle_present_control failed: {}", e);
+                        }
                     }
                 }
             }
             Event::UserEvent(UserEvent::ClosePresentation) => {
                 // Drop the session (and its webview) first, then the window.
-                app.end_presentation();
+                if let Some(app) = app.as_mut() {
+                    app.end_presentation();
+                }
                 present_window = None;
             }
             Event::UserEvent(UserEvent::OpenPdfPrint) => {
-                if let Some((html, dest)) = app.take_pending_pdf_print() {
-                    // Drop any prior print session (its async job has finished by
-                    // the time a new export is triggered).
-                    print_session = None;
-                    match build_pdf_print_window(target, proxy_print.clone(), html) {
-                        Ok((win, wv)) => print_session = Some((win, wv, dest)),
-                        Err(e) => error!("failed to build pdf print window: {}", e),
+                if let Some(app) = app.as_mut() {
+                    if let Some((html, dest)) = app.take_pending_pdf_print() {
+                        // Drop any prior print session (its async job has finished
+                        // by the time a new export is triggered).
+                        print_session = None;
+                        match build_pdf_print_window(target, proxy_print.clone(), html) {
+                            Ok((win, wv)) => print_session = Some((win, wv, dest)),
+                            Err(e) => error!("failed to build pdf print window: {}", e),
+                        }
                     }
                 }
             }
@@ -615,10 +793,68 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Event::UserEvent(UserEvent::PdfPrintDone(ok)) => {
                 if let Some((win, wv, dest)) = print_session.take() {
                     if let Some(path) = &dest {
-                        app.notify_pdf_export(path, ok);
+                        if let Some(app) = app.as_mut() {
+                            app.notify_pdf_export(path, ok);
+                        }
                     }
                     drop(win);
                     drop(wv);
+                }
+            }
+            Event::UserEvent(UserEvent::LandingIpcReceived) => {
+                while let Ok(inbound) = landing_rx.try_recv() {
+                    match inbound {
+                        LandingInbound::Ready => {
+                            if let Some(wv) = landing_webview.as_ref() {
+                                send_landing(wv, &landing_data());
+                            }
+                        }
+                        LandingInbound::Cancel => {
+                            if app.is_none() {
+                                info!("landing: cancelled; exiting");
+                                *control_flow = ControlFlow::Exit;
+                            }
+                        }
+                        // Any Open* control: build the editor on the chosen deck,
+                        // then drop the landing window. Ignored if already open.
+                        open => {
+                            // Resolve the deck first (OpenDefault may pop a file
+                            // dialog the user can cancel) so we only consume the
+                            // editor ingredients once we're committed to opening.
+                            let chosen = if app.is_some() {
+                                warn!("landing open ignored; editor already open");
+                                None
+                            } else {
+                                deck_for_open(&open)
+                            };
+                            // Only consume the editor ingredients once a deck is
+                            // committed (a cancelled dialog leaves them intact).
+                            if let Some((deck, load)) = chosen {
+                                if let (Some(sf), Some(io), Some(rpo), Some(rpc), Some(rpp)) = (
+                                    schedule_flush_opt.take(),
+                                    io_thread_opt.take(),
+                                    request_present_open_opt.take(),
+                                    request_present_close_opt.take(),
+                                    request_pdf_print_opt.take(),
+                                ) {
+                                    match build_editor(
+                                        target, proxy.clone(), ipc_tx.clone(), deck, sf, io, rpo, rpc, rpp,
+                                    ) {
+                                        Ok((win, mut a)) => {
+                                            if let Some(path) = load {
+                                                a.load_path(path);
+                                            }
+                                            app = Some(a);
+                                            editor_window = Some(win);
+                                            landing_window = None;
+                                            landing_webview = None;
+                                        }
+                                        Err(e) => error!("failed to build editor: {}", e),
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             Event::WindowEvent {
@@ -628,13 +864,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } => {
                 if Some(window_id) == present_window.as_ref().map(|w| w.id()) {
                     info!("presentation window closed; ending presentation");
-                    app.end_presentation();
+                    if let Some(app) = app.as_mut() {
+                        app.end_presentation();
+                    }
                     present_window = None;
                 } else if Some(window_id) == print_session.as_ref().map(|(w, _, _)| w.id()) {
                     info!("pdf print window closed");
                     print_session = None;
-                } else if window_id == editor_window_id {
-                    info!("close requested; exiting");
+                } else if Some(window_id) == editor_window.as_ref().map(|w| w.id()) {
+                    info!("editor closed; exiting");
+                    *control_flow = ControlFlow::Exit;
+                } else if Some(window_id) == landing_window.as_ref().map(|w| w.id()) {
+                    info!("landing closed; exiting");
                     *control_flow = ControlFlow::Exit;
                 }
             }
