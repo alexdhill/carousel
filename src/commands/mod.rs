@@ -34,7 +34,9 @@ pub mod scale_elements;
 pub mod set_geometry;
 pub mod set_inline_style;
 pub mod set_element_id;
+pub mod set_embed;
 pub mod set_text;
+pub mod table_commands;
 pub mod slide_lifecycle;
 pub mod slide_metadata;
 pub mod slide_style;
@@ -68,7 +70,12 @@ pub use move_element::MoveElement;
 pub use patch_buffer::PatchBuffer;
 pub use remove_element::RemoveElementCommand;
 pub use set_element_id::SetElementId;
+pub use set_embed::SetEmbedHtml;
 pub use set_text::SetTextContent;
+pub use table_commands::{
+    DeleteTableColumn, DeleteTableRow, InsertTableColumn, InsertTableRow, SetCellStyles,
+    SetCellText, SetTableData, SetTableHeaderColumns, SetTableHeaderRows,
+};
 pub use slide_lifecycle::{InsertSlide, RemoveSlide};
 pub use slide_metadata::SetSlideTitle;
 pub use slide_style::{

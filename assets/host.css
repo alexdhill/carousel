@@ -765,9 +765,20 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 
 .inspector__scroll {
     flex: 1 1 auto;
+    /* min-height:0 lets this flex child shrink below its content height so it
+       actually scrolls instead of growing and being clipped by the panel. */
+    min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
     padding: 4px 0 6px;
+}
+
+/* Conditional overscroll: while an in-DOM dropdown/popover is open, lock the
+   styles pane so a wheel over the pane can't scroll the anchored list out from
+   under its input. The popovers keep their own internal scroll. */
+.panel--inspector:has(.inspector__fontcombo-pop:not([hidden])) .inspector__scroll,
+.panel--inspector:has(.animations__add-menu:not([hidden])) .inspector__scroll {
+    overflow-y: hidden;
 }
 
 .inspector__section {
@@ -1758,6 +1769,54 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     border: 1.5px dashed var(--acc);
 }
 
+/* Per-cell selection inside a focused table: solid accent fill tint. */
+.selection-box--cell {
+    border: 1.5px solid var(--acc);
+    background: color-mix(in srgb, var(--acc) 16%, transparent);
+}
+
+/* Table inspector section. */
+.table-box__grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    padding: 4px 0 8px;
+}
+
+.table-box__btn {
+    padding: 6px 8px;
+    font-size: 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-field);
+    background: var(--field);
+    color: var(--ink);
+    cursor: pointer;
+}
+
+.table-box__btn:hover {
+    border-color: var(--acc);
+}
+
+.table-box__toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--ink2);
+    padding: 3px 0;
+}
+
+.table-box__hint {
+    margin: 8px 0 0;
+    font-size: 11px;
+    color: var(--label);
+    line-height: 1.4;
+}
+
+.inspector__section-header--static {
+    cursor: default;
+}
+
 .selection-handle {
     position: absolute;
     width: 10px;
@@ -2073,6 +2132,74 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 .layout-picker__label {
     font-size: 12px;
     color: var(--ink2);
+}
+
+/* ===================== Code-block (embed) editor ===================== */
+
+.embed-editor {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(20, 16, 12, 0.4);
+}
+
+.embed-editor__panel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: min(720px, 80vw);
+    max-height: 80vh;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--r-card, 12px);
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.3);
+    padding: 18px 20px 20px;
+}
+
+.embed-editor__title {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--ink);
+}
+
+.embed-editor__area {
+    flex: 1 1 auto;
+    min-height: 240px;
+    resize: vertical;
+    font: 13px ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--ink);
+    background: var(--field);
+    border: 1px solid var(--line);
+    border-radius: var(--r-field);
+    padding: 10px 12px;
+    white-space: pre;
+    overflow: auto;
+}
+
+.embed-editor__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.embed-editor__btn {
+    padding: 7px 16px;
+    font-size: 13px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-field);
+    background: var(--panel);
+    color: var(--ink);
+    cursor: pointer;
+}
+
+.embed-editor__btn--primary {
+    background: var(--acc);
+    border-color: var(--acc);
+    color: #fff;
 }
 
 /* Drag-to-select marquee box (editor overlay). */

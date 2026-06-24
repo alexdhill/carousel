@@ -48,6 +48,9 @@ pub const ANIMATION_KEYFRAMES_CSS: &str = r#"
 @keyframes shake { 0%,100% { transform: translateX(0); } 20% { transform: translateX(-8px); } 40% { transform: translateX(8px); } 60% { transform: translateX(-6px); } 80% { transform: translateX(6px); } }
 @keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
 @keyframes flash { 0%,100% { opacity: 1; } 25%,75% { opacity: .25; } 50% { opacity: 1; } }
+[data-element-type="table"] > table { width: 100%; height: 100%; border-collapse: collapse; table-layout: fixed; }
+[data-element-type="table"] th, [data-element-type="table"] td { border: 1px solid var(--theme-muted, #bbb); padding: 6px 10px; text-align: left; vertical-align: top; color: inherit; font: inherit; overflow: hidden; }
+[data-element-type="table"] th { font-weight: 600; background: color-mix(in srgb, var(--theme-foreground, #000) 8%, transparent); }
 "#;
 
 // AnimMap: element id → its animation entry ids (in timeline order). Built
@@ -277,11 +280,60 @@ fn write_content(node: &ElementNode, anim: &AnimMap, out: &mut String) {
             }
         }
         ElementContent::Embed(html) => out.push_str(html),
+        ElementContent::Table(td) => write_table(td, out),
         ElementContent::Image(_)
         | ElementContent::Media(_)
-        | ElementContent::Shape(_)
-        | ElementContent::Table(_) => {}
+        | ElementContent::Shape(_) => {}
     }
+}
+
+// write_table
+// Inputs: the TableData grid, out buffer.
+// Output: side-effect; appends a `<table>` carrying the grid dimensions and
+// header counts as data-* attributes, then one `<tr>` per row. Cells in the
+// header row/column range emit `<th>`, the rest `<td>`; each cell writes its
+// style_overrides as an inline style and its escaped plain text. The grid is
+// clamped to rows×columns so a malformed model still serializes a rectangle.
+fn write_table(td: &crate::deck::element::TableData, out: &mut String) {
+    out.push_str("<table data-rows=\"");
+    out.push_str(&td.rows.to_string());
+    out.push_str("\" data-columns=\"");
+    out.push_str(&td.columns.to_string());
+    out.push_str("\" data-header-rows=\"");
+    out.push_str(&td.header_rows.to_string());
+    out.push_str("\" data-header-columns=\"");
+    out.push_str(&td.header_columns.to_string());
+    out.push_str("\">");
+    for r in 0..td.rows {
+        out.push_str("<tr>");
+        for c in 0..td.columns {
+            let is_header: bool = r < td.header_rows || c < td.header_columns;
+            let tag: &str = if is_header { "th" } else { "td" };
+            out.push('<');
+            out.push_str(tag);
+            if let Some(cell) = td.cells.get(r).and_then(|row| row.get(c)) {
+                if !cell.style_overrides.is_empty() {
+                    out.push_str(" style=\"");
+                    for (k, v) in &cell.style_overrides {
+                        out.push_str(k);
+                        out.push(':');
+                        out.push_str(&escape_attr(v));
+                        out.push(';');
+                    }
+                    out.push('"');
+                }
+                out.push('>');
+                out.push_str(&escape_text(&cell.content.plain));
+            } else {
+                out.push('>');
+            }
+            out.push_str("</");
+            out.push_str(tag);
+            out.push('>');
+        }
+        out.push_str("</tr>");
+    }
+    out.push_str("</table>");
 }
 
 // build_style

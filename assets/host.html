@@ -54,10 +54,10 @@
                 <button type="button" id="tool-add-image" class="tbar-btn tt" data-tip="Add image" data-key="⇧ I" aria-label="Add image">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="M5.5 17.5 10 13l3 3 2.5-2.5 3 3"/></svg>
                 </button>
-                <button type="button" class="tbar-btn tt" data-stub data-tip="Add code" data-key="⇧ C" aria-label="Add code block">
+                <button type="button" class="tbar-btn objects__add tt" data-element-type="embed" data-tip="Add code" data-key="⇧ C" aria-label="Add code block">
                     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 8 5 12l4 4M15 8l4 4-4 4"/></svg>
                 </button>
-                <button type="button" class="tbar-btn tt" data-stub data-tip="Add table" data-key="⇧ T" aria-label="Add table">
+                <button type="button" class="tbar-btn objects__add tt" data-element-type="table" data-tip="Add table" data-key="⇧ T" aria-label="Add table">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="5" width="16" height="14" rx="2.5"/><path d="M4 10h16M4 14.5h16M10 5v14"/></svg>
                 </button>
             </div>
@@ -213,6 +213,25 @@
                     <input type="number" id="crop-offset-y" step="1">
                 </label>
                 <button type="button" id="crop-reset" class="crop-box__reset">Reset crop</button>
+            </section>
+
+            <section id="table-box" class="inspector__section table-box" hidden>
+                <div class="inspector__section-header inspector__section-header--static">Table</div>
+                <div class="inspector__section-body">
+                    <div class="table-box__grid">
+                        <button type="button" id="table-add-row" class="table-box__btn">+ Row</button>
+                        <button type="button" id="table-del-row" class="table-box__btn">− Row</button>
+                        <button type="button" id="table-add-col" class="table-box__btn">+ Col</button>
+                        <button type="button" id="table-del-col" class="table-box__btn">− Col</button>
+                    </div>
+                    <label class="table-box__toggle">
+                        <input type="checkbox" id="table-header-row"> Header row
+                    </label>
+                    <label class="table-box__toggle">
+                        <input type="checkbox" id="table-header-col"> Header column
+                    </label>
+                    <p class="table-box__hint">Double-click a cell to edit · Shift / ⌘ click to multi-select</p>
+                </div>
             </section>
 
             <section id="guide-box" class="inspector__section slide-box">

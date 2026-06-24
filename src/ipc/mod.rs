@@ -274,6 +274,57 @@ pub enum InteractionEvent {
         element_id: ElementId,
         text: String,
     },
+    // EmbedHtmlEditRequested
+    // Fired when the double-click HTML editor for an Embed ("code block")
+    // element commits. `html` is the new raw inner HTML; Rust dispatches a
+    // single SetEmbedHtml. An empty string is a valid edit (cleared block).
+    EmbedHtmlEditRequested {
+        element_id: ElementId,
+        html: String,
+    },
+    // ---- Table editing (focus-mode cell ops) ----
+    // CellTextEditRequested — commit of a cell's inline text edit.
+    CellTextEditRequested {
+        element_id: ElementId,
+        row: usize,
+        col: usize,
+        text: String,
+    },
+    // CellStyleChanged — the inspector committed a style property while a cell
+    // set was active. `cells` is the selected [row, col] pairs; the property is
+    // written to every one (empty value clears it).
+    CellStyleChanged {
+        element_id: ElementId,
+        cells: Vec<[usize; 2]>,
+        property: String,
+        value: String,
+    },
+    // Structural table ops from the Table inspector section. `at` is the row /
+    // column index the op acts on; `count` sets the header band size.
+    TableInsertRow {
+        element_id: ElementId,
+        at: usize,
+    },
+    TableDeleteRow {
+        element_id: ElementId,
+        at: usize,
+    },
+    TableInsertColumn {
+        element_id: ElementId,
+        at: usize,
+    },
+    TableDeleteColumn {
+        element_id: ElementId,
+        at: usize,
+    },
+    TableSetHeaderRows {
+        element_id: ElementId,
+        count: usize,
+    },
+    TableSetHeaderColumns {
+        element_id: ElementId,
+        count: usize,
+    },
     BackgroundClicked {
         position: Point,
     },

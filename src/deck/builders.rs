@@ -130,6 +130,27 @@ pub fn embed_element(id: impl Into<ElementId>, html: impl Into<String>) -> Eleme
     }
 }
 
+// table_element
+// Inputs: id, a TableData grid.
+// Output: a Table ElementNode wrapping the grid.
+pub fn table_element(id: impl Into<ElementId>, data: crate::deck::element::TableData) -> ElementNode {
+    let id: ElementId = id.into();
+    assert!(!id.is_empty(), "element id must not be empty");
+    ElementNode {
+        id,
+        element_type: ElementType::Table,
+        geometry: Geometry::default(),
+        style: ElementStyle::Table(crate::deck::style::TableStyle::default()),
+        content: ElementContent::Table(data),
+        children: vec![],
+        placeholder_fill: None,
+        name: None,
+        link: None,
+        attributes: BTreeMap::new(),
+        inline_styles: BTreeMap::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]

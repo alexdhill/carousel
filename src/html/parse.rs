@@ -251,7 +251,7 @@ fn parse_typed_payload(
         )),
         ElementType::Table => Ok((
             ElementStyle::Table(TableStyle::default()),
-            ElementContent::Table(TableData::default()),
+            ElementContent::Table(parse_table(node)),
             vec![],
         )),
         ElementType::Group => {
@@ -272,6 +272,97 @@ fn parse_typed_payload(
         ElementType::Embed => {
             let html: String = serialize_inner_html(node)?;
             Ok((ElementStyle::Embed, ElementContent::Embed(html), vec![]))
+        }
+    }
+}
+
+// parse_table
+// Inputs: the table wrapper element node (data-element-type="table").
+// Output: the TableData grid reconstructed from the inner `<table>`. Header
+// counts come from the table's data-* attrs; dimensions from data-rows /
+// data-columns (falling back to the parsed shape). Each cell's inline style
+// becomes its style_overrides and its text node its content. The grid is
+// normalized to a rows×columns rectangle so the model invariant holds even if
+// the HTML was hand-edited. A missing/empty `<table>` yields an empty grid.
+// Control flow: locate <table> -> read header/dim attrs -> select every <tr>
+// (html5ever wraps them in <tbody>, so a descendant select is used) -> read
+// each row's <td>/<th> direct children -> normalize to a rectangle.
+fn parse_table(node: &NodeRef) -> TableData {
+    let table_ref = match node.select_first("table") {
+        Ok(t) => t,
+        Err(_) => return TableData::default(),
+    };
+    let table_node: &NodeRef = table_ref.as_node();
+    let (header_rows, header_columns, attr_rows, attr_columns) = read_table_attrs(table_node);
+
+    let mut cells: Vec<Vec<TableCell>> = Vec::new();
+    if let Ok(rows) = table_node.select("tr") {
+        const MAX_ROWS: usize = 4096;
+        for tr in rows.take(MAX_ROWS) {
+            cells.push(parse_table_row(tr.as_node()));
+        }
+    }
+
+    let rows: usize = attr_rows.unwrap_or(cells.len());
+    let columns: usize =
+        attr_columns.unwrap_or_else(|| cells.iter().map(Vec::len).max().unwrap_or(0));
+    normalize_grid(&mut cells, rows, columns);
+    TableData { rows, columns, cells, header_rows, header_columns }
+}
+
+// read_table_attrs — header counts + optional declared dimensions.
+fn read_table_attrs(table_node: &NodeRef) -> (usize, usize, Option<usize>, Option<usize>) {
+    let ed = match table_node.as_element() {
+        Some(e) => e,
+        None => return (0, 0, None, None),
+    };
+    let a = ed.attributes.borrow();
+    let get = |k: &str| a.get(k).and_then(|v| v.parse::<usize>().ok());
+    (
+        get("data-header-rows").unwrap_or(0),
+        get("data-header-columns").unwrap_or(0),
+        get("data-rows"),
+        get("data-columns"),
+    )
+}
+
+// parse_table_row — the <td>/<th> direct children of one <tr> as cells.
+fn parse_table_row(tr_node: &NodeRef) -> Vec<TableCell> {
+    let mut row: Vec<TableCell> = Vec::new();
+    for child in tr_node.children() {
+        let ed = match child.as_element() {
+            Some(e) => e,
+            None => continue,
+        };
+        let name: &str = ed.name.local.as_ref();
+        if name != "td" && name != "th" {
+            continue;
+        }
+        let style_overrides: BTreeMap<String, String> = {
+            let a = ed.attributes.borrow();
+            parse_style_decls(a.get("style").unwrap_or(""))
+        };
+        row.push(TableCell {
+            content: RichText::new(extract_text(&child)),
+            style_overrides,
+            colspan: 1,
+            rowspan: 1,
+        });
+    }
+    row
+}
+
+// normalize_grid — force `cells` to exactly rows×columns (pad with default
+// cells, truncate overflow) so the TableData invariant always holds.
+fn normalize_grid(cells: &mut Vec<Vec<TableCell>>, rows: usize, columns: usize) {
+    cells.truncate(rows);
+    while cells.len() < rows {
+        cells.push(Vec::new());
+    }
+    for row in cells.iter_mut() {
+        row.truncate(columns);
+        while row.len() < columns {
+            row.push(TableCell::default());
         }
     }
 }
@@ -924,6 +1015,66 @@ mod tests {
         let html = serialize_element(&g);
         let back = parse_element(&html).unwrap();
         assert_eq!(back, g);
+    }
+
+    fn sample_cell(text: &str, overrides: &[(&str, &str)]) -> TableCell {
+        let mut so: BTreeMap<String, String> = BTreeMap::new();
+        for (k, v) in overrides {
+            so.insert((*k).into(), (*v).into());
+        }
+        TableCell { content: RichText::new(text), style_overrides: so, colspan: 1, rowspan: 1 }
+    }
+
+    #[test]
+    fn roundtrip_table_with_headers_and_cell_styles() {
+        use crate::deck::builders::table_element;
+        let cells = vec![
+            vec![sample_cell("H1", &[]), sample_cell("H2", &[])],
+            vec![
+                sample_cell("a", &[("background-color", "#eee"), ("color", "#111")]),
+                sample_cell("b", &[]),
+            ],
+            vec![sample_cell("c", &[]), sample_cell("", &[])],
+        ];
+        let td = TableData {
+            rows: 3,
+            columns: 2,
+            cells,
+            header_rows: 1,
+            header_columns: 0,
+        };
+        let n = table_element("tbl", td.clone());
+        let html = serialize_element(&n);
+        // Header row emits <th>, body emits <td>.
+        assert!(html.contains("<th"));
+        assert!(html.contains("<td"));
+        let back = parse_element(&html).unwrap();
+        assert_eq!(back.content, ElementContent::Table(td));
+    }
+
+    #[test]
+    fn roundtrip_empty_table_is_rectangular() {
+        use crate::deck::builders::table_element;
+        let td = TableData {
+            rows: 2,
+            columns: 3,
+            cells: vec![
+                vec![TableCell::default(), TableCell::default(), TableCell::default()],
+                vec![TableCell::default(), TableCell::default(), TableCell::default()],
+            ],
+            header_rows: 0,
+            header_columns: 0,
+        };
+        // TableCell::default has colspan/rowspan 0; the parser normalizes to 1,
+        // so build the expected grid with explicit spans of 1.
+        let expected_cells: Vec<Vec<TableCell>> = (0..2)
+            .map(|_| (0..3).map(|_| sample_cell("", &[])).collect())
+            .collect();
+        let expected = TableData { cells: expected_cells, ..td.clone() };
+        let n = table_element("t2", td);
+        let html = serialize_element(&n);
+        let back = parse_element(&html).unwrap();
+        assert_eq!(back.content, ElementContent::Table(expected));
     }
 
     #[test]

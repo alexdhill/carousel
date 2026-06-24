@@ -25,6 +25,9 @@ use crate::commands::{
     RenameElement, ReparentElement,
     ResizeElement, SetElementsTransform, SetAnimationProperty, SetElementId, SetGeometryProperty, SetGlobalsCss, SetGroupLayout,
     SetGroupScale, SetInlineStyle, SetLayoutBackground, SetLayoutBackgroundImage, SetLayoutName,
+    SetEmbedHtml,
+    DeleteTableColumn, DeleteTableRow, InsertTableColumn, InsertTableRow, SetCellStyles,
+    SetCellText, SetTableHeaderColumns, SetTableHeaderRows,
     SetSlideBackground, SetSlideBackgroundImage, SetSlideLayout, SetSlideNotes, SetSlideTitle,
     SetTextContent, SwapTheme,
     TransactionSnapshot,
@@ -896,6 +899,88 @@ impl ApplicationCore {
                     text,
                 ) {
                     Some(cmd) => InterpretResult::Command(cmd),
+                    None => InterpretResult::Nothing,
+                }
+            }
+            InteractionEvent::EmbedHtmlEditRequested { element_id, html } => {
+                match build_set_embed_command(
+                    &self.dispatcher,
+                    self.active_canvas(),
+                    element_id,
+                    html,
+                ) {
+                    Some(cmd) => InterpretResult::Command(cmd),
+                    None => InterpretResult::Nothing,
+                }
+            }
+            // ---- Table editing ----
+            InteractionEvent::CellTextEditRequested { element_id, row, col, text } => {
+                match self.active_canvas() {
+                    Some(target) => InterpretResult::Command(Box::new(SetCellText {
+                        target,
+                        element_id,
+                        row,
+                        col,
+                        text,
+                    })),
+                    None => InterpretResult::Nothing,
+                }
+            }
+            InteractionEvent::CellStyleChanged { element_id, cells, property, value } => {
+                if property.is_empty() || cells.is_empty() {
+                    InterpretResult::Nothing
+                } else {
+                    match self.active_canvas() {
+                        Some(target) => InterpretResult::Command(Box::new(SetCellStyles {
+                            target,
+                            element_id,
+                            cells: cells.into_iter().map(|p| (p[0], p[1])).collect(),
+                            property,
+                            value,
+                        })),
+                        None => InterpretResult::Nothing,
+                    }
+                }
+            }
+            InteractionEvent::TableInsertRow { element_id, at } => match self.active_canvas() {
+                Some(target) => {
+                    InterpretResult::Command(Box::new(InsertTableRow { target, element_id, at }))
+                }
+                None => InterpretResult::Nothing,
+            },
+            InteractionEvent::TableDeleteRow { element_id, at } => match self.active_canvas() {
+                Some(target) => {
+                    InterpretResult::Command(Box::new(DeleteTableRow { target, element_id, at }))
+                }
+                None => InterpretResult::Nothing,
+            },
+            InteractionEvent::TableInsertColumn { element_id, at } => match self.active_canvas() {
+                Some(target) => {
+                    InterpretResult::Command(Box::new(InsertTableColumn { target, element_id, at }))
+                }
+                None => InterpretResult::Nothing,
+            },
+            InteractionEvent::TableDeleteColumn { element_id, at } => match self.active_canvas() {
+                Some(target) => {
+                    InterpretResult::Command(Box::new(DeleteTableColumn { target, element_id, at }))
+                }
+                None => InterpretResult::Nothing,
+            },
+            InteractionEvent::TableSetHeaderRows { element_id, count } => match self.active_canvas() {
+                Some(target) => InterpretResult::Command(Box::new(SetTableHeaderRows {
+                    target,
+                    element_id,
+                    count,
+                })),
+                None => InterpretResult::Nothing,
+            },
+            InteractionEvent::TableSetHeaderColumns { element_id, count } => {
+                match self.active_canvas() {
+                    Some(target) => InterpretResult::Command(Box::new(SetTableHeaderColumns {
+                        target,
+                        element_id,
+                        count,
+                    })),
                     None => InterpretResult::Nothing,
                 }
             }
@@ -3206,6 +3291,31 @@ fn build_set_text_command(
     }))
 }
 
+// build_set_embed_command
+// Inputs: the dispatcher (read access), the active canvas target, the embed
+// element id, and the new raw HTML.
+// Output: Some(SetEmbedHtml) when the element exists, is an Embed element, and
+// the HTML actually changed; None otherwise (so a no-op commit is dropped).
+fn build_set_embed_command(
+    dispatcher: &CommandDispatcher,
+    active: Option<CanvasTarget>,
+    element_id: ElementId,
+    new_html: String,
+) -> Option<Box<dyn Command>> {
+    let target: CanvasTarget = active?;
+    assert!(!target.id().is_empty(), "build_set_embed_command: active canvas id is empty");
+    let canvas = dispatcher.deck().canvas(&target)?;
+    let element = canvas.find_element(&element_id)?;
+    let current: &str = match &element.content {
+        ElementContent::Embed(html) => html.as_str(),
+        _ => return None,
+    };
+    if current == new_html {
+        return None;
+    }
+    Some(Box::new(SetEmbedHtml { target, element_id, new_html }))
+}
+
 // interpret_set_element_animation
 // Inputs: the deck (read), editor mode, active slide, target element, the
 // parse_group_dir/dist/align — IPC token → enum (None token → keep via Option).
@@ -3697,6 +3807,8 @@ fn construct_default_element_for_type(element_type: &str) -> Option<ElementNode>
         "text" => Some(default_text_element()),
         "shape" => Some(default_shape_element()),
         "group" => Some(default_group_element()),
+        "embed" => Some(default_embed_element()),
+        "table" => Some(default_table_element()),
         _ => None,
     }
 }
@@ -3778,6 +3890,82 @@ fn default_group_element() -> ElementNode {
         link: None,
         attributes: BTreeMap::new(),
         inline_styles: BTreeMap::new(),
+    }
+}
+
+// default_table_element
+// A fresh 3x3 table with one header row. Cells carry placeholder text so the
+// grid is visible on insert; presentation (borders, padding) comes from the
+// built-in table CSS, and per-cell styling writes style_overrides. Spans are
+// 1 (merged cells are out of scope for v1).
+fn default_table_element() -> ElementNode {
+    use crate::deck::element::{TableCell, TableData};
+    let rows: usize = 3;
+    let columns: usize = 3;
+    let cell = |text: &str| TableCell {
+        content: RichText::new(text),
+        style_overrides: BTreeMap::new(),
+        colspan: 1,
+        rowspan: 1,
+    };
+    let mut cells: Vec<Vec<TableCell>> = Vec::with_capacity(rows);
+    for r in 0..rows {
+        let mut row: Vec<TableCell> = Vec::with_capacity(columns);
+        for c in 0..columns {
+            let text: String =
+                if r == 0 { format!("Header {}", c + 1) } else { String::new() };
+            row.push(cell(&text));
+        }
+        cells.push(row);
+    }
+    let data = TableData { rows, columns, cells, header_rows: 1, header_columns: 0 };
+    ElementNode {
+        id: new_element_id(),
+        element_type: ElementType::Table,
+        geometry: Geometry { x: 660.0, y: 440.0, width: 600.0, height: 200.0, ..Geometry::default() },
+        style: ElementStyle::Table(crate::deck::style::TableStyle::default()),
+        content: ElementContent::Table(data),
+        children: vec![],
+        placeholder_fill: None,
+        name: None,
+        link: None,
+        attributes: BTreeMap::new(),
+        inline_styles: BTreeMap::new(),
+    }
+}
+
+// default_embed_element
+// A fresh code block: an Embed whose raw HTML is a visible placeholder so the
+// element reads as "HTML block here" on insert (double-click edits the HTML).
+// A dashed border + padding keep an otherwise-empty block selectable.
+fn default_embed_element() -> ElementNode {
+    let id: ElementId = new_element_id();
+    let placeholder: &str =
+        "<div style=\"font:14px ui-monospace,monospace;color:var(--theme-muted,#888);\
+padding:12px;\">&lt;!-- HTML block: double-click to edit --&gt;</div>";
+    ElementNode {
+        id,
+        element_type: ElementType::Embed,
+        geometry: Geometry {
+            x: 760.0,
+            y: 465.0,
+            width: 400.0,
+            height: 200.0,
+            ..Geometry::default()
+        },
+        style: ElementStyle::Embed,
+        content: ElementContent::Embed(placeholder.to_string()),
+        children: vec![],
+        placeholder_fill: None,
+        name: None,
+        link: None,
+        attributes: BTreeMap::new(),
+        inline_styles: {
+            let mut m: BTreeMap<String, String> = BTreeMap::new();
+            m.insert("border".into(), "1px dashed var(--theme-muted, #888)".into());
+            m.insert("overflow".into(), "auto".into());
+            m
+        },
     }
 }
 

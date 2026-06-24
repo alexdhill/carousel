@@ -648,6 +648,11 @@
         if (!currentShadow || !currentSlideHost) {
             return;
         }
+        // Table focus mode: draw the cell selection instead of the element box.
+        if (tableCellSel && focusedTableId() === tableCellSel.elementId) {
+            renderCellSelection(overlay);
+            return;
+        }
         if (currentSelectionIds.length === 0) {
             return;
         }
@@ -737,6 +742,274 @@
                 overlay.appendChild(handle);
             }
         }
+    }
+
+    // ===================== table cell editing (focus mode) =====================
+    // When a table is the deepest focus (entered via double-click, like a
+    // group), clicks select cells by (row, col) instead of dragging the element.
+    // The selected-cell set lives only here; it is serialized into the command
+    // messages so Rust stays stateless about cell selection.
+    // tableCellSel: { elementId, anchor: [r,c], cells: [[r,c], ...] } | null
+    let tableCellSel = null;
+
+    // focusedTableId — the deepest focused element id if it is a table, else
+    // null. Used to gate cell-selection behavior in the pointer pipeline.
+    function focusedTableId() {
+        if (focusChain.length === 0 || !currentShadow) {
+            return null;
+        }
+        const top = focusChain[focusChain.length - 1];
+        const safe = (window.CSS && window.CSS.escape) ? window.CSS.escape(top) : top;
+        const el = currentShadow.querySelector('[data-element-id="' + safe + '"]');
+        return (el && el.dataset.elementType === "table") ? top : null;
+    }
+
+    // tableCellGrid — the rendered cells of a table as grid[r][c] = { r, c, td }.
+    // Row index is the <tr> index; column index is the cell index within the row
+    // (v1 has no merged cells, so this is a plain rectangle).
+    function tableCellGrid(tableId) {
+        const safe = (window.CSS && window.CSS.escape) ? window.CSS.escape(tableId) : tableId;
+        const wrap = currentShadow && currentShadow.querySelector('[data-element-id="' + safe + '"]');
+        const table = wrap && wrap.querySelector("table");
+        if (!table) {
+            return [];
+        }
+        const trs = table.querySelectorAll("tr");
+        const grid = [];
+        for (let r = 0; r < trs.length; r++) {
+            const cellEls = trs[r].querySelectorAll("td, th");
+            const row = [];
+            for (let c = 0; c < cellEls.length; c++) {
+                row.push({ r: r, c: c, td: cellEls[c] });
+            }
+            grid.push(row);
+        }
+        return grid;
+    }
+
+    // cellAtPoint — the [r, c] of the cell under a client point, or null.
+    function cellAtPoint(tableId, clientX, clientY) {
+        const grid = tableCellGrid(tableId);
+        for (let r = 0; r < grid.length; r++) {
+            for (let c = 0; c < grid[r].length; c++) {
+                const rect = grid[r][c].td.getBoundingClientRect();
+                if (clientX >= rect.left && clientX <= rect.right
+                        && clientY >= rect.top && clientY <= rect.bottom) {
+                    return [r, c];
+                }
+            }
+        }
+        return null;
+    }
+
+    function cellKey(rc) {
+        return rc[0] + "," + rc[1];
+    }
+
+    // rangeCells — every [r,c] in the rectangle spanned by two corners.
+    function rangeCells(a, b) {
+        const r0 = Math.min(a[0], b[0]), r1 = Math.max(a[0], b[0]);
+        const c0 = Math.min(a[1], b[1]), c1 = Math.max(a[1], b[1]);
+        const out = [];
+        for (let r = r0; r <= r1; r++) {
+            for (let c = c0; c <= c1; c++) {
+                out.push([r, c]);
+            }
+        }
+        return out;
+    }
+
+    // selectCell — update the cell selection from a click: plain click selects
+    // one (new anchor); Shift extends a rectangular range from the anchor;
+    // Cmd/Ctrl toggles an individual cell.
+    function selectCell(tableId, rc, e) {
+        const sameTable = tableCellSel && tableCellSel.elementId === tableId;
+        if (sameTable && e && e.shiftKey) {
+            tableCellSel.cells = rangeCells(tableCellSel.anchor, rc);
+        } else if (sameTable && e && (e.metaKey || e.ctrlKey)) {
+            const k = cellKey(rc);
+            const idx = tableCellSel.cells.findIndex(function (x) { return cellKey(x) === k; });
+            if (idx >= 0) {
+                tableCellSel.cells.splice(idx, 1);
+            } else {
+                tableCellSel.cells.push(rc);
+            }
+            tableCellSel.anchor = rc;
+        } else {
+            tableCellSel = { elementId: tableId, anchor: rc, cells: [rc] };
+        }
+        updateSelectionOverlay();
+        refreshInspector();
+    }
+
+    // selectAllCells — select every cell (whole-table styling affordance).
+    function selectAllCells(tableId) {
+        const grid = tableCellGrid(tableId);
+        const all = [];
+        for (let r = 0; r < grid.length; r++) {
+            for (let c = 0; c < grid[r].length; c++) {
+                all.push([r, c]);
+            }
+        }
+        tableCellSel = { elementId: tableId, anchor: [0, 0], cells: all };
+        updateSelectionOverlay();
+        refreshInspector();
+    }
+
+    function clearTableCellSel() {
+        if (tableCellSel) {
+            tableCellSel = null;
+            updateSelectionOverlay();
+            refreshInspector();
+        }
+    }
+
+    // renderCellSelection — accent outline over each selected cell, drawn into
+    // the selection overlay in place of the element box/handles.
+    function renderCellSelection(overlay) {
+        const overlayRect = overlay.getBoundingClientRect();
+        const grid = tableCellGrid(tableCellSel.elementId);
+        for (let i = 0; i < tableCellSel.cells.length; i++) {
+            const rc = tableCellSel.cells[i];
+            const cellObj = grid[rc[0]] && grid[rc[0]][rc[1]];
+            if (!cellObj) {
+                continue;
+            }
+            const rect = cellObj.td.getBoundingClientRect();
+            const box = document.createElement("div");
+            box.className = "selection-box selection-box--cell";
+            box.style.position = "absolute";
+            box.style.left = (rect.left - overlayRect.left) + "px";
+            box.style.top = (rect.top - overlayRect.top) + "px";
+            box.style.width = rect.width + "px";
+            box.style.height = rect.height + "px";
+            box.style.pointerEvents = "none";
+            box.style.boxSizing = "border-box";
+            overlay.appendChild(box);
+        }
+    }
+
+    // beginCellEdit — inline-edit one cell's text (contenteditable on the <td>).
+    // Enter / blur commit via CellTextEditRequested; Escape cancels. The slide
+    // remounts on commit (ReplaceElement), replacing the editable node.
+    function beginCellEdit(tableId, rc) {
+        const grid = tableCellGrid(tableId);
+        const cellObj = grid[rc[0]] && grid[rc[0]][rc[1]];
+        if (!cellObj) {
+            return;
+        }
+        const td = cellObj.td;
+        td.setAttribute("contenteditable", "true");
+        td.focus();
+        const range = document.createRange();
+        range.selectNodeContents(td);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        function finish(commit) {
+            td.removeEventListener("blur", onBlur);
+            td.removeEventListener("keydown", onKey);
+            td.removeAttribute("contenteditable");
+            if (commit) {
+                window.__deck.send("Interaction", {
+                    kind: "CellTextEditRequested",
+                    element_id: tableId,
+                    row: rc[0],
+                    col: rc[1],
+                    text: td.textContent,
+                });
+            }
+        }
+        function onBlur() { finish(true); }
+        function onKey(ev) {
+            ev.stopPropagation();
+            if (ev.key === "Enter" && !ev.shiftKey) {
+                ev.preventDefault();
+                td.blur();
+            } else if (ev.key === "Escape") {
+                ev.preventDefault();
+                finish(false);
+            }
+        }
+        td.addEventListener("blur", onBlur);
+        td.addEventListener("keydown", onKey);
+    }
+
+    // tableContextId — the table id the inspector's Table section acts on: the
+    // focused table (cell mode) or a singly-selected table element, else null.
+    function tableContextId() {
+        if (tableCellSel) {
+            return tableCellSel.elementId;
+        }
+        if (currentSelectionIds.length === 1 && currentShadow) {
+            const id = currentSelectionIds[0];
+            const safe = (window.CSS && window.CSS.escape) ? window.CSS.escape(id) : id;
+            const el = currentShadow.querySelector('[data-element-id="' + safe + '"]');
+            if (el && el.dataset.elementType === "table") {
+                return id;
+            }
+        }
+        return null;
+    }
+
+    function tableAnchor() {
+        return (tableCellSel && tableCellSel.anchor) ? tableCellSel.anchor : [0, 0];
+    }
+
+    function renderedTable(tableId) {
+        const safe = (window.CSS && window.CSS.escape) ? window.CSS.escape(tableId) : tableId;
+        return currentShadow && currentShadow.querySelector('[data-element-id="' + safe + '"] table');
+    }
+
+    // refreshTableBox — show the Table inspector section for a table context and
+    // sync the header toggles from the rendered table's data-* attrs.
+    function refreshTableBox() {
+        const box = document.getElementById("table-box");
+        if (!box) {
+            return;
+        }
+        const tid = tableContextId();
+        box.hidden = !tid;
+        if (!tid) {
+            return;
+        }
+        const table = renderedTable(tid);
+        const hr = table ? parseInt(table.getAttribute("data-header-rows") || "0", 10) : 0;
+        const hc = table ? parseInt(table.getAttribute("data-header-columns") || "0", 10) : 0;
+        const rowChk = document.getElementById("table-header-row");
+        const colChk = document.getElementById("table-header-col");
+        if (rowChk) { rowChk.checked = hr > 0; }
+        if (colChk) { colChk.checked = hc > 0; }
+    }
+
+    function tableSend(kind, extra) {
+        const tid = tableContextId();
+        if (!tid) {
+            return;
+        }
+        window.__deck.send("Interaction", Object.assign({ kind: kind, element_id: tid }, extra || {}));
+    }
+
+    // wireTableBox — bind the Table section's structural buttons + header
+    // toggles. Insert lands after the anchor cell; delete removes the anchor's
+    // row/column.
+    function wireTableBox() {
+        const bind = function (id, fn) {
+            const el = document.getElementById(id);
+            if (el) { el.addEventListener(id.indexOf("header") >= 0 ? "change" : "click", fn); }
+        };
+        bind("table-add-row", function () { tableSend("TableInsertRow", { at: tableAnchor()[0] + 1 }); });
+        bind("table-del-row", function () { tableSend("TableDeleteRow", { at: tableAnchor()[0] }); });
+        bind("table-add-col", function () { tableSend("TableInsertColumn", { at: tableAnchor()[1] + 1 }); });
+        bind("table-del-col", function () { tableSend("TableDeleteColumn", { at: tableAnchor()[1] }); });
+        bind("table-header-row", function () {
+            const c = document.getElementById("table-header-row");
+            tableSend("TableSetHeaderRows", { count: c && c.checked ? 1 : 0 });
+        });
+        bind("table-header-col", function () {
+            const c = document.getElementById("table-header-col");
+            tableSend("TableSetHeaderColumns", { count: c && c.checked ? 1 : 0 });
+        });
     }
 
     // ---------- snap guides ----------
@@ -2044,11 +2317,109 @@
             enterCropMode(target.dataset.elementId);
             return;
         }
+        if (target.dataset.elementType === "embed") {
+            e.preventDefault();
+            openEmbedEditor(target.dataset.elementId, target.innerHTML);
+            return;
+        }
+        if (target.dataset.elementType === "table") {
+            e.preventDefault();
+            const tid = target.dataset.elementId;
+            const already = focusedTableId() === tid;
+            if (!already) {
+                focusChain = [tid];
+            }
+            const rc = cellAtPoint(tid, e.clientX, e.clientY);
+            if (!rc) {
+                return;
+            }
+            // First double-click enters cell-focus and selects the cell; a
+            // second double-click (already focused) edits the cell text.
+            if (already) {
+                beginCellEdit(tid, rc);
+            } else {
+                selectCell(tid, rc, null);
+            }
+            return;
+        }
         if (target.dataset.elementType !== "text") {
             return;
         }
         e.preventDefault();
         beginTextEdit(target);
+    }
+
+    // openEmbedEditor
+    // Inputs: an embed element id and its current raw inner HTML.
+    // Output: side-effect; pops a modal textarea to edit the block's HTML.
+    // Save commits via EmbedHtmlEditRequested (Rust dispatches SetEmbedHtml);
+    // Cancel / Esc / backdrop click dismisses without changes.
+    function openEmbedEditor(elementId, currentHtml) {
+        const existing = document.getElementById("embed-editor");
+        if (existing) {
+            existing.remove();
+        }
+        const overlay = document.createElement("div");
+        overlay.id = "embed-editor";
+        overlay.className = "embed-editor";
+        const panel = document.createElement("div");
+        panel.className = "embed-editor__panel";
+        const title = document.createElement("h2");
+        title.className = "embed-editor__title";
+        title.textContent = "Edit code block";
+        const area = document.createElement("textarea");
+        area.className = "embed-editor__area";
+        area.spellcheck = false;
+        area.value = currentHtml || "";
+        const actions = document.createElement("div");
+        actions.className = "embed-editor__actions";
+        const cancel = document.createElement("button");
+        cancel.type = "button";
+        cancel.className = "embed-editor__btn";
+        cancel.textContent = "Cancel";
+        const save = document.createElement("button");
+        save.type = "button";
+        save.className = "embed-editor__btn embed-editor__btn--primary";
+        save.textContent = "Save";
+        function close() {
+            overlay.remove();
+            document.removeEventListener("keydown", onKey, true);
+        }
+        function commit() {
+            window.__deck.send("Interaction", {
+                kind: "EmbedHtmlEditRequested",
+                element_id: elementId,
+                html: area.value,
+            });
+            close();
+        }
+        function onKey(ev) {
+            if (ev.key === "Escape") {
+                ev.preventDefault();
+                ev.stopPropagation();
+                close();
+            } else if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
+                ev.preventDefault();
+                ev.stopPropagation();
+                commit();
+            }
+        }
+        cancel.addEventListener("click", close);
+        save.addEventListener("click", commit);
+        overlay.addEventListener("mousedown", function (ev) {
+            if (ev.target === overlay) {
+                close();
+            }
+        });
+        actions.appendChild(cancel);
+        actions.appendChild(save);
+        panel.appendChild(title);
+        panel.appendChild(area);
+        panel.appendChild(actions);
+        overlay.appendChild(panel);
+        document.body.appendChild(overlay);
+        document.addEventListener("keydown", onKey, true);
+        area.focus();
     }
 
     // beginTextEdit
@@ -2225,6 +2596,17 @@
             armMarquee(e, focusSnapshot);
             return;
         }
+        // Table focus mode: a press inside the focused table selects cells
+        // (plain / Shift range / Cmd toggle) instead of dragging the element.
+        const ftid = focusedTableId();
+        if (ftid && elementChain(target).some(function (n) { return n.dataset.elementId === ftid; })) {
+            const rc = cellAtPoint(ftid, e.clientX, e.clientY);
+            if (rc) {
+                selectCell(ftid, rc, e);
+                document.body.style.userSelect = "none";
+                return;
+            }
+        }
         // Element press. Leaving the deepest focused group (clicking an element
         // outside it) drops back to top-level selection before sending.
         if (focusChain.length > 0) {
@@ -2232,7 +2614,7 @@
             const insideFocus = elementChain(target).some(function (n) {
                 return n.dataset.elementId === deep;
             });
-            if (!insideFocus) { focusChain = []; }
+            if (!insideFocus) { focusChain = []; tableCellSel = null; }
         }
         const elementId = target.dataset.elementId;
         // Pressing an already-selected element while several are selected (no
@@ -2424,6 +2806,7 @@
         clearMarqueeBox();
         if (!active) {
             focusChain = [];
+            tableCellSel = null;
             window.__deck.send("Interaction", {
                 kind: "BackgroundClicked",
                 position: { x: e.clientX, y: e.clientY },
@@ -3353,8 +3736,12 @@
     // switching selection only changes the tail of the pane.
     const ALL_TYPES = ["text", "image", "shape", "media", "group", "table", "embed"];
     const NON_GROUP_TYPES = ["text", "image", "shape", "media", "table", "embed"];
-    const BOXY_TYPES = ["text", "image", "shape", "media"];
-    const TEXT_TYPES = ["text"];
+    // Tables join the boxy + text type lists so the table ELEMENT gets Fill /
+    // Border / Shadow / Typography. The same controls drive per-cell styling
+    // when a cell set is active (sendPropertyChanged routes to CellStyleChanged);
+    // table-level styles render behind cell style_overrides via inheritance.
+    const BOXY_TYPES = ["text", "image", "shape", "media", "table"];
+    const TEXT_TYPES = ["text", "table"];
 
     // Segmented-selector icons (inline SVG markup, currentColor stroke).
     // Declared before INSPECTOR_SECTIONS because its initializer references them.
@@ -4783,6 +5170,19 @@
     // Output: side-effect; posts a PropertyChanged IPC envelope for the
     // currently-selected element (no-op if no single selection).
     function sendPropertyChanged(prop, value) {
+        // When a cell set is active, style writes target those cells instead of
+        // the element's inline styles (per-cell style_overrides).
+        if (tableCellSel && focusedTableId() === tableCellSel.elementId
+                && tableCellSel.cells.length > 0) {
+            window.__deck.send("Interaction", {
+                kind: "CellStyleChanged",
+                element_id: tableCellSel.elementId,
+                cells: tableCellSel.cells.map(function (rc) { return [rc[0], rc[1]]; }),
+                property: prop,
+                value: value,
+            });
+            return;
+        }
         if (currentSelectionIds.length !== 1) {
             return;
         }
@@ -4810,6 +5210,7 @@
             return;
         }
         refreshCropBox();
+        refreshTableBox();
         // A selected guide owns the inspector (position only).
         if (selectedGuideId !== null) {
             clearInspectorInputs();
@@ -6579,6 +6980,7 @@
         buildInspectorSections();
         refreshInspector();
         wireObjectsToolbar();
+        wireTableBox();
         wireLayoutEditorControls();
         wireAnimationsSection();
         wirePaneResizers();
@@ -7818,6 +8220,7 @@
         }
         if (e.key === "Escape" && focusChain.length > 0 && !textEditState) {
             focusChain = [];
+            tableCellSel = null;
             updateSelectionOverlay();
             return;
         }
