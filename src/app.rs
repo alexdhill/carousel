@@ -104,6 +104,18 @@ const THEME_FILE_EXTENSION: &str = "slidetheme";
 const DELETE_KEY_BACKSPACE: &str = "Backspace";
 const DELETE_KEY_DELETE: &str = "Delete";
 
+// PdfJob
+// A unit of work for the Chromium render worker thread: the print-HTML, the
+// pages that must raster (from export::pdf::raster_page_rects), the resolved
+// chrome binary, and the destination .pdf path. Moves across the thread
+// boundary, so all fields are owned.
+pub struct PdfJob {
+    pub html: String,
+    pub raster: Vec<crate::export::pdf::PageRect>,
+    pub chrome: PathBuf,
+    pub dest: PathBuf,
+}
+
 // HistoryStep
 // Direction tag for run_history_step. A two-variant enum (rather than a
 // bool) so the logger and any future telemetry can distinguish undo from
@@ -158,13 +170,17 @@ pub struct ApplicationCore {
     // Set by the Paste arm to the freshly-inserted element ids; consumed by
     // react_to_outcome to select them once the insert has applied.
     pending_paste_selection: Option<Vec<ElementId>>,
-    // A queued PDF print job: (print-HTML, optional destination). dest=None uses
-    // the interactive print dialog (Save as PDF); Some(path) is the headless
-    // file write. Consumed by the event loop when it builds the print webview.
-    pending_pdf_print: Option<(String, Option<PathBuf>)>,
-    // Asks the event loop to build the hidden print webview (window creation
-    // needs the EventLoopWindowTarget).
-    request_pdf_print: Box<dyn Fn()>,
+    // Hands a render job to the Chromium worker thread (owns the headless
+    // browser). The worker writes the PDF and posts completion to the loop.
+    dispatch_pdf_job: Box<dyn Fn(PdfJob)>,
+    // Asks the Chromium worker thread to download a private Chromium build. The
+    // worker reports progress + completion to the loop and saves the path to
+    // config on success.
+    dispatch_chromium_download: Box<dyn Fn()>,
+    // Set when a PDF export triggered a Chromium download; on the worker's
+    // success the loop calls on_chromium_ready, which re-runs the export so the
+    // save dialog finally appears (the original invocation returned early).
+    pending_export_after_chrome: bool,
     // Lazily-enumerated installed font families for the styles pane combobox.
     // Computed on first send_font_list (the Ready handler) and cached for the
     // session.
@@ -184,7 +200,8 @@ impl ApplicationCore {
         io_thread: IoThread,
         request_present_open: Box<dyn Fn()>,
         request_present_close: Box<dyn Fn()>,
-        request_pdf_print: Box<dyn Fn()>,
+        dispatch_pdf_job: Box<dyn Fn(PdfJob)>,
+        dispatch_chromium_download: Box<dyn Fn()>,
     ) -> Self {
         Self::new_with_deck(
             Deck::sample(),
@@ -193,7 +210,8 @@ impl ApplicationCore {
             io_thread,
             request_present_open,
             request_present_close,
-            request_pdf_print,
+            dispatch_pdf_job,
+            dispatch_chromium_download,
         )
     }
 
@@ -209,7 +227,8 @@ impl ApplicationCore {
         io_thread: IoThread,
         request_present_open: Box<dyn Fn()>,
         request_present_close: Box<dyn Fn()>,
-        request_pdf_print: Box<dyn Fn()>,
+        dispatch_pdf_job: Box<dyn Fn(PdfJob)>,
+        dispatch_chromium_download: Box<dyn Fn()>,
     ) -> Self {
         let active_slide: Option<SlideId> = deck.slide_order.first().cloned();
         let active_layout: Option<LayoutId> = deck.theme.layout_order.first().cloned();
@@ -231,8 +250,9 @@ impl ApplicationCore {
             pending_new_active_layout: None,
             clipboard: None,
             pending_paste_selection: None,
-            pending_pdf_print: None,
-            request_pdf_print,
+            dispatch_pdf_job,
+            dispatch_chromium_download,
+            pending_export_after_chrome: false,
             font_families: None,
         }
     }
@@ -2072,11 +2092,16 @@ impl ApplicationCore {
     }
 
     // file_export_pdf
-    // Inputs: none. Output: Ok(()) whether or not a path was chosen (cancel is
-    // silent). Prompts for a .pdf destination, builds the per-stage print-HTML,
-    // queues the job (dest=Some → headless save), then asks the event loop to
-    // build the hidden print webview.
+    // Inputs: none. Output: Ok(()) whether or not the export ran (cancel is
+    // silent). Resolves a Chromium binary (config → system → locate/download
+    // dialog), prompts for a .pdf destination, then dispatches a render job to
+    // the Chromium worker thread (off the UI thread). Completion arrives later
+    // via notify_pdf_export.
     pub fn file_export_pdf(&mut self) -> AppResult<()> {
+        let chrome: PathBuf = match self.resolve_chrome_for_export() {
+            Some(p) => p,
+            None => return Ok(()), // cancelled / downloading / failed; user notified
+        };
         let mut dest: PathBuf = match rfd::FileDialog::new()
             .add_filter("PDF", &["pdf"])
             .set_file_name("deck.pdf")
@@ -2089,16 +2114,108 @@ impl ApplicationCore {
             dest.set_extension("pdf");
         }
         let html: String = crate::export::build_pdf_print_html(self.dispatcher.deck());
-        self.pending_pdf_print = Some((html, Some(dest)));
-        (self.request_pdf_print)();
+        let raster = crate::export::pdf::raster_page_rects(self.dispatcher.deck());
+        (self.dispatch_pdf_job)(PdfJob { html, raster, chrome, dest });
         Ok(())
     }
 
-    // take_pending_pdf_print
-    // Inputs: none. Output: the queued (print-HTML, dest) job, consumed once.
-    // Called by the event loop when it builds the print webview.
-    pub fn take_pending_pdf_print(&mut self) -> Option<(String, Option<PathBuf>)> {
-        self.pending_pdf_print.take()
+    // Button labels for the resolve dialog. rfd's plain YesNoCancel renders as
+    // "Yes"/"No"/"Cancel" on macOS, which gives the user no way to tell Locate
+    // from Download — so the buttons are labeled explicitly (Custom variants).
+    const LOCATE_LABEL: &'static str = "Locate…";
+    const DOWNLOAD_LABEL: &'static str = "Download Chromium";
+
+    // resolve_chrome_for_export
+    // Output: a usable Chromium path, driving the locate/download dialog when
+    // none is auto-resolved. None means: cancelled, validation failed, or a
+    // download was started — in the download case pending_export_after_chrome is
+    // set so on_chromium_ready re-runs the export once the worker finishes. In
+    // every None case the user has been told or a follow-up is scheduled.
+    fn resolve_chrome_for_export(&mut self) -> Option<PathBuf> {
+        use crate::export::chromium::{
+            Resolved, is_valid_chrome, normalize_chrome_path, resolve_from_config_or_system,
+        };
+        if let Resolved::Found(p) = resolve_from_config_or_system() {
+            return Some(p);
+        }
+        let choice = rfd::MessageDialog::new()
+            .set_title("Chromium needed for PDF export")
+            .set_description(
+                "No Chrome/Chromium was found. Locate an existing install, or download a \
+private copy (~150 MB).",
+            )
+            .set_buttons(rfd::MessageButtons::YesNoCancelCustom(
+                Self::LOCATE_LABEL.to_string(),
+                Self::DOWNLOAD_LABEL.to_string(),
+                "Cancel".to_string(),
+            ))
+            .show();
+        match choice {
+            rfd::MessageDialogResult::Custom(label) if label == Self::LOCATE_LABEL => {
+                // The picker returns a .app bundle on macOS; resolve it to the
+                // inner executable before validating.
+                let picked = normalize_chrome_path(rfd::FileDialog::new().pick_file()?);
+                if !is_valid_chrome(&picked) {
+                    self.toast("PDF export", "That file is not a working Chrome/Chromium binary.");
+                    return None;
+                }
+                let mut cfg = crate::config::load();
+                cfg.chrome_path = Some(picked.clone());
+                let _ = crate::config::save(&cfg);
+                Some(picked)
+            }
+            rfd::MessageDialogResult::Custom(label) if label == Self::DOWNLOAD_LABEL => {
+                // The download is async; remember to resume the export when the
+                // worker reports success (on_chromium_ready).
+                self.pending_export_after_chrome = true;
+                (self.dispatch_chromium_download)();
+                None
+            }
+            _ => None,
+        }
+    }
+
+    // on_chromium_ready
+    // Called by the event loop after the Chromium worker reports a successful
+    // download. If an export was waiting on it, re-run file_export_pdf — config
+    // now holds the downloaded path, so resolution succeeds and the .pdf save
+    // dialog finally appears.
+    pub fn on_chromium_ready(&mut self) {
+        if !self.pending_export_after_chrome {
+            return;
+        }
+        self.pending_export_after_chrome = false;
+        if let Err(e) = self.file_export_pdf() {
+            warn!("resumed pdf export failed: {}", e);
+        }
+    }
+
+    // send_chromium_progress / send_chromium_done
+    // Outbound bridges driven by the Chromium worker thread (via the event
+    // loop) so the download modal in the webview can update.
+    pub fn send_chromium_progress(&self, received: u64, total: Option<u64>) {
+        if let Err(e) =
+            self.sender.send(MessageKind::ChromiumDownloadProgress { received, total })
+        {
+            warn!("chromium progress send failed: {}", e);
+        }
+    }
+
+    pub fn send_chromium_done(&self, ok: bool, message: String) {
+        if let Err(e) = self.sender.send(MessageKind::ChromiumDownloadDone { ok, message }) {
+            warn!("chromium done send failed: {}", e);
+        }
+    }
+
+    // toast
+    // A small Notice helper for one-off advisories (e.g. an invalid binary).
+    fn toast(&self, message: &str, detail: &str) {
+        if let Err(e) = self.sender.send(MessageKind::Notice {
+            message: message.to_string(),
+            detail: Some(detail.to_string()),
+        }) {
+            warn!("toast failed: {}", e);
+        }
     }
 
     // notify_pdf_export

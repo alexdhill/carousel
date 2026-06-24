@@ -12,16 +12,6 @@ use base64::Engine;
 // at print DPI rather than full 1920-px bitmaps.
 const PDF_PAGE_SCALE: f64 = 2.0 / 3.0;
 
-// pdf_page_size_pt
-// Inputs: the deck. Output: the print page size in POINTS (1pt = 1/72in) at the
-// reduced scale — the value to set on NSPrintInfo.paperSize (CSS @page is
-// ignored by a programmatic NSPrintOperation). px→pt is ×72/96 = ×0.75.
-pub fn pdf_page_size_pt(deck: &Deck) -> (f64, f64) {
-    let w = deck.manifest.dimensions.width as f64;
-    let h = deck.manifest.dimensions.height as f64;
-    (w * PDF_PAGE_SCALE * 0.75, h * PDF_PAGE_SCALE * 0.75)
-}
-
 // pdf_asset_vars
 // Inputs: the asset registry. Output: a :root { --asset-<id>: url(data:…) }
 // block inlining each asset as a base64 data URI (the print doc is transient,
@@ -39,6 +29,76 @@ fn pdf_asset_vars(reg: &crate::bundle::assets::AssetRegistry) -> String {
     }
     s.push_str("}\n");
     s
+}
+
+// PageRect
+// A print page that must be rasterized for fidelity: its 0-based page index
+// plus the page's pixel rect (origin 0,0 within its own @page; the deck size
+// scaled by PDF_PAGE_SCALE). The renderer screenshots this rect and splices the
+// image back into the page.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PageRect {
+    pub index: usize,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+// The CSS properties that force a page to raster: each is a compositing /
+// readback effect a vector PDF cannot represent.
+const RASTER_TRIGGERS: [&str; 3] = ["backdrop-filter", "mix-blend-mode", "isolation"];
+
+// node_uses_trigger
+// Output: true when this element or any descendant carries a raster-trigger
+// property in its inline_styles (key or value).
+fn node_uses_trigger(node: &crate::deck::element::ElementNode) -> bool {
+    for (k, v) in &node.inline_styles {
+        if RASTER_TRIGGERS.iter().any(|t| k.contains(t) || v.contains(t)) {
+            return true;
+        }
+    }
+    node.children.iter().any(node_uses_trigger)
+}
+
+// slide_needs_raster
+// Inputs: a slide, the theme globals CSS. Output: true when any element's
+// inline styles or the globals contain a raster-trigger property. The globals
+// apply to every slide, so a trigger there flags all pages.
+fn slide_needs_raster(slide: &crate::deck::slide::SlideNode, globals: &str) -> bool {
+    if RASTER_TRIGGERS.iter().any(|t| globals.contains(t)) {
+        return true;
+    }
+    node_uses_trigger(&slide.root)
+}
+
+// raster_page_rects
+// Inputs: the deck. Output: one PageRect per print page that must raster, in
+// page order. Page count and order mirror build_pdf_print_html: one page per
+// (slide, step). The pixel rect is the deck dimensions scaled by
+// PDF_PAGE_SCALE.
+pub fn raster_page_rects(deck: &Deck) -> Vec<PageRect> {
+    assert!(
+        deck.slide_order.len() == deck.slides.len() || deck.slides.is_empty(),
+        "raster_page_rects: slide_order/slides out of sync"
+    );
+    let w: f64 = deck.manifest.dimensions.width as f64 * PDF_PAGE_SCALE;
+    let h: f64 = deck.manifest.dimensions.height as f64 * PDF_PAGE_SCALE;
+    let globals: &str = &deck.theme.globals_css;
+    let mut out: Vec<PageRect> = Vec::new();
+    let mut page_index: usize = 0;
+    for sid in &deck.slide_order {
+        let slide = &deck.slides[sid];
+        let steps: usize = step_count(&slide.animations).max(1);
+        let needs: bool = slide_needs_raster(slide, globals);
+        for _ in 0..steps {
+            if needs {
+                out.push(PageRect { index: page_index, x: 0.0, y: 0.0, width: w, height: h });
+            }
+            page_index += 1;
+        }
+    }
+    out
 }
 
 // build_pdf_print_html
@@ -62,6 +122,9 @@ pub fn build_pdf_print_html(deck: &Deck) -> String {
         let n: usize = step_count(timeline);
         let (fill, img) = deck.effective_slide_bg(slide);
         let html: String = serialize_slide_themed(slide, fill.as_deref(), img.as_deref());
+        // Pages whose slide uses a compositing-only effect carry a marker so the
+        // Chromium renderer screenshots and splices them (see raster_page_rects).
+        let needs_raster: bool = slide_needs_raster(slide, &deck.theme.globals_css);
         let mut step: usize = 0;
         while step < n {
             let reveal = snap_reveal(sid, timeline, step);
@@ -71,8 +134,13 @@ pub fn build_pdf_print_html(deck: &Deck) -> String {
                     ".print-page[data-page=\"{page_index}\"] [data-element-id=\"{id}\"] {{ opacity: 0; }}\n"
                 ));
             }
+            let raster_attr: String = if needs_raster {
+                format!(" data-raster-page=\"{page_index}\"")
+            } else {
+                String::new()
+            };
             pages.push_str(&format!(
-                "<div class=\"print-page\" data-page=\"{page_index}\"><style>{hidden_css}</style><div class=\"slide-scale\">{html}</div></div>"
+                "<div class=\"print-page\" data-page=\"{page_index}\"{raster_attr}><style>{hidden_css}</style><div class=\"slide-scale\">{html}</div></div>"
             ));
             page_index += 1;
             step += 1;
@@ -112,6 +180,50 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
     use crate::deck::Deck;
+
+    fn deck_with_backdrop() -> Deck {
+        let mut d = Deck::sample();
+        let sid = d.slide_order[0].clone();
+        let slide = d.slides.get_mut(&sid).unwrap();
+        slide.root.children[0]
+            .inline_styles
+            .insert("backdrop-filter".into(), "blur(8px)".into());
+        d
+    }
+
+    #[test]
+    fn plain_deck_has_no_raster_pages() {
+        let d = Deck::sample();
+        assert!(raster_page_rects(&d).is_empty());
+    }
+
+    #[test]
+    fn backdrop_filter_slide_is_flagged() {
+        let d = deck_with_backdrop();
+        let rects = raster_page_rects(&d);
+        assert_eq!(rects.len(), 1);
+        assert_eq!(rects[0].index, 0);
+        assert!(rects[0].width > 0.0 && rects[0].height > 0.0);
+    }
+
+    #[test]
+    fn build_html_marks_raster_pages() {
+        let d = deck_with_backdrop();
+        let html = build_pdf_print_html(&d);
+        assert!(html.contains("data-raster-page=\"0\""));
+    }
+
+    #[test]
+    fn globals_css_trigger_flags_all_pages() {
+        let mut d = Deck::sample();
+        d.theme.globals_css.push_str("\n.x{mix-blend-mode:multiply;}");
+        let total_steps: usize = d
+            .slide_order
+            .iter()
+            .map(|sid| step_count(&d.slides[sid].animations).max(1))
+            .sum();
+        assert_eq!(raster_page_rects(&d).len(), total_steps);
+    }
 
     #[test]
     fn one_page_per_slide_step_with_deck_sized_pagination() {

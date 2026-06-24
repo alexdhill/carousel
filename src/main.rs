@@ -1,6 +1,7 @@
 mod app;
 mod bundle;
 mod commands;
+mod config;
 mod deck;
 mod error;
 mod export;
@@ -48,7 +49,7 @@ const LANDING_JS: &str = include_str!("../assets/landing.js");
 //   main thread should coalesce + send on the next iteration.
 // - IoResponse:  the bundle I/O worker thread posted an IoResponse onto
 //   its channel; main thread should drain and hand each to the app.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 enum UserEvent {
     IpcReceived,
     FlushPatches,
@@ -61,18 +62,91 @@ enum UserEvent {
     OpenPresentation,
     PresentIpcReceived,
     ClosePresentation,
-    // PDF export. The app queued a print job and asked the event loop to build
-    // the hidden print webview (OpenPdfPrint); that webview signals once its
-    // content has loaded and is ready to print (PdfPrintReady).
-    OpenPdfPrint,
-    PdfPrintReady,
-    // The headless print operation finished (carries success). Posted by the
-    // print completion delegate so the loop can toast + tear the webview down.
-    PdfPrintDone(bool),
+    // PDF export (Chromium worker thread). PdfRenderDone carries success + the
+    // destination path so the loop can toast. ChromiumProgress / ChromiumDone
+    // bridge the download worker's progress + completion to the editor webview
+    // (the worker has no webview handle; the loop does).
+    PdfRenderDone { ok: bool, dest: std::path::PathBuf },
+    ChromiumProgress { received: u64, total: Option<u64> },
+    ChromiumDone { ok: bool, message: String },
     // The landing webview pushed a control (Ready / Open* / Cancel) onto its
     // channel; the main thread drains it and either sends the landing data,
     // builds the editor, or exits.
     LandingIpcReceived,
+}
+
+// ChromeJob
+// Work handed to the Chromium worker thread: render a PDF, or download a
+// private Chromium build. Both carry only owned data so they cross the thread
+// boundary cleanly.
+enum ChromeJob {
+    Render(app::PdfJob),
+    Download,
+}
+
+// write_pdf_atomic
+// Inputs: the destination and the PDF bytes. Output: Ok after writing to a
+// sibling temp file and renaming onto `dest` (so a failed/partial render never
+// leaves a truncated PDF at the user's chosen path).
+fn write_pdf_atomic(dest: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp: std::path::PathBuf = dest.with_extension("pdf.partial");
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, dest)
+}
+
+// spawn_chrome_worker
+// Inputs: the job receiver and an event-loop proxy. Output: side-effect; spawns
+// a thread that owns the (blocking) headless-Chromium calls. Render jobs write
+// the PDF atomically and post PdfRenderDone; download jobs stream progress
+// (ChromiumProgress), save the resolved path to config on success, and post
+// ChromiumDone.
+fn spawn_chrome_worker(
+    rx: std::sync::mpsc::Receiver<ChromeJob>,
+    proxy: tao::event_loop::EventLoopProxy<UserEvent>,
+) {
+    std::thread::spawn(move || {
+        for job in rx {
+            match job {
+                ChromeJob::Render(j) => {
+                    let ok: bool = match export::chromium::render_pdf(&j.chrome, &j.html, &j.raster)
+                    {
+                        Ok(bytes) => write_pdf_atomic(&j.dest, &bytes)
+                            .map_err(|e| error!("pdf write failed: {}", e))
+                            .is_ok(),
+                        Err(e) => {
+                            error!("pdf render failed: {}", e);
+                            false
+                        }
+                    };
+                    let _ = proxy.send_event(UserEvent::PdfRenderDone { ok, dest: j.dest });
+                }
+                ChromeJob::Download => {
+                    let p = proxy.clone();
+                    let progress = move |received: u64, total: Option<u64>| {
+                        let _ = p.send_event(UserEvent::ChromiumProgress { received, total });
+                    };
+                    match export::chromium::download_chromium(&progress) {
+                        Ok((path, revision)) => {
+                            let mut cfg = config::load();
+                            cfg.chrome_path = Some(path);
+                            cfg.chromium_revision = Some(revision);
+                            let _ = config::save(&cfg);
+                            let _ = proxy.send_event(UserEvent::ChromiumDone {
+                                ok: true,
+                                message: String::new(),
+                            });
+                        }
+                        Err(e) => {
+                            let _ = proxy.send_event(UserEvent::ChromiumDone {
+                                ok: false,
+                                message: e.to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    });
 }
 
 // init_tracing
@@ -256,169 +330,6 @@ fn build_presentation(
     Ok((window, webview))
 }
 
-// build_pdf_print_window
-// Inputs: the event-loop target, a proxy for posting PdfPrintReady, and the
-// print-HTML (one page per stage). Output: a small hidden-ish window + its
-// webview loaded with the print-HTML. The webview's IPC handler posts
-// PdfPrintReady once the page signals "print-ready" (window.onload), at which
-// point the event loop triggers the print. The caller keeps both alive until
-// printing finishes.
-fn build_pdf_print_window(
-    target: &EventLoopWindowTarget<UserEvent>,
-    proxy: tao::event_loop::EventLoopProxy<UserEvent>,
-    html: String,
-) -> Result<(Window, WebView), Box<dyn std::error::Error>> {
-    let window = WindowBuilder::new()
-        .with_title("carousel — exporting PDF")
-        .with_inner_size(tao::dpi::LogicalSize::new(480.0, 360.0))
-        .build(target)?;
-    let webview = WebViewBuilder::new(&window)
-        .with_html(html)
-        .with_ipc_handler(move |request: wry::http::Request<String>| {
-            if request.body() == "print-ready"
-                && proxy.send_event(UserEvent::PdfPrintReady).is_err()
-            {
-                error!("event loop proxy closed; cannot dispatch PdfPrintReady");
-            }
-        })
-        .build()?;
-    Ok((window, webview))
-}
-
-// pdf_print_did_run (macOS)
-// The NSPrintOperation completion selector. `contextInfo` is a leaked boxed
-// EventLoopProxy; we reclaim it, post PdfPrintDone(success), and free it.
-#[cfg(target_os = "macos")]
-extern "C" fn pdf_print_did_run(
-    _this: &objc::runtime::Object,
-    _cmd: objc::runtime::Sel,
-    _op: *mut objc::runtime::Object,
-    success: objc::runtime::BOOL,
-    ctx: *mut std::ffi::c_void,
-) {
-    if ctx.is_null() {
-        return;
-    }
-    let proxy: Box<tao::event_loop::EventLoopProxy<UserEvent>> =
-        unsafe { Box::from_raw(ctx as *mut tao::event_loop::EventLoopProxy<UserEvent>) };
-    let ok: bool = success != objc::runtime::NO;
-    if proxy.send_event(UserEvent::PdfPrintDone(ok)).is_err() {
-        error!("event loop proxy closed; cannot dispatch PdfPrintDone");
-    }
-}
-
-// pdf_print_delegate_class (macOS)
-// Registers (once) a tiny NSObject subclass exposing the print completion
-// selector, returning the class pointer.
-#[cfg(target_os = "macos")]
-fn pdf_print_delegate_class() -> *const objc::runtime::Class {
-    use objc::declare::ClassDecl;
-    use objc::runtime::{Class, Object, Sel, BOOL};
-    use objc::{class, sel, sel_impl};
-    static CLS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    let ptr: usize = *CLS.get_or_init(|| match ClassDecl::new("CarouselPdfPrintDelegate", class!(NSObject)) {
-        Some(mut decl) => {
-            unsafe {
-                decl.add_method(
-                    sel!(printOperationDidRun:success:contextInfo:),
-                    pdf_print_did_run
-                        as extern "C" fn(&Object, Sel, *mut Object, BOOL, *mut std::ffi::c_void),
-                );
-            }
-            decl.register() as *const Class as usize
-        }
-        None => Class::get("CarouselPdfPrintDelegate")
-            .map(|c| c as *const Class as usize)
-            .unwrap_or(0),
-    });
-    ptr as *const Class
-}
-
-// start_pdf_print (macOS)
-// Inputs: the print webview (already loaded), the destination path, and a proxy
-// for the completion event. Output: side-effect; configures an NSPrintInfo as a
-// save-to-PDF job (no panels) and runs the WKWebView's print operation
-// ASYNCHRONOUSLY (runOperationModalForWindow…), so the main thread is never
-// blocked. The completion delegate posts PdfPrintDone. All AppKit interop is
-// confined here. The print paginates per the @page / page-break CSS.
-#[cfg(target_os = "macos")]
-fn start_pdf_print(
-    webview: &WebView,
-    dest: &std::path::Path,
-    proxy: tao::event_loop::EventLoopProxy<UserEvent>,
-) {
-    use objc::runtime::Object;
-    use objc::{class, msg_send, sel, sel_impl};
-    use wry::WebViewExtMacOS;
-
-    // AppKit NSString constants: the save-job disposition value and the
-    // dictionary key for the output URL. (cocoa::base::id is *mut Object.)
-    #[link(name = "AppKit", kind = "framework")]
-    unsafe extern "C" {
-        static NSPrintSaveJob: *mut Object;
-        static NSPrintJobSavingURL: *mut Object;
-    }
-
-    let wk: *mut Object = webview.webview();
-    let win: *mut Object = webview.ns_window();
-    if wk.is_null() {
-        let _ = proxy.send_event(UserEvent::PdfPrintDone(false));
-        return;
-    }
-    unsafe {
-        let responds: bool =
-            msg_send![wk, respondsToSelector: sel!(printOperationWithPrintInfo:)];
-        if !responds {
-            error!("WKWebView lacks printOperationWithPrintInfo:");
-            let _ = proxy.send_event(UserEvent::PdfPrintDone(false));
-            return;
-        }
-        let path_ns: *mut Object = ns_string(&dest.to_string_lossy());
-        let url: *mut Object = msg_send![class!(NSURL), fileURLWithPath: path_ns];
-
-        let shared: *mut Object = msg_send![class!(NSPrintInfo), sharedPrintInfo];
-        let info: *mut Object = msg_send![shared, copy];
-        let () = msg_send![info, setJobDisposition: NSPrintSaveJob];
-        let dict: *mut Object = msg_send![info, dictionary];
-        let () = msg_send![dict, setObject: url forKey: NSPrintJobSavingURL];
-        let () = msg_send![info, setTopMargin: 0.0f64];
-        let () = msg_send![info, setBottomMargin: 0.0f64];
-        let () = msg_send![info, setLeftMargin: 0.0f64];
-        let () = msg_send![info, setRightMargin: 0.0f64];
-
-        let op: *mut Object = msg_send![wk, printOperationWithPrintInfo: info];
-        if op.is_null() {
-            error!("printOperationWithPrintInfo: returned nil");
-            let _ = proxy.send_event(UserEvent::PdfPrintDone(false));
-            return;
-        }
-        let () = msg_send![op, setShowsPrintPanel: false];
-        let () = msg_send![op, setShowsProgressPanel: false];
-
-        // Run asynchronously: returns immediately, posting PdfPrintDone via the
-        // delegate when the write finishes. The proxy is handed off as a leaked
-        // box reclaimed in pdf_print_did_run.
-        let delegate: *mut Object = msg_send![pdf_print_delegate_class(), new];
-        let ctx: *mut std::ffi::c_void =
-            Box::into_raw(Box::new(proxy)) as *mut std::ffi::c_void;
-        let () = msg_send![op,
-            runOperationModalForWindow: win
-            delegate: delegate
-            didRunSelector: sel!(printOperationDidRun:success:contextInfo:)
-            contextInfo: ctx];
-    }
-}
-
-// start_pdf_print (non-macOS): headless PDF is macOS-only for now.
-#[cfg(not(target_os = "macos"))]
-fn start_pdf_print(
-    _webview: &WebView,
-    _dest: &std::path::Path,
-    proxy: tao::event_loop::EventLoopProxy<UserEvent>,
-) {
-    error!("headless PDF export is only supported on macOS");
-    let _ = proxy.send_event(UserEvent::PdfPrintDone(false));
-}
 
 // main
 // Inputs: none.
@@ -494,7 +405,8 @@ fn build_editor(
     io_thread: IoThread,
     request_present_open: Box<dyn Fn()>,
     request_present_close: Box<dyn Fn()>,
-    request_pdf_print: Box<dyn Fn()>,
+    dispatch_pdf_job: Box<dyn Fn(app::PdfJob)>,
+    dispatch_chromium_download: Box<dyn Fn()>,
 ) -> Result<(Window, ApplicationCore), Box<dyn std::error::Error>> {
     let window = WindowBuilder::new()
         .with_title("carousel")
@@ -529,7 +441,8 @@ fn build_editor(
         io_thread,
         request_present_open,
         request_present_close,
-        request_pdf_print,
+        dispatch_pdf_job,
+        dispatch_chromium_download,
     );
     Ok((window, app))
 }
@@ -652,11 +565,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         })
     };
-    let request_pdf_print: Box<dyn Fn()> = {
-        let p = proxy_for_app.clone();
+    // Chromium worker thread: owns the blocking headless-browser render +
+    // download. The two dispatch closures (moved into the editor) hand jobs to
+    // it; results return via UserEvent.
+    let (chrome_tx, chrome_rx) = std::sync::mpsc::channel::<ChromeJob>();
+    spawn_chrome_worker(chrome_rx, proxy_for_app.clone());
+    let dispatch_pdf_job: Box<dyn Fn(app::PdfJob)> = {
+        let tx = chrome_tx.clone();
+        Box::new(move |job| {
+            if tx.send(ChromeJob::Render(job)).is_err() {
+                error!("chrome worker gone; cannot render pdf");
+            }
+        })
+    };
+    let dispatch_chromium_download: Box<dyn Fn()> = {
+        let tx = chrome_tx.clone();
         Box::new(move || {
-            if p.send_event(UserEvent::OpenPdfPrint).is_err() {
-                error!("could not schedule OpenPdfPrint; proxy closed");
+            if tx.send(ChromeJob::Download).is_err() {
+                error!("chrome worker gone; cannot download chromium");
             }
         })
     };
@@ -680,7 +606,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut io_thread_opt: Option<IoThread> = Some(io_thread);
     let mut request_present_open_opt: Option<Box<dyn Fn()>> = Some(request_present_open);
     let mut request_present_close_opt: Option<Box<dyn Fn()>> = Some(request_present_close);
-    let mut request_pdf_print_opt: Option<Box<dyn Fn()>> = Some(request_pdf_print);
+    let mut dispatch_pdf_job_opt: Option<Box<dyn Fn(app::PdfJob)>> = Some(dispatch_pdf_job);
+    let mut dispatch_chromium_download_opt: Option<Box<dyn Fn()>> = Some(dispatch_chromium_download);
     let mut app: Option<ApplicationCore> = None;
     let mut editor_window: Option<Window> = None;
 
@@ -694,11 +621,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // by the app's session (via its WebviewSender); the OS Window is held here
     // and dropped only after the session (and its webview) on close.
     let mut present_window: Option<Window> = None;
-    // Holds the transient PDF-print window+webview (and its optional destination)
-    // while it loads and prints; dropped once printing finishes.
-    let mut print_session: Option<(Window, WebView, Option<std::path::PathBuf>)> = None;
     let proxy_present = proxy_for_app.clone();
-    let proxy_print = proxy_for_app.clone();
 
     info!("event loop running");
     event_loop.run(move |event, target, control_flow| {
@@ -760,45 +683,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 present_window = None;
             }
-            Event::UserEvent(UserEvent::OpenPdfPrint) => {
+            Event::UserEvent(UserEvent::PdfRenderDone { ok, dest }) => {
                 if let Some(app) = app.as_mut() {
-                    if let Some((html, dest)) = app.take_pending_pdf_print() {
-                        // Drop any prior print session (its async job has finished
-                        // by the time a new export is triggered).
-                        print_session = None;
-                        match build_pdf_print_window(target, proxy_print.clone(), html) {
-                            Ok((win, wv)) => print_session = Some((win, wv, dest)),
-                            Err(e) => error!("failed to build pdf print window: {}", e),
-                        }
-                    }
+                    app.notify_pdf_export(&dest, ok);
                 }
             }
-            Event::UserEvent(UserEvent::PdfPrintReady) => {
-                match print_session.as_ref() {
-                    // A: headless save-to-file, run ASYNC. Keep the session alive
-                    // until PdfPrintDone so the webview outlives the print.
-                    Some((_, wv, Some(path))) => {
-                        start_pdf_print(wv, path, proxy_print.clone());
-                    }
-                    // B fallback: interactive dialog (user picks Save as PDF).
-                    Some((_, wv, None)) => {
-                        if let Err(e) = wv.print() {
-                            error!("pdf print failed: {}", e);
-                        }
-                        print_session = None;
-                    }
-                    None => {}
+            Event::UserEvent(UserEvent::ChromiumProgress { received, total }) => {
+                if let Some(app) = app.as_ref() {
+                    app.send_chromium_progress(received, total);
                 }
             }
-            Event::UserEvent(UserEvent::PdfPrintDone(ok)) => {
-                if let Some((win, wv, dest)) = print_session.take() {
-                    if let Some(path) = &dest {
-                        if let Some(app) = app.as_mut() {
-                            app.notify_pdf_export(path, ok);
-                        }
+            Event::UserEvent(UserEvent::ChromiumDone { ok, message }) => {
+                if let Some(app) = app.as_mut() {
+                    app.send_chromium_done(ok, message);
+                    if ok {
+                        // Download finished; resume the export that was waiting
+                        // (pops the .pdf save dialog now that chrome resolves).
+                        app.on_chromium_ready();
                     }
-                    drop(win);
-                    drop(wv);
                 }
             }
             Event::UserEvent(UserEvent::LandingIpcReceived) => {
@@ -830,15 +732,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // Only consume the editor ingredients once a deck is
                             // committed (a cancelled dialog leaves them intact).
                             if let Some((deck, load)) = chosen {
-                                if let (Some(sf), Some(io), Some(rpo), Some(rpc), Some(rpp)) = (
+                                if let (Some(sf), Some(io), Some(rpo), Some(rpc), Some(dpj), Some(dcd)) = (
                                     schedule_flush_opt.take(),
                                     io_thread_opt.take(),
                                     request_present_open_opt.take(),
                                     request_present_close_opt.take(),
-                                    request_pdf_print_opt.take(),
+                                    dispatch_pdf_job_opt.take(),
+                                    dispatch_chromium_download_opt.take(),
                                 ) {
                                     match build_editor(
-                                        target, proxy.clone(), ipc_tx.clone(), deck, sf, io, rpo, rpc, rpp,
+                                        target, proxy.clone(), ipc_tx.clone(), deck, sf, io, rpo, rpc, dpj, dcd,
                                     ) {
                                         Ok((win, mut a)) => {
                                             if let Some(path) = load {
@@ -868,9 +771,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         app.end_presentation();
                     }
                     present_window = None;
-                } else if Some(window_id) == print_session.as_ref().map(|(w, _, _)| w.id()) {
-                    info!("pdf print window closed");
-                    print_session = None;
                 } else if Some(window_id) == editor_window.as_ref().map(|w| w.id()) {
                     info!("editor closed; exiting");
                     *control_flow = ControlFlow::Exit;

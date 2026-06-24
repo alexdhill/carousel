@@ -3132,6 +3132,12 @@
         SlideLayoutPickerData: function (payload) {
             openLayoutPicker(payload);
         },
+        ChromiumDownloadProgress: function (payload) {
+            showChromiumDownload(payload && payload.received, payload && payload.total);
+        },
+        ChromiumDownloadDone: function (payload) {
+            finishChromiumDownload(payload && payload.ok, payload && payload.message);
+        },
         SetMode: function (payload) {
             const mode = (payload && payload.mode) || "slide";
             currentMode = mode;
@@ -6203,6 +6209,155 @@
         }
     }
 
+    // ----- share / export menu -----
+
+    // The three export actions, each a card in the Share dropdown. `key` is the
+    // synthetic accelerator name the Rust side already handles (Save / Export
+    // HTML / Print PDF); `icon` is inline SVG markup.
+    const SHARE_EXPORTS = [
+        {
+            key: "save_deck",
+            name: "Save to file",
+            sub: "Carousel deck",
+            icon: '<path d="M5 4h11l3 3v13H5zM8 4v5h7M8 14h8M8 17h8"/>',
+        },
+        {
+            key: "export_html",
+            name: "Export for web",
+            sub: "HTML",
+            icon: '<path d="M9 8 5 12l4 4M15 8l4 4-4 4"/>',
+        },
+        {
+            key: "export_pdf",
+            name: "Print to PDF",
+            sub: "Document",
+            icon: '<path d="M7 3h7l4 4v14H7zM14 3v4h4M10 13h4M10 16h4"/>',
+        },
+    ];
+
+    // buildShareMenu — the export dropdown: one rectangular icon+name card per
+    // SHARE_EXPORTS entry. Clicking a card fires its synthetic accelerator and
+    // closes the menu (the close handler is wired by the caller).
+    function buildShareMenu(onPick) {
+        const menu = document.createElement("div");
+        menu.id = "share-menu";
+        menu.className = "share-menu";
+        menu.hidden = true;
+        for (let i = 0; i < SHARE_EXPORTS.length; i++) {
+            const opt = SHARE_EXPORTS[i];
+            const card = document.createElement("button");
+            card.type = "button";
+            card.className = "share-menu__card";
+            const ic = document.createElement("span");
+            ic.className = "share-menu__icon";
+            ic.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none"'
+                + ' stroke="currentColor" stroke-width="1.7" stroke-linecap="round"'
+                + ' stroke-linejoin="round">' + opt.icon + "</svg>";
+            const txt = document.createElement("span");
+            txt.className = "share-menu__text";
+            const name = document.createElement("span");
+            name.className = "share-menu__name";
+            name.textContent = opt.name;
+            const sub = document.createElement("span");
+            sub.className = "share-menu__sub";
+            sub.textContent = opt.sub;
+            txt.appendChild(name);
+            txt.appendChild(sub);
+            card.appendChild(ic);
+            card.appendChild(txt);
+            card.addEventListener("click", function () { onPick(opt.key); });
+            menu.appendChild(card);
+        }
+        return menu;
+    }
+
+    // wireShareMenu — toggle the export dropdown under the Share button. A card
+    // click runs the matching synthetic accelerator; an outside click or Escape
+    // closes it.
+    function wireShareMenu() {
+        const btn = document.getElementById("share-btn");
+        if (!btn) {
+            return;
+        }
+        let isOpen = false;
+        const menu = buildShareMenu(function (key) {
+            close();
+            sendSyntheticKey(key, {});
+        });
+        document.body.appendChild(menu);
+        function onDoc(e) {
+            if (!menu.contains(e.target) && !btn.contains(e.target)) {
+                close();
+            }
+        }
+        function onKey(e) {
+            if (e.key === "Escape") { close(); }
+        }
+        function close() {
+            if (!isOpen) { return; }
+            isOpen = false;
+            menu.hidden = true;
+            btn.setAttribute("aria-expanded", "false");
+            document.removeEventListener("mousedown", onDoc, true);
+            document.removeEventListener("keydown", onKey, true);
+        }
+        function open() {
+            const r = btn.getBoundingClientRect();
+            menu.style.top = (r.bottom + 6) + "px";
+            menu.style.right = Math.max(8, window.innerWidth - r.right) + "px";
+            menu.hidden = false;
+            isOpen = true;
+            btn.setAttribute("aria-expanded", "true");
+            document.addEventListener("mousedown", onDoc, true);
+            document.addEventListener("keydown", onKey, true);
+        }
+        btn.addEventListener("click", function (e) {
+            e.preventDefault();
+            if (isOpen) { close(); } else { open(); }
+        });
+    }
+
+    // showChromiumDownload — open/update the PDF-export Chromium download modal.
+    // total null -> indeterminate bar; else a percentage fill.
+    function showChromiumDownload(received, total) {
+        let box = document.getElementById("chromium-download");
+        if (!box) {
+            box = document.createElement("div");
+            box.id = "chromium-download";
+            box.className = "chromium-dl";
+            box.innerHTML = '<div class="chromium-dl__panel">'
+                + '<h2 class="chromium-dl__title">Downloading Chromium…</h2>'
+                + '<p class="chromium-dl__sub">Needed once to export PDF.</p>'
+                + '<div class="chromium-dl__track"><div class="chromium-dl__bar"></div></div>'
+                + '</div>';
+            document.body.appendChild(box);
+        }
+        const bar = box.querySelector(".chromium-dl__bar");
+        if (total && total > 0) {
+            bar.classList.remove("chromium-dl__bar--indet");
+            bar.style.width = Math.min(100, Math.round((received / total) * 100)) + "%";
+        } else {
+            bar.classList.add("chromium-dl__bar--indet");
+        }
+    }
+
+    // finishChromiumDownload — close on success, or show the error inline.
+    function finishChromiumDownload(ok, message) {
+        const box = document.getElementById("chromium-download");
+        if (!box) {
+            return;
+        }
+        if (ok) {
+            box.remove();
+        } else {
+            const sub = box.querySelector(".chromium-dl__sub");
+            if (sub) {
+                sub.textContent = message || "Download failed.";
+                sub.style.color = "#c0392b";
+            }
+        }
+    }
+
     // ---------- thumbnail row ----------
     // Slide dimensions sent by the last SlideListUpdate. Thumbnails
     // are rendered by mounting a copy of the slide HTML inside a small
@@ -6981,6 +7136,7 @@
         refreshInspector();
         wireObjectsToolbar();
         wireTableBox();
+        wireShareMenu();
         wireLayoutEditorControls();
         wireAnimationsSection();
         wirePaneResizers();

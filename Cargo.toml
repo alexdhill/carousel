@@ -19,6 +19,8 @@ rfd = "0.15"
 sha2 = "0.10"
 base64 = "0.22"
 font-kit = "0.14"
+headless_chrome = "1.0.22"
+ureq = "3"
 
 # macOS only: used to install a minimal NSApp main menu so wry 0.45's
 # keyDown handler has a valid (empty) performKeyEquivalent: target instead

@@ -109,6 +109,11 @@ pub enum MessageKind {
     // when entering layout mode and after any command that reports
     // affects_layout_list / affects_globals.
     LayoutListUpdate(LayoutListData),
+    // ChromiumDownloadProgress / Done — drive the PDF-export Chromium download
+    // modal. Progress `total` is None while the size is unknown (indeterminate
+    // bar). Done carries success + a message for the error case.
+    ChromiumDownloadProgress { received: u64, total: Option<u64> },
+    ChromiumDownloadDone { ok: bool, message: String },
     // SlideLayoutPickerData
     // Reply to SlideLayoutPickerRequested: the same layout payload as
     // LayoutListUpdate, but a distinct kind so JS pops the new-slide layout
@@ -1037,6 +1042,21 @@ mod tests {
             serde_json::from_str(&serde_json::to_string(&msg).unwrap()).unwrap();
         match back.kind {
             MessageKind::LayoutListUpdate(d) => assert_eq!(d, data),
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn chromium_progress_roundtrips() {
+        let m = MessageKind::ChromiumDownloadProgress { received: 5, total: Some(10) };
+        let j = serde_json::to_string(&m).unwrap();
+        assert!(j.contains("ChromiumDownloadProgress"));
+        let back: MessageKind = serde_json::from_str(&j).unwrap();
+        match back {
+            MessageKind::ChromiumDownloadProgress { received, total } => {
+                assert_eq!(received, 5);
+                assert_eq!(total, Some(10));
+            }
             other => panic!("unexpected variant: {other:?}"),
         }
     }
