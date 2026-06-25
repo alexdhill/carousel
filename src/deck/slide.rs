@@ -26,6 +26,11 @@ pub enum TransitionKind {
     None,
     Fade,
     Push,
+    // Advanced (present.js plays them; fixed directions, no extra storage).
+    Dissolve,
+    Wipe,
+    Flip,
+    Cube,
 }
 
 // SlideTransition — the slide's outgoing transition (kind + timing). Presentation
@@ -192,6 +197,24 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
     use crate::deck::builders::{group_element, text_element};
+
+    #[test]
+    fn transition_kinds_round_trip_by_name() {
+        // Locks the wire form for every kind, including the advanced ones.
+        for kind in [
+            TransitionKind::None, TransitionKind::Fade, TransitionKind::Push,
+            TransitionKind::Dissolve, TransitionKind::Wipe, TransitionKind::Flip,
+            TransitionKind::Cube,
+        ] {
+            let t = SlideTransition { kind: kind.clone(), duration_ms: 500, easing: "ease".into() };
+            let json = serde_json::to_string(&t).unwrap();
+            let back: SlideTransition = serde_json::from_str(&json).unwrap();
+            assert_eq!(back.kind, kind);
+        }
+        // A representative advanced variant serializes to its plain name.
+        let json = serde_json::to_string(&TransitionKind::Cube).unwrap();
+        assert_eq!(json, "\"Cube\"");
+    }
 
     #[test]
     fn slide_construction_succeeds_with_group_root() {

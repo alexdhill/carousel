@@ -151,7 +151,9 @@
     }
 
     // finalizeSwap: settle any in-flight transition immediately — drop the old
-    // host, clear the new host's inline transition state, adopt it. Idempotent.
+    // host (or, for Cube, re-parent the new host out of the 3D wrapper and drop
+    // the wrapper), clear the new host's inline state and any inline 3D stage
+    // props, and adopt the new host. Idempotent.
     function finalizeSwap() {
         if (!pendingSwap) {
             return;
@@ -159,10 +161,24 @@
         const swap = pendingSwap;
         pendingSwap = null;
         window.clearTimeout(swap.timer);
-        if (swap.oldHost && swap.oldHost.parentNode) {
+        const stage = document.getElementById("stage");
+        if (swap.wrapper) {
+            // Re-parent the new host to the stage BEFORE removing the wrapper
+            // (the new host is currently a child of the wrapper).
+            if (stage) {
+                stage.appendChild(swap.newBuilt.host);
+            }
+            if (swap.wrapper.parentNode) {
+                swap.wrapper.parentNode.removeChild(swap.wrapper);
+            }
+        } else if (swap.oldHost && swap.oldHost.parentNode) {
             swap.oldHost.parentNode.removeChild(swap.oldHost);
         }
         swap.newBuilt.host.style.cssText = "";
+        if (stage) {
+            stage.style.perspective = "";
+            stage.style.transformStyle = "";
+        }
         adoptHost(swap.newBuilt);
     }
 
@@ -207,11 +223,12 @@
         }
         const dur = transition.duration_ms || 400;
         const ease = transition.easing || "ease";
-        if (transition.kind === "Push") {
-            startPush(stage, oldHost, built, dur, ease);
-        } else {
-            startFade(stage, oldHost, built, dur, ease);
-        }
+        const starters = {
+            Push: startPush, Wipe: startWipe, Flip: startFlip,
+            Cube: startCube, Dissolve: startDissolve,
+        };
+        const start = starters[transition.kind] || startFade;
+        start(stage, oldHost, built, dur, ease);
     }
 
     // startPush: new on top, translateX(100%) → 0; old stationary beneath.
@@ -235,12 +252,91 @@
         scheduleSwapEnd(oldHost, built, oldHost, "opacity", dur);
     }
 
+    // Dissolve blur radius (the leaving slide blurs out, the entering one in).
+    const DISSOLVE_BLUR = "blur(12px)";
+
+    // startDissolve: crossfade + blur. Like Fade (new beneath at opacity 1, no
+    // black dip) but both hosts also animate blur — old sharpens to blurred as
+    // it fades, new starts blurred and sharpens into view as the old clears.
+    function startDissolve(stage, oldHost, built, dur, ease) {
+        built.host.style.filter = DISSOLVE_BLUR;
+        stage.insertBefore(built.host, oldHost);
+        adoptHost(built);
+        void built.host.offsetWidth; // commit the new host's blurred start state
+        built.host.style.transition = "filter " + dur + "ms " + ease;
+        built.host.style.filter = "blur(0)";
+        oldHost.style.transition =
+            "opacity " + dur + "ms " + ease + ", filter " + dur + "ms " + ease;
+        oldHost.style.opacity = "0";
+        oldHost.style.filter = DISSOLVE_BLUR;
+        scheduleSwapEnd(oldHost, built, oldHost, "opacity", dur);
+    }
+
+    // startWipe: new ON TOP, revealed left→right via clip-path inset; the old
+    // stays put beneath the whole time (cover-style, no seam).
+    function startWipe(stage, oldHost, built, dur, ease) {
+        built.host.style.clipPath = "inset(0 0 0 100%)";
+        stage.appendChild(built.host);
+        adoptHost(built);
+        void built.host.offsetWidth;
+        built.host.style.transition = "clip-path " + dur + "ms " + ease;
+        built.host.style.clipPath = "inset(0 0 0 0)";
+        scheduleSwapEnd(oldHost, built, built.host, "clip-path", dur);
+    }
+
+    // startFlip: 3D Y-axis flip. Old rotates 0 → -90deg over the first half;
+    // new rotates 90deg → 0 over the second half (delayed), both backface-hidden
+    // so neither shows its reverse mid-flip.
+    function startFlip(stage, oldHost, built, dur, ease) {
+        stage.style.perspective = "1200px";
+        const half = Math.round(dur / 2);
+        oldHost.style.backfaceVisibility = "hidden";
+        built.host.style.backfaceVisibility = "hidden";
+        built.host.style.transform = "rotateY(90deg)";
+        stage.appendChild(built.host);
+        adoptHost(built);
+        void built.host.offsetWidth;
+        oldHost.style.transition = "transform " + half + "ms " + ease;
+        oldHost.style.transform = "rotateY(-90deg)";
+        built.host.style.transition = "transform " + half + "ms " + ease + " " + half + "ms";
+        built.host.style.transform = "rotateY(0deg)";
+        scheduleSwapEnd(oldHost, built, built.host, "transform", dur);
+    }
+
+    // startCube: 3D cube turn. Old is the front face, new the right face, both on
+    // a transient preserve-3d wrapper; rotating the wrapper -90deg swings the new
+    // face to front. finalizeSwap re-parents the new host out and drops the
+    // wrapper (the one structural deviation from the sibling-hosts model).
+    function startCube(stage, oldHost, built, dur, ease) {
+        stage.style.perspective = "1200px";
+        const halfW = (deckW / 2) + "px";
+        const wrapper = document.createElement("div");
+        wrapper.className = "present-cube";
+        wrapper.style.position = "absolute";
+        wrapper.style.inset = "0";
+        wrapper.style.transformStyle = "preserve-3d";
+        wrapper.style.transform = "translateZ(-" + halfW + ")";
+        oldHost.style.transform = "rotateY(0deg) translateZ(" + halfW + ")";
+        built.host.style.transform = "rotateY(90deg) translateZ(" + halfW + ")";
+        stage.appendChild(wrapper);
+        wrapper.appendChild(oldHost);
+        wrapper.appendChild(built.host);
+        adoptHost(built);
+        void wrapper.offsetWidth;
+        wrapper.style.transition = "transform " + dur + "ms " + ease;
+        wrapper.style.transform = "translateZ(-" + halfW + ") rotateY(-90deg)";
+        scheduleSwapEnd(oldHost, built, wrapper, "transform", dur, wrapper);
+    }
+
     // scheduleSwapEnd: record the in-flight swap and arm both a transitionend
-    // listener (on the animating host) and a safety timeout (duration + 50ms).
-    function scheduleSwapEnd(oldHost, built, animHost, prop, dur) {
+    // listener (on the animating element) and a safety timeout (duration + 50ms).
+    // `wrapper` is the transient 3D container for Cube, else undefined.
+    function scheduleSwapEnd(oldHost, built, animEl, prop, dur, wrapper) {
         const timer = window.setTimeout(finalizeSwap, dur + 50);
-        pendingSwap = { oldHost: oldHost, newBuilt: built, timer: timer };
-        animHost.addEventListener("transitionend", function (e) {
+        pendingSwap = {
+            oldHost: oldHost, newBuilt: built, timer: timer, wrapper: wrapper || null,
+        };
+        animEl.addEventListener("transitionend", function (e) {
             if (e.propertyName === prop) {
                 finalizeSwap();
             }

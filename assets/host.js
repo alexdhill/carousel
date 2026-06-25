@@ -3149,6 +3149,7 @@
         Configure: function (payload) {
             builtinKeyframesCss = (payload && payload.animation_keyframes_css) || "";
             animationCatalog = (payload && payload.animation_catalog) || [];
+            initDeckTitle(payload && payload.deck_title, payload && payload.focus_title);
         },
         SlideAnimationsUpdate: function (payload) {
             slideAnimations = (payload && payload.entries) || [];
@@ -5549,6 +5550,43 @@
         window.__deck.send("Interaction", {
             kind: "SetSlideTransitionRequested", transition: readSlideTransition(),
         });
+    }
+
+    // initDeckTitle
+    // Inputs: the deck title string and a focus flag (both from Configure).
+    // Output: side-effect; fills the top-left title input, wires its commit
+    // handlers once (blur + Enter post SetDeckTitleRequested), and — when
+    // launched as a new deck from a layout — focuses and selects the field so
+    // the user can immediately name the deck.
+    function initDeckTitle(title, focus) {
+        const input = document.getElementById("deck-title");
+        if (!input) {
+            return;
+        }
+        input.value = title || "";
+        if (!input.dataset.wired) {
+            input.dataset.wired = "1";
+            const commit = function () {
+                window.__deck.send("Interaction", {
+                    kind: "SetDeckTitleRequested", title: input.value,
+                });
+            };
+            input.addEventListener("blur", commit);
+            input.addEventListener("keydown", function (e) {
+                if (e.key === "Enter") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    input.blur();
+                }
+            });
+        }
+        if (focus) {
+            // Defer so the input is laid out and the webview has focus.
+            window.requestAnimationFrame(function () {
+                input.focus();
+                input.select();
+            });
+        }
     }
 
     // clearInspectorInputs

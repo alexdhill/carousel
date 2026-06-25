@@ -20,7 +20,7 @@ use crate::bundle::{
 };
 use crate::commands::{
     Command, CommandDispatcher, CompositeCommand, EditorMode, FileAction, GeometryProperty,
-    GroupElements, InsertAnimation, InsertElement, InsertLayout, InsertSlide, InterpretResult, MoveElement,
+    GroupElements, InsertAnimation, InsertElement, InsertLayout, InsertSlide, InterpretResult, MoveElement, SetDeckTitle,
     ElementTransform, RemoveAnimation, RemoveElementCommand, RemoveInlineStyle, RemoveSlide,
     RenameElement, ReparentElement,
     ResizeElement, SetElementsTransform, SetAnimationProperty, SetElementId, SetGeometryProperty, SetGlobalsCss, SetGroupLayout,
@@ -185,6 +185,9 @@ pub struct ApplicationCore {
     // Computed on first send_font_list (the Ready handler) and cached for the
     // session.
     font_families: Option<Vec<String>>,
+    // True only when launched as a new deck from a layout; consumed once by the
+    // Ready handler to tell the client to focus the title field, then cleared.
+    focus_title: bool,
 }
 
 impl ApplicationCore {
@@ -212,6 +215,7 @@ impl ApplicationCore {
             request_present_close,
             dispatch_pdf_job,
             dispatch_chromium_download,
+            false,
         )
     }
 
@@ -229,6 +233,7 @@ impl ApplicationCore {
         request_present_close: Box<dyn Fn()>,
         dispatch_pdf_job: Box<dyn Fn(PdfJob)>,
         dispatch_chromium_download: Box<dyn Fn()>,
+        focus_title: bool,
     ) -> Self {
         let active_slide: Option<SlideId> = deck.slide_order.first().cloned();
         let active_layout: Option<LayoutId> = deck.theme.layout_order.first().cloned();
@@ -254,6 +259,7 @@ impl ApplicationCore {
             dispatch_chromium_download,
             pending_export_after_chrome: false,
             font_families: None,
+            focus_title,
         }
     }
 
@@ -319,6 +325,8 @@ impl ApplicationCore {
                     debug: false,
                     animation_keyframes_css: ANIMATION_KEYFRAMES_CSS.to_string(),
                     animation_catalog: crate::deck::anim_catalog::animation_catalog(),
+                    deck_title: self.dispatcher.deck().manifest.metadata.title.clone(),
+                    focus_title: self.focus_title,
                 }))?;
                 self.send_slide_list()?;
                 self.send_assets_bundle()?;
@@ -1304,6 +1312,9 @@ impl ApplicationCore {
                     })),
                     None => InterpretResult::Nothing,
                 }
+            }
+            InteractionEvent::SetDeckTitleRequested { title } => {
+                InterpretResult::Command(Box::new(SetDeckTitle { new_title: title }))
             }
             InteractionEvent::NudgeSelectionRequested { dx, dy } => {
                 self.interpret_nudge(dx, dy)

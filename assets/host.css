@@ -378,6 +378,28 @@ button {
     color: var(--ink);
 }
 
+/* Editable title: a chromeless input that reads as the title text until
+   hovered/focused, when it gains a subtle field affordance. */
+.doc-meta__title--edit {
+    border: 1px solid transparent;
+    border-radius: 5px;
+    background: transparent;
+    padding: 1px 5px;
+    margin: -1px -5px;
+    max-width: 240px;
+    font-family: inherit;
+    outline: none;
+}
+
+.doc-meta__title--edit:hover {
+    background: var(--surface2, rgba(0, 0, 0, 0.05));
+}
+
+.doc-meta__title--edit:focus {
+    background: var(--surface, #fff);
+    border-color: var(--acc);
+}
+
 .doc-meta__sub {
     font-size: 10.5px;
     font-weight: 450;

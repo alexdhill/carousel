@@ -22,9 +22,10 @@
                 <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="5" r="2"/><circle cx="12" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="12" cy="19" r="2"/><circle cx="19" cy="19" r="2"/></svg>
             </button>
             <span class="tbar-divider"></span>
-            <div class="doc-meta" data-stub>
-                <span class="doc-meta__title">Untitled deck</span>
-                <span class="doc-meta__sub">Edited just now</span>
+            <div class="doc-meta">
+                <input type="text" id="deck-title" class="doc-meta__title doc-meta__title--edit"
+                       spellcheck="false" placeholder="Untitled deck" aria-label="Deck title">
+                <span class="doc-meta__sub" data-stub>Edited just now</span>
             </div>
         </div>
 
@@ -194,6 +195,10 @@
                             <option value="None">None</option>
                             <option value="Fade">Fade</option>
                             <option value="Push">Push</option>
+                            <option value="Dissolve">Dissolve</option>
+                            <option value="Wipe">Wipe</option>
+                            <option value="Flip">Flip</option>
+                            <option value="Cube">Cube</option>
                         </select>
                     </div>
                     <div class="inspector__field inspector__field--full" id="slide-transition-timing"

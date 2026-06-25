@@ -62,11 +62,57 @@ impl Command for SetSlideTitle {
     }
 }
 
+// SetDeckTitle command.
+//
+// Edits the deck's display name — `manifest.metadata.title`, shown in the
+// editor's top-left title field and used as the recents/landing label. Like
+// SetSlideTitle it produces no DOM patches (deck chrome, not slide content),
+// is self-inverse, and marks the manifest dirty. It does not affect the slide
+// list; the editor re-reads the title from its own input optimistically.
+#[derive(Debug, Clone)]
+pub struct SetDeckTitle {
+    pub new_title: String,
+}
+
+impl Command for SetDeckTitle {
+    // apply
+    // Inputs: &self, &mut Deck.
+    // Output: CommandOutput with no patches, manifest_dirty=true, and an inverse
+    // SetDeckTitle carrying the prior title.
+    fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
+        let prior: String = deck.manifest.metadata.title.clone();
+        deck.manifest.metadata.title = self.new_title.clone();
+        deck.manifest_dirty = true;
+        Ok(CommandOutput {
+            patches: Vec::new(),
+            inverse: Box::new(SetDeckTitle { new_title: prior }),
+            dirty_targets: Vec::new(),
+            manifest_dirty: true,
+            warnings: Vec::new(),
+        })
+    }
+
+    fn label(&self) -> &'static str {
+        "Rename Deck"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
     use crate::deck::Deck;
+
+    #[test]
+    fn deck_title_sets_and_inverts() {
+        let mut deck = Deck::sample();
+        let original: String = deck.manifest.metadata.title.clone();
+        let out = SetDeckTitle { new_title: "Q3 Review".into() }.apply(&mut deck).unwrap();
+        assert_eq!(deck.manifest.metadata.title, "Q3 Review");
+        assert!(deck.manifest_dirty);
+        out.inverse.apply(&mut deck).unwrap();
+        assert_eq!(deck.manifest.metadata.title, original);
+    }
 
     #[test]
     fn sets_the_manifest_title() {

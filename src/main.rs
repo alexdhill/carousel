@@ -407,6 +407,7 @@ fn build_editor(
     request_present_close: Box<dyn Fn()>,
     dispatch_pdf_job: Box<dyn Fn(app::PdfJob)>,
     dispatch_chromium_download: Box<dyn Fn()>,
+    focus_title: bool,
 ) -> Result<(Window, ApplicationCore), Box<dyn std::error::Error>> {
     let window = WindowBuilder::new()
         .with_title("carousel")
@@ -443,6 +444,7 @@ fn build_editor(
         request_present_close,
         dispatch_pdf_job,
         dispatch_chromium_download,
+        focus_title,
     );
     Ok((window, app))
 }
@@ -732,6 +734,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // Only consume the editor ingredients once a deck is
                             // committed (a cancelled dialog leaves them intact).
                             if let Some((deck, load)) = chosen {
+                                // New-from-layout has no load path; that is the
+                                // case we focus the title field for.
+                                let focus_title: bool = load.is_none();
                                 if let (Some(sf), Some(io), Some(rpo), Some(rpc), Some(dpj), Some(dcd)) = (
                                     schedule_flush_opt.take(),
                                     io_thread_opt.take(),
@@ -742,6 +747,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 ) {
                                     match build_editor(
                                         target, proxy.clone(), ipc_tx.clone(), deck, sf, io, rpo, rpc, dpj, dcd,
+                                        focus_title,
                                     ) {
                                         Ok((win, mut a)) => {
                                             if let Some(path) = load {

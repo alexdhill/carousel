@@ -77,7 +77,7 @@ pub use table_commands::{
     SetCellText, SetTableData, SetTableHeaderColumns, SetTableHeaderRows,
 };
 pub use slide_lifecycle::{InsertSlide, RemoveSlide};
-pub use slide_metadata::SetSlideTitle;
+pub use slide_metadata::{SetDeckTitle, SetSlideTitle};
 pub use slide_style::{
     SetSlideBackground, SetSlideBackgroundImage, SetSlideLayout, SetSlideNotes,
     SetSlideTransition,

@@ -545,6 +545,8 @@ pub enum InteractionEvent {
     SetSlideLayoutRequested { layout_id: LayoutId },
     // Arrow-key nudge of the current selection by (dx, dy) px on the active
     // canvas (one undoable step; a CompositeCommand when many are selected).
+    // Deck title edit from the top-left title field (manifest.metadata.title).
+    SetDeckTitleRequested { title: String },
     NudgeSelectionRequested { dx: f64, dy: f64 },
     // Arrow-key slide navigation when the canvas or navigator is focused with
     // no element selected. `forward` = next slide (ArrowRight), else previous.
@@ -716,6 +718,14 @@ pub struct EditorConfig {
     // The effect catalog (add-menu + effect picker source of truth).
     #[serde(default)]
     pub animation_catalog: Vec<crate::deck::anim_catalog::AnimCatalogItem>,
+    // The deck's display title (manifest.metadata.title), shown in the editor's
+    // top-left title field.
+    #[serde(default)]
+    pub deck_title: String,
+    // True only when this editor was launched as a new deck from a layout, so
+    // the client focuses + selects the title field for an immediate rename.
+    #[serde(default)]
+    pub focus_title: bool,
 }
 
 // ThumbnailRequest
@@ -1219,7 +1229,7 @@ mod tests {
 
     #[test]
     fn editor_config_carries_keyframes() {
-        let cfg = EditorConfig { debug: false, animation_keyframes_css: "@keyframes appear{}".into(), animation_catalog: Vec::new() };
+        let cfg = EditorConfig { debug: false, animation_keyframes_css: "@keyframes appear{}".into(), animation_catalog: Vec::new(), deck_title: "Deck".into(), focus_title: true };
         let back: EditorConfig =
             serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
         assert_eq!(back.animation_keyframes_css, "@keyframes appear{}");
