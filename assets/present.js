@@ -123,16 +123,13 @@
     }
 
     // ---------- mounting ----------
-    // mountSlide
-    // Inputs: a PresentSlidePayload.
-    // Output: side-effect; replaces the stage contents with a fresh shadow
-    // root containing theme + globals + keyframes + asset-vars CSS, then the
-    // slide HTML. The asset-vars block resolves image/media background URLs.
-    function mountSlide(payload) {
-        const stage = document.getElementById("stage");
-        if (!stage || !payload) {
-            return;
-        }
+    // An in-flight slide-transition swap, or null. Holds the old host to drop
+    // and the new host to settle once the CSS transition finishes (or times out).
+    let pendingSwap = null;
+
+    // buildHost: create a present-host + shadow root for a payload, wired with
+    // theme/globals/keyframes/asset-vars CSS. Does NOT attach to the stage.
+    function buildHost(payload) {
         const host = document.createElement("div");
         host.className = "present-host";
         const shadow = host.attachShadow({ mode: "open" });
@@ -142,10 +139,112 @@
             + "<style>" + keyframesCss + "</style>"
             + "<style id=\"asset-vars\"></style>"
             + (payload.slide_html || "");
-        stage.replaceChildren(host);
-        currentShadow = shadow;
-        assetVarStyleEl = shadow.getElementById("asset-vars");
+        return { host: host, shadow: shadow };
+    }
+
+    // adoptHost: make a freshly-built host the current one (current-shadow +
+    // asset-var bookkeeping), then resolve its image/media background URLs.
+    function adoptHost(built) {
+        currentShadow = built.shadow;
+        assetVarStyleEl = built.shadow.getElementById("asset-vars");
         refreshAssetVarStyle();
+    }
+
+    // finalizeSwap: settle any in-flight transition immediately — drop the old
+    // host, clear the new host's inline transition state, adopt it. Idempotent.
+    function finalizeSwap() {
+        if (!pendingSwap) {
+            return;
+        }
+        const swap = pendingSwap;
+        pendingSwap = null;
+        window.clearTimeout(swap.timer);
+        if (swap.oldHost && swap.oldHost.parentNode) {
+            swap.oldHost.parentNode.removeChild(swap.oldHost);
+        }
+        swap.newBuilt.host.style.cssText = "";
+        adoptHost(swap.newBuilt);
+    }
+
+    // mountSlide
+    // Inputs: a PresentSlidePayload.
+    // Output: side-effect; mounts a fresh shadow-root slide. With no transition
+    // (cut), replaces the stage contents instantly. With a Fade/Push transition
+    // (forward cross-slide only), stacks the new host over the old and animates
+    // the swap, dropping the old host when the CSS transition ends.
+    function mountSlide(payload) {
+        const stage = document.getElementById("stage");
+        if (!stage || !payload) {
+            return;
+        }
+        finalizeSwap();
+        const built = buildHost(payload);
+        const kind = payload.transition && payload.transition.kind;
+        if (!kind || kind === "None") {
+            stage.replaceChildren(built.host);
+            adoptHost(built);
+            return;
+        }
+        startSwap(stage, built, payload.transition);
+    }
+
+    // startSwap: animate the host swap per the transition (Fade | Push).
+    //   Push — the new slide stacks ON TOP and slides in over the stationary old
+    //     slide. The old fills the stage the whole time, so there is no black
+    //     seam between the two panels.
+    //   Fade — the new slide is mounted UNDERNEATH at full opacity and the old
+    //     fades out on top. The opaque new slide always backs the frame (no
+    //     black dip over transparent regions), and the old fully fades so no
+    //     stray element on it lingers.
+    // The host that actually animates (new for Push, old for Fade) drives the
+    // transitionend that finalizes the swap.
+    function startSwap(stage, built, transition) {
+        const oldHost = currentShadow ? currentShadow.host : null;
+        if (!oldHost) {
+            stage.replaceChildren(built.host);
+            adoptHost(built);
+            return;
+        }
+        const dur = transition.duration_ms || 400;
+        const ease = transition.easing || "ease";
+        if (transition.kind === "Push") {
+            startPush(stage, oldHost, built, dur, ease);
+        } else {
+            startFade(stage, oldHost, built, dur, ease);
+        }
+    }
+
+    // startPush: new on top, translateX(100%) → 0; old stationary beneath.
+    function startPush(stage, oldHost, built, dur, ease) {
+        built.host.style.transform = "translateX(100%)";
+        stage.appendChild(built.host);
+        adoptHost(built);
+        void built.host.offsetWidth; // commit the start state before transitioning
+        built.host.style.transition = "transform " + dur + "ms " + ease;
+        built.host.style.transform = "translateX(0)";
+        scheduleSwapEnd(oldHost, built, built.host, "transform", dur);
+    }
+
+    // startFade: new beneath at opacity 1; old on top fades opacity 1 → 0.
+    function startFade(stage, oldHost, built, dur, ease) {
+        stage.insertBefore(built.host, oldHost);
+        adoptHost(built);
+        void oldHost.offsetWidth; // commit before transitioning the old host out
+        oldHost.style.transition = "opacity " + dur + "ms " + ease;
+        oldHost.style.opacity = "0";
+        scheduleSwapEnd(oldHost, built, oldHost, "opacity", dur);
+    }
+
+    // scheduleSwapEnd: record the in-flight swap and arm both a transitionend
+    // listener (on the animating host) and a safety timeout (duration + 50ms).
+    function scheduleSwapEnd(oldHost, built, animHost, prop, dur) {
+        const timer = window.setTimeout(finalizeSwap, dur + 50);
+        pendingSwap = { oldHost: oldHost, newBuilt: built, timer: timer };
+        animHost.addEventListener("transitionend", function (e) {
+            if (e.propertyName === prop) {
+                finalizeSwap();
+            }
+        });
     }
 
     // ---------- reveal ----------

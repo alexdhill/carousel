@@ -39,7 +39,7 @@ pub use ids::{
     new_slide_id,
 };
 pub use layout::LayoutNode;
-pub use slide::{SlideMetadata, SlideNode};
+pub use slide::{SlideMetadata, SlideNode, SlideTransition, TransitionKind};
 pub use style::{
     Border, BorderStyle, ColorRef, FillRef, Filter, FontRef, FontStyle, Geometry, ImageStyle,
     Length, LengthUnit, MediaStyle, ObjectFit, Shadow, ShapeStyle, Stroke, TableStyle, TextAlign,

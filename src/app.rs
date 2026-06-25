@@ -29,7 +29,7 @@ use crate::commands::{
     DeleteTableColumn, DeleteTableRow, InsertTableColumn, InsertTableRow, SetCellStyles,
     SetCellText, SetTableHeaderColumns, SetTableHeaderRows,
     SetSlideBackground, SetSlideBackgroundImage, SetSlideLayout, SetSlideNotes, SetSlideTitle,
-    SetTextContent, SwapTheme,
+    SetSlideTransition, SetTextContent, SwapTheme,
     TransactionSnapshot,
 };
 use crate::deck::animation::{
@@ -391,6 +391,64 @@ impl ApplicationCore {
         // Refresh the Slide box (no-op outside slide mode) so it tracks the
         // active slide on every mount / switch.
         self.send_slide_inspector()
+    }
+
+    // interpret_nudge
+    // Inputs: a per-axis pixel delta (dx, dy) from an arrow keypress.
+    // Output: an absolute-target MoveElement for the single selected element, a
+    // CompositeCommand for several, or Nothing when the selection is empty or no
+    // canvas is active. Each element's new position is its CURRENT geometry plus
+    // the delta (MoveElement targets are absolute), read from the active canvas.
+    fn interpret_nudge(&self, dx: f64, dy: f64) -> InterpretResult {
+        let target: CanvasTarget = match self.active_canvas() {
+            Some(t) => t,
+            None => return InterpretResult::Nothing,
+        };
+        let canvas = match self.dispatcher.deck().canvas(&target) {
+            Some(c) => c,
+            None => return InterpretResult::Nothing,
+        };
+        let mut cmds: Vec<Box<dyn Command>> = Vec::new();
+        for id in &self.selection.element_ids {
+            if let Some(el) = canvas.find_element(id) {
+                cmds.push(Box::new(MoveElement {
+                    target: target.clone(),
+                    element_id: id.clone(),
+                    new_position: Point { x: el.geometry.x + dx, y: el.geometry.y + dy },
+                    previous_position: None,
+                }));
+            }
+        }
+        if cmds.is_empty() {
+            return InterpretResult::Nothing;
+        }
+        // A CompositeCommand of one is harmless (one undo step either way) and
+        // lets this path stay unwrap-free for both the single and multi case.
+        InterpretResult::Command(Box::new(CompositeCommand::new(cmds, "Nudge Elements")))
+    }
+
+    // interpret_navigate_slide
+    // Inputs: `forward` (true = next slide, false = previous).
+    // Output: SetActiveSlide for the adjacent slide, or Nothing at the deck ends
+    // / outside Slide mode (no wrap-around). Indexes the canonical slide_order.
+    fn interpret_navigate_slide(&self, forward: bool) -> InterpretResult {
+        if self.dispatcher.mode() != EditorMode::Slide {
+            return InterpretResult::Nothing;
+        }
+        let order: &[SlideId] = &self.dispatcher.deck().slide_order;
+        let cur: usize = match self
+            .active_slide
+            .as_ref()
+            .and_then(|sid| order.iter().position(|s| s == sid))
+        {
+            Some(i) => i,
+            None => return InterpretResult::Nothing,
+        };
+        let next: usize = if forward { cur + 1 } else { cur.wrapping_sub(1) };
+        match order.get(next) {
+            Some(sid) if forward || cur > 0 => InterpretResult::SetActiveSlide(sid.clone()),
+            _ => InterpretResult::Nothing,
+        }
     }
 
     // send_slide_inspector
@@ -1238,6 +1296,21 @@ impl ApplicationCore {
                 })),
                 None => InterpretResult::Nothing,
             },
+            InteractionEvent::SetSlideTransitionRequested { transition } => {
+                match &self.active_slide {
+                    Some(sid) => InterpretResult::Command(Box::new(SetSlideTransition {
+                        slide_id: sid.clone(),
+                        transition,
+                    })),
+                    None => InterpretResult::Nothing,
+                }
+            }
+            InteractionEvent::NudgeSelectionRequested { dx, dy } => {
+                self.interpret_nudge(dx, dy)
+            }
+            InteractionEvent::NavigateSlideRequested { forward } => {
+                self.interpret_navigate_slide(forward)
+            }
             InteractionEvent::SetSlideLayoutRequested { layout_id } => {
                 if layout_id.is_empty() {
                     InterpretResult::Nothing
@@ -3145,6 +3218,8 @@ fn build_slide_inspector_data(
         .get(sid)
         .and_then(|s| s.metadata.background_image.clone())
         .unwrap_or_default();
+    let transition: Option<crate::deck::SlideTransition> =
+        deck.slides.get(sid).and_then(|s| s.metadata.transition.clone());
     let layouts: Vec<SlideInspectorLayout> = deck
         .theme
         .layout_order
@@ -3162,6 +3237,7 @@ fn build_slide_inspector_data(
         notes,
         background,
         background_image,
+        transition,
         layout_id,
         layouts,
     })
@@ -4313,6 +4389,53 @@ mod tests {
             {
                 interpret_delete_selection(dispatcher, active_slide.clone().map(CanvasTarget::Slide), selection)
             }
+            // Mirrors interpret_nudge (Slide mode only in the test harness).
+            InteractionEvent::NudgeSelectionRequested { dx, dy } => {
+                let target: CanvasTarget = match active_slide.clone() {
+                    Some(s) => CanvasTarget::Slide(s),
+                    None => return InterpretResult::Nothing,
+                };
+                let canvas = match dispatcher.deck().canvas(&target) {
+                    Some(c) => c,
+                    None => return InterpretResult::Nothing,
+                };
+                let mut cmds: Vec<Box<dyn Command>> = Vec::new();
+                for id in &selection.element_ids {
+                    if let Some(el) = canvas.find_element(id) {
+                        cmds.push(Box::new(MoveElement {
+                            target: target.clone(),
+                            element_id: id.clone(),
+                            new_position: Point {
+                                x: el.geometry.x + dx,
+                                y: el.geometry.y + dy,
+                            },
+                            previous_position: None,
+                        }));
+                    }
+                }
+                if cmds.is_empty() {
+                    return InterpretResult::Nothing;
+                }
+                InterpretResult::Command(Box::new(CompositeCommand::new(cmds, "Nudge Elements")))
+            }
+            // Mirrors interpret_navigate_slide (no wrap; clamps at deck ends).
+            InteractionEvent::NavigateSlideRequested { forward } => {
+                let order: &[SlideId] = &dispatcher.deck().slide_order;
+                let cur: usize = match active_slide
+                    .as_ref()
+                    .and_then(|sid| order.iter().position(|s| s == sid))
+                {
+                    Some(i) => i,
+                    None => return InterpretResult::Nothing,
+                };
+                let next: usize = if forward { cur + 1 } else { cur.wrapping_sub(1) };
+                match order.get(next) {
+                    Some(sid) if forward || cur > 0 => {
+                        InterpretResult::SetActiveSlide(sid.clone())
+                    }
+                    _ => InterpretResult::Nothing,
+                }
+            }
             _ => InterpretResult::Nothing,
         }
     }
@@ -5345,6 +5468,64 @@ mod tests {
         match interpret_inline(&d, &sel, &Some(sid), event) {
             InterpretResult::Nothing => {}
             other => panic!("expected Nothing, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn nudge_with_selection_moves_element_by_delta() {
+        let (d, _sel, sid, eid) = fixture();
+        let mut sel = SelectionState::empty();
+        sel.element_ids = vec![eid.clone()];
+        let target = CanvasTarget::Slide(sid.clone());
+        let prior_x: f64 = d.deck().canvas(&target).unwrap().find_element(&eid).unwrap().geometry.x;
+        let event = InteractionEvent::NudgeSelectionRequested { dx: 1.0, dy: 0.0 };
+        match interpret_inline(&d, &sel, &Some(sid.clone()), event) {
+            InterpretResult::Command(cmd) => {
+                let mut deck = d.deck().clone();
+                cmd.apply(&mut deck).unwrap();
+                let moved = deck.canvas(&target).unwrap().find_element(&eid).unwrap();
+                assert_eq!(moved.geometry.x, prior_x + 1.0);
+            }
+            other => panic!("expected Command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn nudge_with_empty_selection_is_nothing() {
+        let (d, sel, sid, _) = fixture();
+        let event = InteractionEvent::NudgeSelectionRequested { dx: 0.0, dy: -1.0 };
+        match interpret_inline(&d, &sel, &Some(sid), event) {
+            InterpretResult::Nothing => {}
+            other => panic!("expected Nothing, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn navigate_forward_moves_to_next_slide() {
+        let (deck, a, b) = two_slide_deck();
+        let d = CommandDispatcher::new(deck);
+        let event = InteractionEvent::NavigateSlideRequested { forward: true };
+        match interpret_inline(&d, &SelectionState::empty(), &Some(a), event) {
+            InterpretResult::SetActiveSlide(id) => assert_eq!(id, b),
+            other => panic!("expected SetActiveSlide, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn navigate_clamps_at_deck_ends() {
+        let (deck, a, b) = two_slide_deck();
+        let d = CommandDispatcher::new(deck);
+        // Forward from the last slide → Nothing.
+        let fwd = InteractionEvent::NavigateSlideRequested { forward: true };
+        match interpret_inline(&d, &SelectionState::empty(), &Some(b), fwd) {
+            InterpretResult::Nothing => {}
+            other => panic!("expected Nothing at last slide, got {other:?}"),
+        }
+        // Backward from the first slide → Nothing.
+        let back = InteractionEvent::NavigateSlideRequested { forward: false };
+        match interpret_inline(&d, &SelectionState::empty(), &Some(a), back) {
+            InterpretResult::Nothing => {}
+            other => panic!("expected Nothing at first slide, got {other:?}"),
         }
     }
 

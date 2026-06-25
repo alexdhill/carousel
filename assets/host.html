@@ -189,6 +189,21 @@
                                   placeholder="Speaker notes…"></textarea>
                     </div>
                     <div class="inspector__field inspector__field--full" data-slide-only>
+                        <label class="inspector__field-label" for="slide-transition">Transition</label>
+                        <select id="slide-transition" class="inspector__input inspector__select">
+                            <option value="None">None</option>
+                            <option value="Fade">Fade</option>
+                            <option value="Push">Push</option>
+                        </select>
+                    </div>
+                    <div class="inspector__field inspector__field--full" id="slide-transition-timing"
+                         data-slide-only hidden>
+                        <label class="inspector__field-label" for="slide-transition-dur">Duration (ms)</label>
+                        <input type="number" id="slide-transition-dur" class="inspector__input"
+                               min="0" step="50">
+                        <div id="slide-transition-easing-mount" class="slide-transition__easing"></div>
+                    </div>
+                    <div class="inspector__field inspector__field--full" data-slide-only>
                         <label class="inspector__field-label">Animations</label>
                         <div id="sac-groups" class="sac"></div>
                     </div>

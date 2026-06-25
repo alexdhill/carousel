@@ -65,9 +65,16 @@ impl PresentCursor {
             return PresentStep::Reveal(forward_reveal(&sid, &timeline, step));
         }
         if self.slide_index + 1 < deck.slide_order.len() {
+            // Outgoing slide owns the transition; carry it forward (None-kind and
+            // missing both mean cut). Backward never animates, so only this path.
+            let outgoing: Option<crate::deck::SlideTransition> = deck
+                .slides
+                .get(&sid)
+                .and_then(|s| s.metadata.transition.clone())
+                .filter(|t| t.kind != crate::deck::TransitionKind::None);
             self.slide_index += 1;
             self.cursor.reset();
-            return self.snapped_slide_change(deck, 0);
+            return self.snapped_slide_change(deck, 0, outgoing);
         }
         PresentStep::Unchanged
     }
@@ -94,7 +101,7 @@ impl PresentCursor {
             let prev_timeline = self.timeline(deck, &prev_id);
             self.cursor.jump_to_last(&prev_timeline);
             let step: usize = self.cursor.current_step();
-            return self.snapped_slide_change(deck, step);
+            return self.snapped_slide_change(deck, step, None);
         }
         PresentStep::Unchanged
     }
@@ -116,12 +123,21 @@ impl PresentCursor {
     }
 
     // snapped_slide_change
-    // Build a SlideChanged for the current slide_index at `step`, snapped.
-    fn snapped_slide_change(&self, deck: &Deck, step: usize) -> PresentStep {
+    // Build a SlideChanged for the current slide_index at `step`, snapped. The
+    // reveal is always a snap; `transition` (the outgoing slide's, forward only)
+    // rides on the mount payload so the frontend animates the host swap.
+    fn snapped_slide_change(
+        &self,
+        deck: &Deck,
+        step: usize,
+        transition: Option<crate::deck::SlideTransition>,
+    ) -> PresentStep {
         let sid: SlideId = deck.slide_order[self.slide_index].clone();
         let timeline = self.timeline(deck, &sid);
+        let mut slide: PresentSlidePayload = slide_payload(deck, &sid);
+        slide.transition = transition;
         PresentStep::SlideChanged {
-            slide: slide_payload(deck, &sid),
+            slide,
             reveal: snap_reveal(&sid, &timeline, step),
         }
     }
@@ -152,6 +168,7 @@ fn slide_payload(deck: &Deck, sid: &str) -> PresentSlidePayload {
         slide_html,
         theme_css: deck.theme.theme_css.clone(),
         globals_css: deck.theme.globals_css.clone(),
+        transition: None,
     }
 }
 
@@ -308,6 +325,54 @@ mod tests {
         let deck = deck_with(vec![("s1", vec![click_entry("a1", "el_a")])]);
         let mut cur = PresentCursor::new(0);
         assert!(matches!(cur.back(&deck), PresentStep::Unchanged));
+    }
+
+    #[test]
+    fn forward_cross_carries_outgoing_transition_back_carries_none() {
+        use crate::deck::{SlideTransition, TransitionKind};
+        // s1 owns a Push; s2 is a cut. Both have no animations (last step 0).
+        let mut deck = deck_with(vec![("s1", vec![]), ("s2", vec![])]);
+        deck.slides.get_mut("s1").unwrap().metadata.transition = Some(SlideTransition {
+            kind: TransitionKind::Push,
+            duration_ms: 500,
+            easing: "ease-out".into(),
+        });
+        // Forward s1 -> s2: the mount payload carries s1's (outgoing) Push.
+        let mut cur = PresentCursor::new(0);
+        match cur.advance(&deck) {
+            PresentStep::SlideChanged { slide, .. } => {
+                let t = slide.transition.expect("forward cross carries transition");
+                assert_eq!(t.kind, TransitionKind::Push);
+                assert_eq!(t.duration_ms, 500);
+            }
+            other => panic!("expected SlideChanged, got {other:?}"),
+        }
+        // Back s2 -> s1: never animates, payload transition is None.
+        match cur.back(&deck) {
+            PresentStep::SlideChanged { slide, .. } => {
+                assert!(slide.transition.is_none(), "back never carries a transition");
+            }
+            other => panic!("expected SlideChanged, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn forward_cross_none_kind_carries_no_transition() {
+        use crate::deck::{SlideTransition, TransitionKind};
+        let mut deck = deck_with(vec![("s1", vec![]), ("s2", vec![])]);
+        // Explicit None-kind is a cut: filtered out, payload transition is None.
+        deck.slides.get_mut("s1").unwrap().metadata.transition = Some(SlideTransition {
+            kind: TransitionKind::None,
+            duration_ms: 400,
+            easing: "ease".into(),
+        });
+        let mut cur = PresentCursor::new(0);
+        match cur.advance(&deck) {
+            PresentStep::SlideChanged { slide, .. } => {
+                assert!(slide.transition.is_none());
+            }
+            other => panic!("expected SlideChanged, got {other:?}"),
+        }
     }
 
     #[test]

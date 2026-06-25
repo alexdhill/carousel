@@ -12,7 +12,7 @@
 // cleanly into newer code.
 
 use crate::bundle::BundleError;
-use crate::deck::{AnimationEntry, SlideId};
+use crate::deck::{AnimationEntry, SlideId, SlideTransition};
 use serde::{Deserialize, Serialize};
 
 pub const SUPPORTED_FORMAT_MAJOR: u32 = 1;
@@ -82,7 +82,7 @@ pub struct SlideEntry {
     #[serde(default)]
     pub thumbnail: Option<String>,
     #[serde(default)]
-    pub transition: Option<String>,
+    pub transition: Option<SlideTransition>,
     #[serde(default)]
     pub duration_hint: Option<u32>,
     #[serde(default)]
@@ -337,7 +337,11 @@ mod tests {
             layout_id: "title".into(),
             title: "Hello".into(),
             thumbnail: Some("thumbnails/x.png".into()),
-            transition: Some("fade".into()),
+            transition: Some(crate::deck::SlideTransition {
+                kind: crate::deck::TransitionKind::Fade,
+                duration_ms: 400,
+                easing: "ease".into(),
+            }),
             duration_hint: Some(30),
             notes_ref: None,
             animations: Vec::new(),

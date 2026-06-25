@@ -18,6 +18,34 @@ use serde::{Deserialize, Serialize};
 // resolve.
 pub use crate::deck::canvas::{InsertError, RemovedElement};
 
+// TransitionKind — the between-slide animation played in presentation mode when
+// LEAVING this slide forward. `None` is a hard cut (the default everywhere).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum TransitionKind {
+    #[default]
+    None,
+    Fade,
+    Push,
+}
+
+// SlideTransition — the slide's outgoing transition (kind + timing). Presentation
+// only: it never affects the static render. `kind == None` means cut (and the
+// editor stores `metadata.transition = None` rather than `Some(None-kind)`).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SlideTransition {
+    pub kind: TransitionKind,
+    pub duration_ms: u32,
+    // CSS easing token (e.g. "ease-out"), shared with the animations panel presets.
+    pub easing: String,
+}
+
+impl Default for SlideTransition {
+    // Sensible default for a freshly-picked transition: 400ms ease.
+    fn default() -> Self {
+        Self { kind: TransitionKind::None, duration_ms: 400, easing: "ease".into() }
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SlideMetadata {
     pub title: Option<String>,
@@ -33,6 +61,10 @@ pub struct SlideMetadata {
     // `background`.
     #[serde(default)]
     pub background_image: Option<String>,
+    // Outgoing presentation transition (Option = inherit the cut default).
+    // Persisted via the manifest SlideEntry, synced like `background`.
+    #[serde(default)]
+    pub transition: Option<SlideTransition>,
 }
 
 // SlideNode

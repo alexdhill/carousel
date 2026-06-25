@@ -80,6 +80,7 @@ pub use slide_lifecycle::{InsertSlide, RemoveSlide};
 pub use slide_metadata::SetSlideTitle;
 pub use slide_style::{
     SetSlideBackground, SetSlideBackgroundImage, SetSlideLayout, SetSlideNotes,
+    SetSlideTransition,
 };
 pub use swap_theme::SwapTheme;
 pub use theme_globals::SetGlobalsCss;

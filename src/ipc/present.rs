@@ -33,6 +33,10 @@ pub struct PresentSlidePayload {
     pub slide_html: String,
     pub theme_css: String,
     pub globals_css: String,
+    // The OUTGOING slide's transition to animate this mount. Some(non-None) only
+    // on a forward cross-slide change; None (cut) on back, initial, same-slide.
+    #[serde(default)]
+    pub transition: Option<crate::deck::SlideTransition>,
 }
 
 // AnimateInstruction
@@ -114,6 +118,11 @@ mod tests {
             slide_html: "<section/>".into(),
             theme_css: ".x{}".into(),
             globals_css: ":root{}".into(),
+            transition: Some(crate::deck::SlideTransition {
+                kind: crate::deck::TransitionKind::Push,
+                duration_ms: 500,
+                easing: "ease-out".into(),
+            }),
         };
         assert_eq!(round_trip(&p), p);
     }
@@ -170,6 +179,7 @@ mod tests {
                 slide_html: "<section/>".into(),
                 theme_css: ".x{}".into(),
                 globals_css: ":root{}".into(),
+                transition: None,
             }),
             MessageKind::PresentReveal(RevealPayload {
                 slide_id: "s1".into(),

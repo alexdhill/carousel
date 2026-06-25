@@ -5371,9 +5371,39 @@
             }
             layout.value = (data && data.layout_id) || "";
         }
+        // Transition controls (slide-only): dropdown + duration/easing, the
+        // timing row hidden when the transition is None (a cut).
+        if (!layoutMode) {
+            renderSlideTransition(data);
+        }
         // Slide animation controller (slide mode only; the field is slide-only).
         if (!layoutMode) {
             renderSlideAnimations();
+        }
+    }
+
+    // renderSlideTransition
+    // Inputs: the active slide's inspector data.
+    // Output: side-effect; reflects data.transition into the dropdown + the
+    // duration/easing controls, hiding the timing row for a None (cut).
+    function renderSlideTransition(data) {
+        const sel = document.getElementById("slide-transition");
+        const timing = document.getElementById("slide-transition-timing");
+        const dur = document.getElementById("slide-transition-dur");
+        const ease = document.getElementById("slide-transition-easing");
+        const t = (data && data.transition) || null;
+        const kind = (t && t.kind) || "None";
+        if (sel && document.activeElement !== sel) {
+            sel.value = kind;
+        }
+        if (timing) {
+            timing.hidden = kind === "None";
+        }
+        if (dur && document.activeElement !== dur) {
+            dur.value = t ? String(t.duration_ms) : "400";
+        }
+        if (ease) {
+            ease.value = (t && t.easing) || "ease-out";
         }
     }
 
@@ -5464,6 +5494,61 @@
                 });
             });
         }
+        wireSlideTransition();
+    }
+
+    // readSlideTransition: assemble a SlideTransition from the controls, or null
+    // (cut) when the dropdown is None. Duration falls back to 400, easing to the
+    // first preset, so a partly-filled form still sends a valid struct.
+    function readSlideTransition() {
+        const sel = document.getElementById("slide-transition");
+        const kind = sel ? sel.value : "None";
+        if (!kind || kind === "None") {
+            return null;
+        }
+        const durEl = document.getElementById("slide-transition-dur");
+        const parsed = durEl ? parseInt(durEl.value, 10) : NaN;
+        const dur = Number.isFinite(parsed) && parsed > 0 ? parsed : 400;
+        const easeEl = document.getElementById("slide-transition-easing");
+        const easing = (easeEl && easeEl.value) || "ease-out";
+        return { kind: kind, duration_ms: dur, easing: easing };
+    }
+
+    // wireSlideTransition: mount the easing segmented control and wire the three
+    // transition controls; each change posts the full transition (or null).
+    function wireSlideTransition() {
+        const mount = document.getElementById("slide-transition-easing-mount");
+        if (mount && !mount.dataset.wired) {
+            mount.dataset.wired = "1";
+            const opts = ANIM_EASINGS.map(function (e) {
+                return { value: e.token, icon: e.label, tip: e.label };
+            });
+            const seg = makeSegmentControl(opts);
+            seg.id = "slide-transition-easing";
+            mount.appendChild(seg);
+            seg.addEventListener("change", sendSlideTransition);
+        }
+        const sel = document.getElementById("slide-transition");
+        if (sel) {
+            sel.addEventListener("change", function () {
+                const timing = document.getElementById("slide-transition-timing");
+                if (timing) {
+                    timing.hidden = sel.value === "None";
+                }
+                sendSlideTransition();
+            });
+        }
+        const dur = document.getElementById("slide-transition-dur");
+        if (dur) {
+            dur.addEventListener("change", sendSlideTransition);
+        }
+    }
+
+    // sendSlideTransition: post the active slide's transition (Rust supplies id).
+    function sendSlideTransition() {
+        window.__deck.send("Interaction", {
+            kind: "SetSlideTransitionRequested", transition: readSlideTransition(),
+        });
     }
 
     // clearInspectorInputs
@@ -8488,6 +8573,33 @@
                 slide_id: activeSlideId,
             });
             return;
+        }
+        // Arrow keys (not while typing): nudge the current element selection by
+        // 1px, or — with nothing selected and the canvas/navigator focused —
+        // step the active slide left/right. Decided here (like the clipboard
+        // scope) since the JS side owns focus region + selection.
+        const ARROW_DELTA = {
+            ArrowLeft: [-1, 0], ArrowRight: [1, 0],
+            ArrowUp: [0, -1], ArrowDown: [0, 1],
+        };
+        if (ARROW_DELTA[e.key]) {
+            if (currentSelectionIds.length > 0) {
+                e.preventDefault();
+                const d = ARROW_DELTA[e.key];
+                window.__deck.send("Interaction", {
+                    kind: "NudgeSelectionRequested", dx: d[0], dy: d[1],
+                });
+                return;
+            }
+            const horizontal = e.key === "ArrowLeft" || e.key === "ArrowRight";
+            const navFocus = focusRegion === "preview" || focusRegion === "navigator";
+            if (horizontal && navFocus) {
+                e.preventDefault();
+                window.__deck.send("Interaction", {
+                    kind: "NavigateSlideRequested", forward: e.key === "ArrowRight",
+                });
+                return;
+            }
         }
         const isSingleChar = (typeof e.key === "string" && e.key.length === 1);
         const recognizedControl = [

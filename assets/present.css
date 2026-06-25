@@ -44,8 +44,14 @@ body {
     transform-origin: center center;
 }
 
-/* The slide host + its section fill the stage exactly. */
-.present-host,
+/* The slide host fills the stage exactly. Absolute so two hosts can stack
+   during a slide transition (outgoing + incoming); the stage is
+   position:relative. A single static host still fills via inset:0. */
+.present-host {
+    position: absolute;
+    inset: 0;
+}
+
 .present-host > .slide {
     width: 100%;
     height: 100%;

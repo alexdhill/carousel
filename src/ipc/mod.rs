@@ -539,7 +539,16 @@ pub enum InteractionEvent {
     // AssetImported with as_slide_background=true (it carries the bytes).
     SetSlideBackgroundImageCleared,
     SetSlideNotesRequested { notes: String },
+    // Outgoing presentation transition for the active slide. None = cut (the
+    // dropdown's "None" clears the field).
+    SetSlideTransitionRequested { transition: Option<crate::deck::SlideTransition> },
     SetSlideLayoutRequested { layout_id: LayoutId },
+    // Arrow-key nudge of the current selection by (dx, dy) px on the active
+    // canvas (one undoable step; a CompositeCommand when many are selected).
+    NudgeSelectionRequested { dx: f64, dy: f64 },
+    // Arrow-key slide navigation when the canvas or navigator is focused with
+    // no element selected. `forward` = next slide (ArrowRight), else previous.
+    NavigateSlideRequested { forward: bool },
     // SetGroupLayout — patch a group's flex props (None = leave as-is).
     SetGroupLayout {
         element_id: ElementId,
@@ -873,6 +882,10 @@ pub struct SlideInspectorData {
     // JS box resolves the asset id to a blob URL for the picker thumbnail.
     #[serde(default)]
     pub background_image: String,
+    // Outgoing presentation transition; None = cut. Drives the Slide box's
+    // transition dropdown + duration/easing controls.
+    #[serde(default)]
+    pub transition: Option<crate::deck::SlideTransition>,
     pub layout_id: LayoutId,
     pub layouts: Vec<SlideInspectorLayout>,
 }
@@ -1082,6 +1095,7 @@ mod tests {
             notes: "speak up".into(),
             background: "#222".into(),
             background_image: String::new(),
+            transition: None,
             layout_id: "title".into(),
             layouts: vec![SlideInspectorLayout { id: "blank".into(), name: "Blank".into() }],
         };

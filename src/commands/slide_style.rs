@@ -106,6 +106,52 @@ impl Command for SetSlideBackgroundImage {
     }
 }
 
+// SetSlideTransition — per-slide outgoing presentation transition.
+// Presentation-only: it never renders, so NO remount. Slide-meta authoritative,
+// self-inverse, manifest-dirty, rebroadcasts the Slide box.
+#[derive(Debug, Clone)]
+pub struct SetSlideTransition {
+    pub slide_id: SlideId,
+    pub transition: Option<crate::deck::SlideTransition>,
+}
+
+impl Command for SetSlideTransition {
+    // apply
+    // Inputs: &self, &mut Deck.
+    // Output: CommandOutput; sets the SlideNode metadata transition, marks the
+    // slide dirty + manifest dirty, returns the inverse carrying the prior value.
+    // No patches/remount — transitions affect presentation playback only.
+    // Errors: SlideNotFound when no slide matches slide_id.
+    fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
+        assert!(!self.slide_id.is_empty(), "SetSlideTransition: empty slide_id");
+        let slide = deck
+            .slides
+            .get_mut(&self.slide_id)
+            .ok_or_else(|| CommandError::SlideNotFound(self.slide_id.clone()))?;
+        let prior: Option<crate::deck::SlideTransition> = slide.metadata.transition.clone();
+        slide.metadata.transition = self.transition.clone();
+        deck.manifest_dirty = true;
+        Ok(CommandOutput {
+            patches: Vec::new(),
+            inverse: Box::new(SetSlideTransition {
+                slide_id: self.slide_id.clone(),
+                transition: prior,
+            }),
+            dirty_targets: vec![CanvasTarget::Slide(self.slide_id.clone())],
+            manifest_dirty: true,
+            warnings: Vec::new(),
+        })
+    }
+
+    fn label(&self) -> &'static str {
+        "Set Slide Transition"
+    }
+
+    fn affects_slide_meta(&self) -> bool {
+        true
+    }
+}
+
 // SetSlideNotes
 #[derive(Debug, Clone)]
 pub struct SetSlideNotes {
@@ -278,6 +324,24 @@ mod tests {
         assert!(cmd.affects_slide_meta());
         out.inverse.apply(&mut deck).unwrap();
         assert_eq!(deck.slides[&sid].metadata.background_image, None);
+    }
+
+    #[test]
+    fn transition_sets_and_inverts() {
+        let (mut deck, sid) = sample();
+        let t = crate::deck::SlideTransition {
+            kind: crate::deck::TransitionKind::Fade,
+            duration_ms: 600,
+            easing: "ease-in-out".into(),
+        };
+        let cmd = SetSlideTransition { slide_id: sid.clone(), transition: Some(t.clone()) };
+        let out = cmd.apply(&mut deck).unwrap();
+        assert_eq!(deck.slides[&sid].metadata.transition, Some(t));
+        assert!(deck.manifest_dirty);
+        assert!(cmd.affects_slide_meta());
+        assert!(!cmd.requires_remount()); // presentation-only, never re-renders
+        out.inverse.apply(&mut deck).unwrap();
+        assert_eq!(deck.slides[&sid].metadata.transition, None);
     }
 
     #[test]

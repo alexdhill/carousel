@@ -133,6 +133,8 @@ pub fn serialize_deck(deck: &Deck) -> BundleResult<SerializedDeck> {
             // the manifest for persistence, like the animation timeline.
             entry.background = slide.metadata.background.clone();
             entry.background_image = slide.metadata.background_image.clone();
+            // Outgoing presentation transition — slide-meta authoritative.
+            entry.transition = slide.metadata.transition.clone();
         }
     }
     let manifest_json: String = serde_json::to_string_pretty(&manifest)?;
@@ -367,6 +369,7 @@ pub fn deserialize_deck(serialized: SerializedDeck) -> BundleResult<Deck> {
         // re-derives the section inline style from it on the next save).
         slide.metadata.background = entry.background.clone();
         slide.metadata.background_image = entry.background_image.clone();
+        slide.metadata.transition = entry.transition.clone();
         // Manifest is authoritative for slide id; ensure parsed slide
         // matches so round trips are stable.
         if slide.id != entry.id {
