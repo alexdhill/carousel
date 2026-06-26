@@ -70,7 +70,19 @@ const CUT_LABEL: &str = "Cut";
 // serialization would only matter for a future OS clipboard).
 enum Clipboard {
     Elements(Vec<ElementNode>),
-    Slide(SlideNode),
+    Slide(Box<SlideNode>),
+}
+
+// AssetImport: the AssetImported event payload, bundled for one-arg passing.
+struct AssetImport {
+    content_base64: String,
+    original_filename: String,
+    media_type: String,
+    width: u32,
+    height: u32,
+    position: Option<Point>,
+    as_slide_background: bool,
+    as_element_fill: Option<String>,
 }
 
 // PasteOutcome: what build_paste_command wants selected/activated afterward.
@@ -1165,7 +1177,7 @@ impl ApplicationCore {
                 position,
                 as_slide_background,
                 as_element_fill,
-            } => self.interpret_asset_imported(
+            } => self.interpret_asset_imported(AssetImport {
                 content_base64,
                 original_filename,
                 media_type,
@@ -1174,7 +1186,7 @@ impl ApplicationCore {
                 position,
                 as_slide_background,
                 as_element_fill,
-            ),
+            }),
             InteractionEvent::SlideThumbnailClicked { slide_id } => {
                 if slide_id.is_empty() {
                     InterpretResult::Nothing
@@ -2042,6 +2054,7 @@ impl ApplicationCore {
     }
 
     // interpret_asset_imported
+    // Takes an AssetImport (the AssetImported event payload, bundled).
     // Inputs: the AssetImported event payload — base64 bytes, file
     // metadata, natural pixel dimensions, optional slide-space drop
     // position.
@@ -2060,17 +2073,17 @@ impl ApplicationCore {
     //      at the drop point, inline-style background-size:cover so the
     //      object-fit semantic carries through the <div> render path).
     //   5. Construct InsertElement targeting the active canvas's root.
-    fn interpret_asset_imported(
-        &mut self,
-        content_base64: String,
-        original_filename: String,
-        media_type: String,
-        width: u32,
-        height: u32,
-        position: Option<Point>,
-        as_slide_background: bool,
-        as_element_fill: Option<String>,
-    ) -> InterpretResult {
+    fn interpret_asset_imported(&mut self, a: AssetImport) -> InterpretResult {
+        let AssetImport {
+            content_base64,
+            original_filename,
+            media_type,
+            width,
+            height,
+            position,
+            as_slide_background,
+            as_element_fill,
+        } = a;
         // Target the active canvas (slide OR layout) so media drops into the
         // layout being edited in layout mode, not the hidden active slide.
         let target: CanvasTarget = match self.active_canvas() {
@@ -2972,7 +2985,7 @@ fn collect_copy(
         crate::ipc::ClipboardScope::Slide => {
             let sid = active_slide?;
             let slide = deck.slides.get(sid)?;
-            Some(Clipboard::Slide(slide.clone()))
+            Some(Clipboard::Slide(Box::new(slide.clone())))
         }
     }
 }
@@ -3048,7 +3061,7 @@ fn build_paste_command(
             };
             let cmd: Box<dyn Command> = Box::new(InsertSlide {
                 position,
-                slide: copy,
+                slide: *copy,
                 manifest_entry,
             });
             Some((cmd, PasteOutcome::Slide(new_id)))
@@ -5285,7 +5298,7 @@ mod tests {
     fn paste_slide_inserts_after_active_with_fresh_ids() {
         let (d, _sel, sid, _eid) = fixture();
         let slide = d.deck().slides.get(&sid).unwrap().clone();
-        let clip = Clipboard::Slide(slide.clone());
+        let clip = Clipboard::Slide(Box::new(slide.clone()));
         let (cmd, outcome) =
             build_paste_command(Some(CanvasTarget::Slide(sid.clone())), &clip, d.deck()).unwrap();
         let mut deck = d.deck().clone();

@@ -627,6 +627,8 @@ fn parse_scale(s: &str) -> f64 {
 }
 fn scale_regex() -> &'static Regex {
     static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    // Pattern is a compile-time constant; it cannot fail to compile.
+    #[allow(clippy::unwrap_used)]
     RE.get_or_init(|| Regex::new(r"scale\(\s*([0-9.]+)\s*\)").unwrap())
 }
 

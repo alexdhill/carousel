@@ -403,6 +403,7 @@ mod tests {
 
 #[cfg(test)]
 mod group_style_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
     #[test]
     fn group_style_default_is_row_none_none_unscaled() {

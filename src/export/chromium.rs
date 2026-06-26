@@ -390,6 +390,7 @@ fn ensure_executable(path: &Path) {
 fn ensure_executable(_path: &Path) {}
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
