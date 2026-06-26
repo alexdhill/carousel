@@ -8439,6 +8439,16 @@
         });
     }
 
+    // clickAddButton: trigger a toolbar add button by selector, so keyboard
+    // shortcuts reuse the existing click wiring (InsertElementRequested / the
+    // image file picker). No-op if the button is absent.
+    function clickAddButton(selector) {
+        const b = document.querySelector(selector);
+        if (b) {
+            b.click();
+        }
+    }
+
     // isEditableFocus
     // Inputs: none (reads document.activeElement).
     // Output: true when the focused element is a text-editing control —
@@ -8542,6 +8552,45 @@
             const k = e.key.toLowerCase();
             if (k === "v") { e.preventDefault(); setTool("select"); return; }
             if (k === "h") { e.preventDefault(); setTool("hand"); return; }
+        }
+        // Add-element shortcuts (not while typing). They click the matching
+        // toolbar button so behavior — including the image file picker — is
+        // identical to a click. T text · ⇧S shape · ⇧I image · ⇧C code ·
+        // ⇧T table · ⌘G group.
+        if (!isEditableFocus() && !e.altKey && typeof e.key === "string") {
+            const lk = e.key.toLowerCase();
+            if ((e.metaKey || e.ctrlKey) && !e.shiftKey && lk === "g") {
+                e.preventDefault();
+                clickAddButton('.objects__add[data-element-type="group"]');
+                return;
+            }
+            if (!e.metaKey && !e.ctrlKey) {
+                if (!e.shiftKey && lk === "t") {
+                    e.preventDefault();
+                    clickAddButton('.objects__add[data-element-type="text"]');
+                    return;
+                }
+                if (e.shiftKey && lk === "s") {
+                    e.preventDefault();
+                    clickAddButton('.objects__add[data-element-type="shape"]');
+                    return;
+                }
+                if (e.shiftKey && lk === "i") {
+                    e.preventDefault();
+                    clickAddButton("#tool-add-image");
+                    return;
+                }
+                if (e.shiftKey && lk === "c") {
+                    e.preventDefault();
+                    clickAddButton('.objects__add[data-element-type="embed"]');
+                    return;
+                }
+                if (e.shiftKey && lk === "t") {
+                    e.preventDefault();
+                    clickAddButton('.objects__add[data-element-type="table"]');
+                    return;
+                }
+            }
         }
         if (matchGridToggleShortcut(e)) {
             e.preventDefault();
