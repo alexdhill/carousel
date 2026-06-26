@@ -57,7 +57,9 @@ pub fn image_element(id: impl Into<ElementId>, asset_id: impl Into<String>) -> E
         element_type: ElementType::Image,
         geometry: Geometry::default(),
         style: ElementStyle::Image(ImageStyle::default()),
-        content: ElementContent::Image(AssetRef { asset_id: asset_id.into() }),
+        content: ElementContent::Image(AssetRef {
+            asset_id: asset_id.into(),
+        }),
         children: vec![],
         placeholder_fill: None,
         name: None,
@@ -133,7 +135,10 @@ pub fn embed_element(id: impl Into<ElementId>, html: impl Into<String>) -> Eleme
 // table_element
 // Inputs: id, a TableData grid.
 // Output: a Table ElementNode wrapping the grid.
-pub fn table_element(id: impl Into<ElementId>, data: crate::deck::element::TableData) -> ElementNode {
+pub fn table_element(
+    id: impl Into<ElementId>,
+    data: crate::deck::element::TableData,
+) -> ElementNode {
     let id: ElementId = id.into();
     assert!(!id.is_empty(), "element id must not be empty");
     ElementNode {
@@ -173,8 +178,17 @@ mod tests {
 
     #[test]
     fn styled_text_preserves_inputs() {
-        let g = Geometry { x: 1.0, y: 2.0, width: 3.0, height: 4.0, ..Default::default() };
-        let s = TextStyle { font_weight: 700, ..TextStyle::default() };
+        let g = Geometry {
+            x: 1.0,
+            y: 2.0,
+            width: 3.0,
+            height: 4.0,
+            ..Default::default()
+        };
+        let s = TextStyle {
+            font_weight: 700,
+            ..TextStyle::default()
+        };
         let n = text_element_styled("id", "x", g.clone(), s.clone());
         assert_eq!(n.geometry, g);
         match &n.style {

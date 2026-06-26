@@ -25,15 +25,15 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 
-pub use element::{
-    AssetRef, ElementContent, ElementNode, ElementStyle, ElementType, RichText, ShapeGeometry,
-    TableCell, TableData,
-};
 pub use animation::{
     AnimationCategory, AnimationEntry, AnimationIterations, AnimationState, AnimationTiming,
     AnimationTrigger,
 };
 pub use canvas::{Canvas, InsertError, RemovedElement};
+pub use element::{
+    AssetRef, ElementContent, ElementNode, ElementStyle, ElementType, RichText, ShapeGeometry,
+    TableCell, TableData,
+};
 pub use ids::{
     AnimationId, AssetId, ElementId, LayoutId, SlideId, new_animation_id, new_element_id,
     new_slide_id,
@@ -110,7 +110,10 @@ impl Deck {
                 _ => lay.filter(|s| !s.is_empty()).cloned(),
             }
         };
-        let fill = pick(&slide.metadata.background, layout.and_then(|l| l.background.as_ref()));
+        let fill = pick(
+            &slide.metadata.background,
+            layout.and_then(|l| l.background.as_ref()),
+        );
         let img = pick(
             &slide.metadata.background_image,
             layout.and_then(|l| l.background_image.as_ref()),
@@ -183,7 +186,13 @@ impl Deck {
         let title = text_element_styled(
             title_id,
             "Hello from the in-memory tree.",
-            Geometry { x: 120.0, y: 200.0, width: 1680.0, height: 120.0, ..Default::default() },
+            Geometry {
+                x: 120.0,
+                y: 200.0,
+                width: 1680.0,
+                height: 120.0,
+                ..Default::default()
+            },
             TextStyle {
                 font_size: Length::px(72.0),
                 font_weight: 700,
@@ -196,7 +205,13 @@ impl Deck {
         let subtitle = text_element_styled(
             subtitle_id,
             "Slide HTML now produced by the Rust serializer.",
-            Geometry { x: 120.0, y: 340.0, width: 1680.0, height: 60.0, ..Default::default() },
+            Geometry {
+                x: 120.0,
+                y: 340.0,
+                width: 1680.0,
+                height: 60.0,
+                ..Default::default()
+            },
             TextStyle {
                 font_size: Length::px(36.0),
                 color: ColorRef::Theme("muted".into()),
@@ -207,7 +222,13 @@ impl Deck {
         let body = text_element_styled(
             body_id,
             "Edit Deck::sample in src/deck/mod.rs and recompile.",
-            Geometry { x: 120.0, y: 460.0, width: 1680.0, height: 60.0, ..Default::default() },
+            Geometry {
+                x: 120.0,
+                y: 460.0,
+                width: 1680.0,
+                height: 60.0,
+                ..Default::default()
+            },
             TextStyle {
                 font_size: Length::px(28.0),
                 color: ColorRef::Literal("#444".into()),
@@ -215,10 +236,7 @@ impl Deck {
             },
         );
 
-        let root: ElementNode = group_element(
-            "el_slide_root",
-            vec![title, subtitle, body],
-        );
+        let root: ElementNode = group_element("el_slide_root", vec![title, subtitle, body]);
         let slide_id: SlideId = "slide_demo".into();
         let slide: SlideNode = SlideNode::new(slide_id.clone(), "title".into(), root);
 
@@ -272,9 +290,7 @@ impl Deck {
     pub fn canvas(&self, target: &CanvasTarget) -> Option<&dyn Canvas> {
         match target {
             CanvasTarget::Slide(id) => self.slides.get(id).map(|s| s as &dyn Canvas),
-            CanvasTarget::Layout(id) => {
-                self.theme.layouts.get(id).map(|l| l as &dyn Canvas)
-            }
+            CanvasTarget::Layout(id) => self.theme.layouts.get(id).map(|l| l as &dyn Canvas),
         }
     }
 
@@ -286,9 +302,7 @@ impl Deck {
     // active editable surface regardless of whether it is a slide or layout.
     pub fn canvas_mut(&mut self, target: &CanvasTarget) -> Option<&mut dyn Canvas> {
         match target {
-            CanvasTarget::Slide(id) => {
-                self.slides.get_mut(id).map(|s| s as &mut dyn Canvas)
-            }
+            CanvasTarget::Slide(id) => self.slides.get_mut(id).map(|s| s as &mut dyn Canvas),
             CanvasTarget::Layout(id) => {
                 self.theme.layouts.get_mut(id).map(|l| l as &mut dyn Canvas)
             }

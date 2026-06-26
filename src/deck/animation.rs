@@ -125,7 +125,10 @@ impl AnimationEntry {
         timing: AnimationTiming,
     ) -> Self {
         assert!(!id.is_empty(), "animation id must not be empty");
-        assert!(!element_id.is_empty(), "animation element_id must not be empty");
+        assert!(
+            !element_id.is_empty(),
+            "animation element_id must not be empty"
+        );
         let pairing_ok = match (category, &effect) {
             (AnimationCategory::Property, AnimationEffect::PropertyChange(t)) => !t.is_empty(),
             (AnimationCategory::Property, _) => false,
@@ -133,7 +136,14 @@ impl AnimationEntry {
             (_, AnimationEffect::PropertyChange(_)) => false,
         };
         assert!(pairing_ok, "animation effect/category mismatch or empty");
-        Self { id, element_id, effect, category, trigger, timing }
+        Self {
+            id,
+            element_id,
+            effect,
+            category,
+            trigger,
+            timing,
+        }
     }
 }
 
@@ -276,32 +286,71 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
 
-    fn entry_at(id: &str, el: &str, cat: AnimationCategory, trig: AnimationTrigger) -> AnimationEntry {
-        AnimationEntry::new(id.into(), el.into(), AnimationEffect::Named("appear".into()),
-            cat, trig, AnimationTiming::default())
+    fn entry_at(
+        id: &str,
+        el: &str,
+        cat: AnimationCategory,
+        trig: AnimationTrigger,
+    ) -> AnimationEntry {
+        AnimationEntry::new(
+            id.into(),
+            el.into(),
+            AnimationEffect::Named("appear".into()),
+            cat,
+            trig,
+            AnimationTiming::default(),
+        )
     }
     fn click(id: &str) -> AnimationEntry {
-        entry_at(id, "el", AnimationCategory::Entrance, AnimationTrigger::OnClick)
+        entry_at(
+            id,
+            "el",
+            AnimationCategory::Entrance,
+            AnimationTrigger::OnClick,
+        )
     }
     fn with(id: &str) -> AnimationEntry {
-        entry_at(id, "el", AnimationCategory::Entrance, AnimationTrigger::WithPrevious)
+        entry_at(
+            id,
+            "el",
+            AnimationCategory::Entrance,
+            AnimationTrigger::WithPrevious,
+        )
     }
     fn enter(id: &str, el: &str) -> AnimationEntry {
-        AnimationEntry::new(id.into(), el.into(), AnimationEffect::Named("appear".into()),
-            AnimationCategory::Entrance, AnimationTrigger::OnClick, AnimationTiming::default())
+        AnimationEntry::new(
+            id.into(),
+            el.into(),
+            AnimationEffect::Named("appear".into()),
+            AnimationCategory::Entrance,
+            AnimationTrigger::OnClick,
+            AnimationTiming::default(),
+        )
     }
     fn exit(id: &str, el: &str) -> AnimationEntry {
-        AnimationEntry::new(id.into(), el.into(), AnimationEffect::Named("disappear".into()),
-            AnimationCategory::Exit, AnimationTrigger::OnClick, AnimationTiming::default())
+        AnimationEntry::new(
+            id.into(),
+            el.into(),
+            AnimationEffect::Named("disappear".into()),
+            AnimationCategory::Exit,
+            AnimationTrigger::OnClick,
+            AnimationTiming::default(),
+        )
     }
 
     #[test]
     fn entry_serde_roundtrips_with_finite_and_infinite() {
         for iters in [AnimationIterations::Count(3), AnimationIterations::Infinite] {
             let e = AnimationEntry::new(
-                "anim_1".into(), "el_a".into(), AnimationEffect::Named("appear".into()),
-                AnimationCategory::Entrance, AnimationTrigger::OnClick,
-                AnimationTiming { iterations: iters, ..AnimationTiming::default() },
+                "anim_1".into(),
+                "el_a".into(),
+                AnimationEffect::Named("appear".into()),
+                AnimationCategory::Entrance,
+                AnimationTrigger::OnClick,
+                AnimationTiming {
+                    iterations: iters,
+                    ..AnimationTiming::default()
+                },
             );
             let json = serde_json::to_string(&e).unwrap();
             assert_eq!(serde_json::from_str::<AnimationEntry>(&json).unwrap(), e);
@@ -311,9 +360,10 @@ mod tests {
     #[test]
     fn effect_named_and_property_serde_roundtrip() {
         let named = AnimationEffect::Named("fade-in".into());
-        let prop = AnimationEffect::PropertyChange(vec![
-            PropertyTarget { property: "opacity".into(), value: "1".into() },
-        ]);
+        let prop = AnimationEffect::PropertyChange(vec![PropertyTarget {
+            property: "opacity".into(),
+            value: "1".into(),
+        }]);
         for eff in [named, prop] {
             let j = serde_json::to_string(&eff).unwrap();
             assert_eq!(serde_json::from_str::<AnimationEffect>(&j).unwrap(), eff);
@@ -324,16 +374,26 @@ mod tests {
     #[should_panic(expected = "effect/category")]
     fn property_category_requires_property_effect() {
         let _ = AnimationEntry::new(
-            "a".into(), "el".into(), AnimationEffect::Named("pulse".into()),
-            AnimationCategory::Property, AnimationTrigger::OnClick, AnimationTiming::default());
+            "a".into(),
+            "el".into(),
+            AnimationEffect::Named("pulse".into()),
+            AnimationCategory::Property,
+            AnimationTrigger::OnClick,
+            AnimationTiming::default(),
+        );
     }
 
     #[test]
     fn multiple_entrances_allowed_by_accommodating_index() {
         // accommodating_index never clamps now; identical category twice is fine.
-        let e1 = AnimationEntry::new("e1".into(), "el".into(),
-            AnimationEffect::Named("appear".into()), AnimationCategory::Entrance,
-            AnimationTrigger::OnClick, AnimationTiming::default());
+        let e1 = AnimationEntry::new(
+            "e1".into(),
+            "el".into(),
+            AnimationEffect::Named("appear".into()),
+            AnimationCategory::Entrance,
+            AnimationTrigger::OnClick,
+            AnimationTiming::default(),
+        );
         let (idx, warn) = accommodating_index(&[e1.clone()], 9, &e1);
         assert_eq!(idx, 1);
         assert!(warn.is_none());
@@ -396,6 +456,9 @@ mod tests {
         let good = [enter("e", "el_a"), exit("x", "el_a")];
         assert!(ordering_ok(&good, "el_a"));
         assert!(has_category(&good, "el_a", AnimationCategory::Exit));
-        assert_eq!(index_of_category(&good, "el_a", AnimationCategory::Entrance), Some(0));
+        assert_eq!(
+            index_of_category(&good, "el_a", AnimationCategory::Entrance),
+            Some(0)
+        );
     }
 }

@@ -38,7 +38,10 @@ pub fn new_slide_id() -> SlideId {
 // Output: a fresh animation ID of the form "anim_<ULID>".
 pub fn new_animation_id() -> AnimationId {
     let out: String = format!("anim_{}", Ulid::new());
-    assert!(out.starts_with("anim_"), "animation id must carry anim_ prefix");
+    assert!(
+        out.starts_with("anim_"),
+        "animation id must carry anim_ prefix"
+    );
     out
 }
 
@@ -65,7 +68,8 @@ mod tests {
     #[test]
     fn ids_are_unique_within_a_burst() {
         let n: usize = 1000;
-        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::with_capacity(n);
+        let mut seen: std::collections::HashSet<String> =
+            std::collections::HashSet::with_capacity(n);
         for _ in 0..n {
             assert!(seen.insert(new_element_id()));
         }

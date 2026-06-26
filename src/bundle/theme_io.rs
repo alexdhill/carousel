@@ -88,7 +88,10 @@ pub fn serialize_theme(theme: &ThemeData, assets: &AssetRegistry) -> BundleResul
         });
         // Reuse the slide serializer via a transient SlideNode carrying the
         // layout's own background (a layout root is a Group, like a slide root).
-        layout_files.insert(theme_layout_path(lid), serialize_slide(&layout.preview_slide()));
+        layout_files.insert(
+            theme_layout_path(lid),
+            serialize_slide(&layout.preview_slide()),
+        );
     }
 
     let manifest = ThemeArchiveManifest {
@@ -280,7 +283,10 @@ fn collect_node_assets(root: &ElementNode, out: &mut BTreeSet<String>) {
     stack.push(root);
     let mut iter: usize = 0;
     while let Some(node) = stack.pop() {
-        assert!(iter < MAX_TREE_NODES, "collect_node_assets: node bound exceeded");
+        assert!(
+            iter < MAX_TREE_NODES,
+            "collect_node_assets: node bound exceeded"
+        );
         iter += 1;
         match &node.content {
             ElementContent::Image(a) | ElementContent::Media(a) => {
@@ -310,7 +316,12 @@ mod tests {
     // a second registered asset is left unreferenced (must NOT travel).
     fn theme_with_image_layout() -> (ThemeData, AssetRegistry, String) {
         let mut assets = AssetRegistry::new_empty();
-        let used = assets.insert_blob(vec![1, 2, 3, 4], "logo.png".into(), "image/png".into(), None);
+        let used = assets.insert_blob(
+            vec![1, 2, 3, 4],
+            "logo.png".into(),
+            "image/png".into(),
+            None,
+        );
         let _unused =
             assets.insert_blob(vec![9, 9, 9], "stray.png".into(), "image/png".into(), None);
 
@@ -363,7 +374,12 @@ mod tests {
         assert!(root.children.iter().any(|c| c.id == "el_img"));
         // The referenced asset travelled with its bytes; the stray did not.
         assert_eq!(back_assets.assets.len(), 1);
-        let entry = back_assets.find_by_id(&used_id).expect("used asset present");
-        assert_eq!(back_assets.files.get(&entry.path), Some(&vec![1u8, 2, 3, 4]));
+        let entry = back_assets
+            .find_by_id(&used_id)
+            .expect("used asset present");
+        assert_eq!(
+            back_assets.files.get(&entry.path),
+            Some(&vec![1u8, 2, 3, 4])
+        );
     }
 }

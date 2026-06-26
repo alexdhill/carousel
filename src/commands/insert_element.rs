@@ -36,10 +36,19 @@ impl Command for InsertElement {
     // Dataflow: locate slide -> clone node into the tree at (parent, pos)
     // -> serialize the inserted node -> build patch + inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
-        assert!(!self.target.id().is_empty(), "InsertElement: target id is empty");
-        assert!(!self.parent_id.is_empty(), "InsertElement: parent_id is empty");
+        assert!(
+            !self.target.id().is_empty(),
+            "InsertElement: target id is empty"
+        );
+        assert!(
+            !self.parent_id.is_empty(),
+            "InsertElement: parent_id is empty"
+        );
         assert!(!self.node.id.is_empty(), "InsertElement: node has empty id");
-        assert!(self.node.is_consistent(), "InsertElement: node is inconsistent");
+        assert!(
+            self.node.is_consistent(),
+            "InsertElement: node is inconsistent"
+        );
         let canvas = resolve_canvas_mut(deck, &self.target)?;
 
         let inserted_id: ElementId = self.node.id.clone();
@@ -147,7 +156,11 @@ mod tests {
         let out = cmd.apply(&mut deck).unwrap();
         assert_eq!(out.patches.len(), 1);
         match &out.patches[0] {
-            Patch::InsertElement { parent_id, position, html } => {
+            Patch::InsertElement {
+                parent_id,
+                position,
+                html,
+            } => {
                 assert_eq!(parent_id, &root_id);
                 assert_eq!(*position, 0);
                 assert!(html.contains(r#"data-element-id="new_a""#));

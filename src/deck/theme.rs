@@ -108,7 +108,10 @@ mod tests {
         let blank = t.layouts.get("blank").expect("blank layout present");
         assert_eq!(blank.name, "Blank");
         assert!(blank.root.children.is_empty());
-        assert_eq!(blank.root.element_type, crate::deck::element::ElementType::Group);
+        assert_eq!(
+            blank.root.element_type,
+            crate::deck::element::ElementType::Group
+        );
     }
 
     #[test]

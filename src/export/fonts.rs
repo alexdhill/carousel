@@ -37,8 +37,13 @@ pub fn build_font_faces(deck: &Deck) -> (String, Vec<(String, Vec<u8>)>) {
             None => continue,
         };
         let style: &str = if *italic { "italic" } else { "normal" };
-        let path: String =
-            format!("fonts/{}-{}-{}.{}", font_slug(family), weight, style, fmt.ext());
+        let path: String = format!(
+            "fonts/{}-{}-{}.{}",
+            font_slug(family),
+            weight,
+            style,
+            fmt.ext()
+        );
         css.push_str(&font_face_rule(family, *weight, *italic, &path, fmt.css()));
         files.push((path, bytes));
     }
@@ -207,7 +212,10 @@ mod tests {
     use super::*;
 
     fn vars(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     #[test]
@@ -217,14 +225,20 @@ mod tests {
             "--theme-title-family: Inter, sans-serif; --theme-accent: #f00;",
             &mut out,
         );
-        assert_eq!(out.get("theme-title-family").map(String::as_str), Some("Inter, sans-serif"));
+        assert_eq!(
+            out.get("theme-title-family").map(String::as_str),
+            Some("Inter, sans-serif")
+        );
         assert!(out.get("theme-accent").is_none());
     }
 
     #[test]
     fn concrete_families_skips_generics_and_resolves_vars() {
         let v = vars(&[("theme-body-family", "\"Helvetica Neue\", Arial, sans-serif")]);
-        assert_eq!(concrete_families("\"Inter\", sans-serif", &v), vec!["Inter".to_string()]);
+        assert_eq!(
+            concrete_families("\"Inter\", sans-serif", &v),
+            vec!["Inter".to_string()]
+        );
         assert_eq!(
             concrete_families("var(--theme-body-family)", &v),
             vec!["Helvetica Neue".to_string(), "Arial".to_string()]

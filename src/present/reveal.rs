@@ -26,9 +26,13 @@ const MAX_TIMELINE: usize = 4_096;
 // initial mount, and cross-slide landings (no animation plays).
 pub fn snap_reveal(slide_id: &str, timeline: &[AnimationEntry], step: usize) -> RevealPayload {
     assert!(!slide_id.is_empty(), "snap_reveal: empty slide id");
-    let (hidden, shown): (Vec<String>, Vec<String>) =
-        resolve_rest(timeline, step, &[]);
-    RevealPayload { slide_id: slide_id.into(), hidden, shown, animate: Vec::new() }
+    let (hidden, shown): (Vec<String>, Vec<String>) = resolve_rest(timeline, step, &[]);
+    RevealPayload {
+        slide_id: slide_id.into(),
+        hidden,
+        shown,
+        animate: Vec::new(),
+    }
 }
 
 // forward_reveal
@@ -38,7 +42,11 @@ pub fn snap_reveal(slide_id: &str, timeline: &[AnimationEntry], step: usize) -> 
 // that fire on this k-1 -> k transition), each with an effective delay; all
 // other timeline elements are resolved into `shown` / `hidden`. An element that
 // animates this transition appears ONLY in `animate`.
-pub fn forward_reveal(slide_id: &str, timeline: &[AnimationEntry], to_step: usize) -> RevealPayload {
+pub fn forward_reveal(
+    slide_id: &str,
+    timeline: &[AnimationEntry],
+    to_step: usize,
+) -> RevealPayload {
     assert!(!slide_id.is_empty(), "forward_reveal: empty slide id");
     assert!(to_step >= 1, "forward_reveal: to_step must be >= 1");
     let prev_len: usize = entries_through(timeline, to_step - 1).len();
@@ -62,9 +70,13 @@ pub fn forward_reveal(slide_id: &str, timeline: &[AnimationEntry], to_step: usiz
         });
         animating.push(e.element_id.as_str());
     }
-    let (hidden, shown): (Vec<String>, Vec<String>) =
-        resolve_rest(timeline, to_step, &animating);
-    RevealPayload { slide_id: slide_id.into(), hidden, shown, animate }
+    let (hidden, shown): (Vec<String>, Vec<String>) = resolve_rest(timeline, to_step, &animating);
+    RevealPayload {
+        slide_id: slide_id.into(),
+        hidden,
+        shown,
+        animate,
+    }
 }
 
 // resolve_rest
@@ -168,7 +180,12 @@ mod tests {
             AnimationEffect::Named(keyframe.into()),
             cat,
             trig,
-            AnimationTiming { duration_ms, delay_ms, easing: "ease".into(), ..Default::default() },
+            AnimationTiming {
+                duration_ms,
+                delay_ms,
+                easing: "ease".into(),
+                ..Default::default()
+            },
         )
     }
 
@@ -218,7 +235,15 @@ mod tests {
         // el_b appears only via emphasis (always visible); el_a enters step 1.
         let t = [
             enter("a1", "el_a", AnimationTrigger::OnClick),
-            entry("e1", "el_b", "pulse", AnimationCategory::Emphasis, AnimationTrigger::OnClick, 0, 300),
+            entry(
+                "e1",
+                "el_b",
+                "pulse",
+                AnimationCategory::Emphasis,
+                AnimationTrigger::OnClick,
+                0,
+                300,
+            ),
         ];
         let r = snap_reveal("s1", &t, 2);
         // el_a visible (entered), el_b visible (emphasis only) — order a then b.
@@ -264,8 +289,24 @@ mod tests {
     fn forward_after_previous_accumulates_effective_delay() {
         // Same step (step 1): a1 OnClick(delay0,dur500), b1 AfterPrevious(delay100,dur300).
         let t = [
-            entry("a1", "el_a", "appear", AnimationCategory::Entrance, AnimationTrigger::OnClick, 0, 500),
-            entry("b1", "el_b", "appear", AnimationCategory::Entrance, AnimationTrigger::AfterPrevious, 100, 300),
+            entry(
+                "a1",
+                "el_a",
+                "appear",
+                AnimationCategory::Entrance,
+                AnimationTrigger::OnClick,
+                0,
+                500,
+            ),
+            entry(
+                "b1",
+                "el_b",
+                "appear",
+                AnimationCategory::Entrance,
+                AnimationTrigger::AfterPrevious,
+                100,
+                300,
+            ),
         ];
         let r = forward_reveal("s1", &t, 1);
         assert_eq!(r.animate.len(), 2);
@@ -279,11 +320,17 @@ mod tests {
     #[test]
     fn property_entry_emits_targets_not_keyframe() {
         use crate::deck::animation::PropertyTarget;
-        let e = AnimationEntry::new("p".into(), "el_a".into(),
-            AnimationEffect::PropertyChange(vec![
-                PropertyTarget { property: "opacity".into(), value: "1".into() }]),
-            AnimationCategory::Property, AnimationTrigger::OnClick,
-            AnimationTiming::default());
+        let e = AnimationEntry::new(
+            "p".into(),
+            "el_a".into(),
+            AnimationEffect::PropertyChange(vec![PropertyTarget {
+                property: "opacity".into(),
+                value: "1".into(),
+            }]),
+            AnimationCategory::Property,
+            AnimationTrigger::OnClick,
+            AnimationTiming::default(),
+        );
         let r = forward_reveal("s1", std::slice::from_ref(&e), 1);
         assert_eq!(r.animate.len(), 1);
         assert!(r.animate[0].keyframe.is_empty());
@@ -295,8 +342,24 @@ mod tests {
     #[test]
     fn forward_with_previous_uses_own_delay_only() {
         let t = [
-            entry("a1", "el_a", "appear", AnimationCategory::Entrance, AnimationTrigger::OnClick, 0, 500),
-            entry("b1", "el_b", "appear", AnimationCategory::Entrance, AnimationTrigger::WithPrevious, 50, 200),
+            entry(
+                "a1",
+                "el_a",
+                "appear",
+                AnimationCategory::Entrance,
+                AnimationTrigger::OnClick,
+                0,
+                500,
+            ),
+            entry(
+                "b1",
+                "el_b",
+                "appear",
+                AnimationCategory::Entrance,
+                AnimationTrigger::WithPrevious,
+                50,
+                200,
+            ),
         ];
         let r = forward_reveal("s1", &t, 1);
         let b = r.animate.iter().find(|i| i.element_id == "el_b").unwrap();

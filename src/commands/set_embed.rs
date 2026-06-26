@@ -29,8 +29,14 @@ impl Command for SetEmbedHtml {
     // Dataflow: resolve canvas -> locate element -> assert Embed content ->
     // snapshot prior -> overwrite -> build patch + inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
-        assert!(!self.target.id().is_empty(), "SetEmbedHtml: target id is empty");
-        assert!(!self.element_id.is_empty(), "SetEmbedHtml: element_id is empty");
+        assert!(
+            !self.target.id().is_empty(),
+            "SetEmbedHtml: target id is empty"
+        );
+        assert!(
+            !self.element_id.is_empty(),
+            "SetEmbedHtml: element_id is empty"
+        );
         let canvas = resolve_canvas_mut(deck, &self.target)?;
         let element = canvas
             .find_element_mut(&self.element_id)
@@ -78,8 +84,8 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
     use crate::deck::Deck;
-    use crate::deck::builders::{embed_element, group_element, image_element};
     use crate::deck::SlideId;
+    use crate::deck::builders::{embed_element, group_element, image_element};
 
     fn deck_with_embed() -> (Deck, SlideId, ElementId) {
         let mut deck = Deck::sample();

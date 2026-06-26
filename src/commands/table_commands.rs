@@ -53,7 +53,10 @@ where
     canvas.invalidate_index();
 
     Ok(CommandOutput {
-        patches: vec![Patch::ReplaceElement { element_id: element_id.clone(), new_html }],
+        patches: vec![Patch::ReplaceElement {
+            element_id: element_id.clone(),
+            new_html,
+        }],
         inverse: Box::new(SetTableData {
             target: target.clone(),
             element_id: element_id.clone(),
@@ -81,7 +84,12 @@ fn normalize_grid(td: &mut TableData) {
 }
 
 fn default_cell() -> TableCell {
-    TableCell { content: RichText::new(""), style_overrides: Default::default(), colspan: 1, rowspan: 1 }
+    TableCell {
+        content: RichText::new(""),
+        style_overrides: Default::default(),
+        colspan: 1,
+        rowspan: 1,
+    }
 }
 
 // SetTableData — replace the whole grid (the universal inverse vehicle). Not
@@ -154,7 +162,9 @@ impl Command for DeleteTableRow {
         let at: usize = self.at;
         mutate_table(deck, &self.target, &self.element_id, move |td| {
             if td.rows <= 1 {
-                return Err(CommandError::InvalidOperation("cannot delete the last row".into()));
+                return Err(CommandError::InvalidOperation(
+                    "cannot delete the last row".into(),
+                ));
             }
             let pos: usize = at.min(td.rows - 1);
             td.cells.remove(pos);
@@ -219,7 +229,9 @@ impl Command for DeleteTableColumn {
         let at: usize = self.at;
         mutate_table(deck, &self.target, &self.element_id, move |td| {
             if td.columns <= 1 {
-                return Err(CommandError::InvalidOperation("cannot delete the last column".into()));
+                return Err(CommandError::InvalidOperation(
+                    "cannot delete the last column".into(),
+                ));
             }
             let pos: usize = at.min(td.columns - 1);
             for row in td.cells.iter_mut() {
@@ -364,16 +376,28 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
     use crate::deck::Deck;
-    use crate::deck::builders::{group_element, table_element};
     use crate::deck::SlideId;
+    use crate::deck::builders::{group_element, table_element};
 
-    fn deck_with_table(rows: usize, columns: usize, header_rows: usize) -> (Deck, SlideId, ElementId) {
-        let cells: Vec<Vec<TableCell>> =
-            (0..rows).map(|_| (0..columns).map(|_| default_cell()).collect()).collect();
-        let td = TableData { rows, columns, cells, header_rows, header_columns: 0 };
+    fn deck_with_table(
+        rows: usize,
+        columns: usize,
+        header_rows: usize,
+    ) -> (Deck, SlideId, ElementId) {
+        let cells: Vec<Vec<TableCell>> = (0..rows)
+            .map(|_| (0..columns).map(|_| default_cell()).collect())
+            .collect();
+        let td = TableData {
+            rows,
+            columns,
+            cells,
+            header_rows,
+            header_columns: 0,
+        };
         let mut deck = Deck::sample();
         let sid: SlideId = deck.slide_order[0].clone();
-        deck.slides.get_mut(&sid).unwrap().root = group_element("rt", vec![table_element("tb", td)]);
+        deck.slides.get_mut(&sid).unwrap().root =
+            group_element("rt", vec![table_element("tb", td)]);
         (deck, sid, "tb".into())
     }
 
@@ -387,7 +411,11 @@ mod tests {
     #[test]
     fn insert_row_grows_and_inverts() {
         let (mut deck, sid, eid) = deck_with_table(2, 3, 1);
-        let cmd = InsertTableRow { target: CanvasTarget::Slide(sid.clone()), element_id: eid.clone(), at: 1 };
+        let cmd = InsertTableRow {
+            target: CanvasTarget::Slide(sid.clone()),
+            element_id: eid.clone(),
+            at: 1,
+        };
         let out = cmd.apply(&mut deck).unwrap();
         let g = grid(&deck, &sid, &eid);
         assert_eq!(g.rows, 3);
@@ -400,7 +428,11 @@ mod tests {
     #[test]
     fn insert_row_inside_header_band_grows_header() {
         let (mut deck, sid, eid) = deck_with_table(3, 2, 2);
-        let cmd = InsertTableRow { target: CanvasTarget::Slide(sid.clone()), element_id: eid.clone(), at: 0 };
+        let cmd = InsertTableRow {
+            target: CanvasTarget::Slide(sid.clone()),
+            element_id: eid.clone(),
+            at: 0,
+        };
         cmd.apply(&mut deck).unwrap();
         assert_eq!(grid(&deck, &sid, &eid).header_rows, 3);
     }
@@ -408,32 +440,48 @@ mod tests {
     #[test]
     fn delete_last_row_errors() {
         let (mut deck, sid, eid) = deck_with_table(1, 3, 0);
-        let err = DeleteTableRow { target: CanvasTarget::Slide(sid), element_id: eid, at: 0 }
-            .apply(&mut deck)
-            .unwrap_err();
+        let err = DeleteTableRow {
+            target: CanvasTarget::Slide(sid),
+            element_id: eid,
+            at: 0,
+        }
+        .apply(&mut deck)
+        .unwrap_err();
         assert!(matches!(err, CommandError::InvalidOperation(_)));
     }
 
     #[test]
     fn insert_and_delete_column() {
         let (mut deck, sid, eid) = deck_with_table(2, 2, 0);
-        InsertTableColumn { target: CanvasTarget::Slide(sid.clone()), element_id: eid.clone(), at: 1 }
-            .apply(&mut deck)
-            .unwrap();
+        InsertTableColumn {
+            target: CanvasTarget::Slide(sid.clone()),
+            element_id: eid.clone(),
+            at: 1,
+        }
+        .apply(&mut deck)
+        .unwrap();
         assert_eq!(grid(&deck, &sid, &eid).columns, 3);
         assert!(grid(&deck, &sid, &eid).cells.iter().all(|r| r.len() == 3));
-        DeleteTableColumn { target: CanvasTarget::Slide(sid.clone()), element_id: eid.clone(), at: 0 }
-            .apply(&mut deck)
-            .unwrap();
+        DeleteTableColumn {
+            target: CanvasTarget::Slide(sid.clone()),
+            element_id: eid.clone(),
+            at: 0,
+        }
+        .apply(&mut deck)
+        .unwrap();
         assert_eq!(grid(&deck, &sid, &eid).columns, 2);
     }
 
     #[test]
     fn set_header_rows_clamps() {
         let (mut deck, sid, eid) = deck_with_table(3, 3, 0);
-        SetTableHeaderRows { target: CanvasTarget::Slide(sid.clone()), element_id: eid.clone(), count: 9 }
-            .apply(&mut deck)
-            .unwrap();
+        SetTableHeaderRows {
+            target: CanvasTarget::Slide(sid.clone()),
+            element_id: eid.clone(),
+            count: 9,
+        }
+        .apply(&mut deck)
+        .unwrap();
         assert_eq!(grid(&deck, &sid, &eid).header_rows, 3);
     }
 
@@ -467,24 +515,56 @@ mod tests {
         .apply(&mut deck)
         .unwrap();
         let g = grid(&deck, &sid, &eid);
-        assert_eq!(g.cells[0][0].style_overrides.get("background-color").map(String::as_str), Some("#eee"));
-        assert_eq!(g.cells[1][1].style_overrides.get("background-color").map(String::as_str), Some("#eee"));
+        assert_eq!(
+            g.cells[0][0]
+                .style_overrides
+                .get("background-color")
+                .map(String::as_str),
+            Some("#eee")
+        );
+        assert_eq!(
+            g.cells[1][1]
+                .style_overrides
+                .get("background-color")
+                .map(String::as_str),
+            Some("#eee")
+        );
         assert!(g.cells[0][1].style_overrides.is_empty());
         out.inverse.apply(&mut deck).unwrap();
-        assert!(grid(&deck, &sid, &eid).cells[0][0].style_overrides.is_empty());
+        assert!(
+            grid(&deck, &sid, &eid).cells[0][0]
+                .style_overrides
+                .is_empty()
+        );
     }
 
     #[test]
     fn set_cell_styles_empty_value_removes_property() {
         let (mut deck, sid, eid) = deck_with_table(1, 1, 0);
         let t = CanvasTarget::Slide(sid.clone());
-        SetCellStyles { target: t.clone(), element_id: eid.clone(), cells: vec![(0, 0)], property: "color".into(), value: "#111".into() }
-            .apply(&mut deck)
-            .unwrap();
-        SetCellStyles { target: t, element_id: eid.clone(), cells: vec![(0, 0)], property: "color".into(), value: String::new() }
-            .apply(&mut deck)
-            .unwrap();
-        assert!(grid(&deck, &sid, &eid).cells[0][0].style_overrides.is_empty());
+        SetCellStyles {
+            target: t.clone(),
+            element_id: eid.clone(),
+            cells: vec![(0, 0)],
+            property: "color".into(),
+            value: "#111".into(),
+        }
+        .apply(&mut deck)
+        .unwrap();
+        SetCellStyles {
+            target: t,
+            element_id: eid.clone(),
+            cells: vec![(0, 0)],
+            property: "color".into(),
+            value: String::new(),
+        }
+        .apply(&mut deck)
+        .unwrap();
+        assert!(
+            grid(&deck, &sid, &eid).cells[0][0]
+                .style_overrides
+                .is_empty()
+        );
     }
 
     #[test]
@@ -492,9 +572,13 @@ mod tests {
         let mut deck = Deck::sample();
         let sid: SlideId = deck.slide_order[0].clone();
         let eid: ElementId = deck.slides[&sid].root.children[0].id.clone();
-        let err = InsertTableRow { target: CanvasTarget::Slide(sid), element_id: eid, at: 0 }
-            .apply(&mut deck)
-            .unwrap_err();
+        let err = InsertTableRow {
+            target: CanvasTarget::Slide(sid),
+            element_id: eid,
+            at: 0,
+        }
+        .apply(&mut deck)
+        .unwrap_err();
         assert!(matches!(err, CommandError::InvalidOperation(_)));
     }
 }

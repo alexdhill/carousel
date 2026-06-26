@@ -10,12 +10,12 @@
 // Content only — the boot path still uses Deck::sample until the landing flow
 // is wired (later sub-project).
 
+use crate::deck::Deck;
 use crate::deck::builders::{group_element, shape_element, text_element_styled};
 use crate::deck::element::{ElementStyle, ShapeGeometry};
 use crate::deck::layout::LayoutNode;
 use crate::deck::style::{ColorRef, FillRef, Geometry, Length, TextStyle};
 use crate::deck::theme::ThemeData;
-use crate::deck::Deck;
 use std::collections::BTreeMap;
 
 // System sans stack reused for both title and body families (no bundling
@@ -90,7 +90,13 @@ fn theme_css(bg: &str, fg: &str, muted: &str, accent: &str) -> String {
 // geom / tstyle
 // Small constructors keeping the layout builders readable.
 fn geom(x: f64, y: f64, w: f64, h: f64) -> Geometry {
-    Geometry { x, y, width: w, height: h, ..Geometry::default() }
+    Geometry {
+        x,
+        y,
+        width: w,
+        height: h,
+        ..Geometry::default()
+    }
 }
 
 fn tstyle(size: f64, weight: u16, line_height: f64, color_key: &str) -> TextStyle {
@@ -108,20 +114,39 @@ fn tstyle(size: f64, weight: u16, line_height: f64, color_key: &str) -> TextStyl
 // presets (stamp model — inline beats class — so the layout's own text already
 // looks right; the presets serve new text the user adds).
 fn title_layout() -> LayoutNode {
-    let title = text_element_styled("el_title", "Title", geom(160.0, 420.0, 1600.0, 180.0),
-        tstyle(96.0, 700, 1.05, "foreground"));
-    let subtitle = text_element_styled("el_subtitle", "Subtitle", geom(160.0, 620.0, 1600.0, 90.0),
-        tstyle(32.0, 400, 1.4, "muted"));
+    let title = text_element_styled(
+        "el_title",
+        "Title",
+        geom(160.0, 420.0, 1600.0, 180.0),
+        tstyle(96.0, 700, 1.05, "foreground"),
+    );
+    let subtitle = text_element_styled(
+        "el_subtitle",
+        "Subtitle",
+        geom(160.0, 620.0, 1600.0, 90.0),
+        tstyle(32.0, 400, 1.4, "muted"),
+    );
     let root = group_element("el_layout_root", vec![title, subtitle]);
     LayoutNode::new("title".to_string(), "Title".to_string(), root)
 }
 
 fn hero_layout() -> LayoutNode {
-    let title = text_element_styled("el_hero_title", "Hero headline",
-        geom(160.0, 360.0, 1080.0, 360.0), tstyle(96.0, 700, 1.05, "foreground"));
-    let copy = text_element_styled("el_hero_copy", "Supporting copy",
-        geom(160.0, 760.0, 1000.0, 160.0), tstyle(32.0, 400, 1.4, "foreground"));
-    let mut block = shape_element("el_hero_block", ShapeGeometry::RoundedRect { radius_px: 24 });
+    let title = text_element_styled(
+        "el_hero_title",
+        "Hero headline",
+        geom(160.0, 360.0, 1080.0, 360.0),
+        tstyle(96.0, 700, 1.05, "foreground"),
+    );
+    let copy = text_element_styled(
+        "el_hero_copy",
+        "Supporting copy",
+        geom(160.0, 760.0, 1000.0, 160.0),
+        tstyle(32.0, 400, 1.4, "foreground"),
+    );
+    let mut block = shape_element(
+        "el_hero_block",
+        ShapeGeometry::RoundedRect { radius_px: 24 },
+    );
     block.geometry = geom(1300.0, 240.0, 460.0, 600.0);
     if let ElementStyle::Shape(s) = &mut block.style {
         s.fill = FillRef::Color(ColorRef::Theme("accent".to_string()));
@@ -131,12 +156,24 @@ fn hero_layout() -> LayoutNode {
 }
 
 fn text_layout() -> LayoutNode {
-    let header = text_element_styled("el_header", "Section header",
-        geom(160.0, 140.0, 1600.0, 120.0), tstyle(56.0, 600, 1.1, "foreground"));
-    let body = text_element_styled("el_body", "Body text",
-        geom(160.0, 320.0, 1600.0, 560.0), tstyle(32.0, 400, 1.4, "foreground"));
-    let footnote = text_element_styled("el_footnote", "Footnote",
-        geom(160.0, 980.0, 1600.0, 60.0), tstyle(20.0, 400, 1.3, "muted"));
+    let header = text_element_styled(
+        "el_header",
+        "Section header",
+        geom(160.0, 140.0, 1600.0, 120.0),
+        tstyle(56.0, 600, 1.1, "foreground"),
+    );
+    let body = text_element_styled(
+        "el_body",
+        "Body text",
+        geom(160.0, 320.0, 1600.0, 560.0),
+        tstyle(32.0, 400, 1.4, "foreground"),
+    );
+    let footnote = text_element_styled(
+        "el_footnote",
+        "Footnote",
+        geom(160.0, 980.0, 1600.0, 60.0),
+        tstyle(20.0, 400, 1.3, "muted"),
+    );
     let root = group_element("el_layout_root", vec![header, body, footnote]);
     LayoutNode::new("text".to_string(), "Text".to_string(), root)
 }
@@ -189,7 +226,11 @@ pub fn theme_by_id(theme_id: &str) -> ThemeData {
 // Inputs: a theme id. Output: (background, foreground, accent) for the landing
 // card previews. Unknown ids default to light.
 pub fn theme_palette(theme_id: &str) -> (String, String, String) {
-    let (bg, fg, _muted, accent) = if theme_id == "dark" { DARK_PALETTE } else { LIGHT_PALETTE };
+    let (bg, fg, _muted, accent) = if theme_id == "dark" {
+        DARK_PALETTE
+    } else {
+        LIGHT_PALETTE
+    };
     (bg.to_string(), fg.to_string(), accent.to_string())
 }
 
@@ -205,7 +246,11 @@ pub fn new_deck(theme: ThemeData, layout_id: &str) -> Deck {
     let resolved: String = if deck.theme.layouts.contains_key(layout_id) {
         layout_id.to_string()
     } else {
-        deck.theme.layout_order.first().cloned().unwrap_or_else(|| "blank".to_string())
+        deck.theme
+            .layout_order
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "blank".to_string())
     };
     let children = deck
         .theme
@@ -231,10 +276,13 @@ pub fn new_deck(theme: ThemeData, layout_id: &str) -> Deck {
 // not a single chosen layout. Control flow: start from a blank deck, swap the
 // theme, then rebuild slides/order/manifest from layout_order.
 pub fn new_deck_all_layouts(theme: ThemeData) -> Deck {
-    use crate::bundle::{manifest::slide_path_for, SlideEntry};
+    use crate::bundle::{SlideEntry, manifest::slide_path_for};
     use crate::deck::ids::new_slide_id;
     use crate::deck::slide::SlideNode;
-    assert!(!theme.layout_order.is_empty(), "new_deck_all_layouts: theme has no layouts");
+    assert!(
+        !theme.layout_order.is_empty(),
+        "new_deck_all_layouts: theme has no layouts"
+    );
     let mut deck: Deck = Deck::new_blank();
     deck.theme = theme;
     let mut slides: BTreeMap<String, SlideNode> = BTreeMap::new();
@@ -249,7 +297,10 @@ pub fn new_deck_all_layouts(theme: ThemeData) -> Deck {
             .unwrap_or_default();
         let sid: String = new_slide_id();
         let root = group_element("el_root", children);
-        slides.insert(sid.clone(), SlideNode::new(sid.clone(), layout_id.clone(), root));
+        slides.insert(
+            sid.clone(),
+            SlideNode::new(sid.clone(), layout_id.clone(), root),
+        );
         order.push(sid.clone());
         entries.push(SlideEntry {
             id: sid.clone(),
@@ -296,7 +347,9 @@ mod tests {
     fn preset_classes(globals: &str) -> Vec<&str> {
         ["title", "slide-header", "default-text", "footnote"]
             .into_iter()
-            .filter(|c| globals.contains(&format!(".{} ", c)) || globals.contains(&format!(".{}\n", c)))
+            .filter(|c| {
+                globals.contains(&format!(".{} ", c)) || globals.contains(&format!(".{}\n", c))
+            })
             .collect()
     }
 
@@ -318,8 +371,16 @@ mod tests {
 
     #[test]
     fn palettes_differ() {
-        assert!(light_theme().theme_css.contains("--theme-background: #ffffff"));
-        assert!(dark_theme().theme_css.contains("--theme-background: #16140f"));
+        assert!(
+            light_theme()
+                .theme_css
+                .contains("--theme-background: #ffffff")
+        );
+        assert!(
+            dark_theme()
+                .theme_css
+                .contains("--theme-background: #16140f")
+        );
     }
 
     #[test]
@@ -363,8 +424,11 @@ mod tests {
         let deck = new_deck_all_layouts(light_theme());
         assert_eq!(deck.slide_order.len(), 3);
         assert_eq!(deck.manifest.slides.len(), 3);
-        let layouts: Vec<&str> =
-            deck.slide_order.iter().map(|s| deck.slides[s].layout_id.as_str()).collect();
+        let layouts: Vec<&str> = deck
+            .slide_order
+            .iter()
+            .map(|s| deck.slides[s].layout_id.as_str())
+            .collect();
         assert_eq!(layouts, vec!["title", "hero", "text"]);
     }
 

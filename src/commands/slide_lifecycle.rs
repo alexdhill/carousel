@@ -20,8 +20,8 @@
 
 use crate::bundle::SlideEntry;
 use crate::commands::{Command, CommandError, CommandOutput};
-use crate::deck::{CanvasTarget, SlideId};
 use crate::deck::slide::SlideNode;
+use crate::deck::{CanvasTarget, SlideId};
 
 // InsertSlide
 // Inserts a fully-formed slide at `position` in slide_order (and the
@@ -60,7 +60,9 @@ impl Command for InsertSlide {
 
         deck.slides.insert(slide_id.clone(), self.slide.clone());
         deck.slide_order.insert(order_pos, slide_id.clone());
-        deck.manifest.slides.insert(manifest_pos, self.manifest_entry.clone());
+        deck.manifest
+            .slides
+            .insert(manifest_pos, self.manifest_entry.clone());
         deck.dirty_slides.insert(slide_id.clone());
         deck.manifest_dirty = true;
 
@@ -299,7 +301,9 @@ mod tests {
         }
         .apply(&mut deck)
         .unwrap();
-        let cmd = RemoveSlide { slide_id: "s_b".into() };
+        let cmd = RemoveSlide {
+            slide_id: "s_b".into(),
+        };
         let out = cmd.apply(&mut deck).unwrap();
         assert!(!deck.slides.contains_key("s_b"));
         assert!(!deck.slide_order.iter().any(|id| id == "s_b"));
@@ -327,7 +331,11 @@ mod tests {
         }
         .apply(&mut deck)
         .unwrap();
-        let err = RemoveSlide { slide_id: "ghost".into() }.apply(&mut deck).unwrap_err();
+        let err = RemoveSlide {
+            slide_id: "ghost".into(),
+        }
+        .apply(&mut deck)
+        .unwrap_err();
         assert!(matches!(err, CommandError::SlideNotFound(_)));
     }
 
@@ -344,7 +352,11 @@ mod tests {
         let order_before = deck.slide_order.clone();
         let slide_before = deck.slides.get("s_b").cloned().unwrap();
 
-        let out = RemoveSlide { slide_id: "s_b".into() }.apply(&mut deck).unwrap();
+        let out = RemoveSlide {
+            slide_id: "s_b".into(),
+        }
+        .apply(&mut deck)
+        .unwrap();
         out.inverse.apply(&mut deck).unwrap();
 
         assert_eq!(deck.slide_order, order_before);
@@ -356,13 +368,27 @@ mod tests {
     fn remove_preserves_position_for_inverse() {
         let mut deck = Deck::sample();
         // Build order: [orig, s_b, s_c]
-        InsertSlide { position: 1, slide: blank_slide("s_b"), manifest_entry: entry_for("s_b") }
-            .apply(&mut deck).unwrap();
-        InsertSlide { position: 2, slide: blank_slide("s_c"), manifest_entry: entry_for("s_c") }
-            .apply(&mut deck).unwrap();
+        InsertSlide {
+            position: 1,
+            slide: blank_slide("s_b"),
+            manifest_entry: entry_for("s_b"),
+        }
+        .apply(&mut deck)
+        .unwrap();
+        InsertSlide {
+            position: 2,
+            slide: blank_slide("s_c"),
+            manifest_entry: entry_for("s_c"),
+        }
+        .apply(&mut deck)
+        .unwrap();
         let order_before = deck.slide_order.clone();
         // Remove the middle slide, then undo — it must return to index 1.
-        let out = RemoveSlide { slide_id: "s_b".into() }.apply(&mut deck).unwrap();
+        let out = RemoveSlide {
+            slide_id: "s_b".into(),
+        }
+        .apply(&mut deck)
+        .unwrap();
         out.inverse.apply(&mut deck).unwrap();
         assert_eq!(deck.slide_order, order_before);
         assert_eq!(deck.slide_order[1], "s_b");

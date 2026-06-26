@@ -85,8 +85,14 @@ impl Command for SetGeometryProperty {
     // Dataflow: locate slide -> locate element -> snapshot prior scalar
     // -> overwrite -> invalidate index -> build patch + inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
-        assert!(!self.target.id().is_empty(), "SetGeometryProperty: target id is empty");
-        assert!(!self.element_id.is_empty(), "SetGeometryProperty: element_id is empty");
+        assert!(
+            !self.target.id().is_empty(),
+            "SetGeometryProperty: target id is empty"
+        );
+        assert!(
+            !self.element_id.is_empty(),
+            "SetGeometryProperty: element_id is empty"
+        );
         let canvas = resolve_canvas_mut(deck, &self.target)?;
         let element = canvas
             .find_element_mut(&self.element_id)
@@ -103,7 +109,10 @@ impl Command for SetGeometryProperty {
             property: self.property.css_property().to_string(),
             value: css_value,
         }];
-        patches.extend(crate::commands::relayout_patches(canvas.root_mut(), &self.element_id));
+        patches.extend(crate::commands::relayout_patches(
+            canvas.root_mut(),
+            &self.element_id,
+        ));
 
         let inverse: SetGeometryProperty = SetGeometryProperty {
             target: self.target.clone(),
@@ -203,7 +212,11 @@ mod tests {
     #[test]
     fn set_width_updates_geometry_only_in_that_field() {
         let (mut deck, sid, eid) = fixture();
-        let before = deck.slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let before = deck.slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
         let cmd = SetGeometryProperty {
             target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
@@ -211,7 +224,11 @@ mod tests {
             new_value: 500.0,
         };
         cmd.apply(&mut deck).unwrap();
-        let after = deck.slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let after = deck.slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
         assert_eq!(after.width, 500.0);
         // Everything else untouched.
         assert_eq!(after.x, before.x);
@@ -225,7 +242,11 @@ mod tests {
     fn set_x_emits_set_style_left_in_px() {
         let (_, _, eid, out) = run(GeometryProperty::X, 123.0);
         match &out.patches[0] {
-            Patch::SetStyle { element_id, property, value } => {
+            Patch::SetStyle {
+                element_id,
+                property,
+                value,
+            } => {
                 assert_eq!(element_id, &eid);
                 assert_eq!(property, "left");
                 assert_eq!(value, "123px");
@@ -238,7 +259,9 @@ mod tests {
     fn set_rotation_emits_rotate_rad_transform() {
         let (_, _, _, out) = run(GeometryProperty::Rotation, 0.5);
         match &out.patches[0] {
-            Patch::SetStyle { property, value, .. } => {
+            Patch::SetStyle {
+                property, value, ..
+            } => {
                 assert_eq!(property, "transform");
                 assert_eq!(value, "rotate(0.5rad)");
             }
@@ -250,7 +273,9 @@ mod tests {
     fn set_opacity_emits_bare_number() {
         let (_, _, _, out) = run(GeometryProperty::Opacity, 0.75);
         match &out.patches[0] {
-            Patch::SetStyle { property, value, .. } => {
+            Patch::SetStyle {
+                property, value, ..
+            } => {
                 assert_eq!(property, "opacity");
                 assert_eq!(value, "0.75");
             }
@@ -261,7 +286,11 @@ mod tests {
     #[test]
     fn inverse_restores_prior_value() {
         let (mut deck, sid, eid) = fixture();
-        let original_h = deck.slides[&sid].find_element(&eid).unwrap().geometry.height;
+        let original_h = deck.slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .height;
         let cmd = SetGeometryProperty {
             target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
@@ -270,7 +299,11 @@ mod tests {
         };
         let out = cmd.apply(&mut deck).unwrap();
         out.inverse.apply(&mut deck).unwrap();
-        let after = deck.slides[&sid].find_element(&eid).unwrap().geometry.height;
+        let after = deck.slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .height;
         assert_eq!(after, original_h);
     }
 
@@ -319,10 +352,18 @@ mod tests {
         use crate::deck::style::{GroupAlignment, GroupStyle};
         let mut deck = Deck::sample();
         let sid: SlideId = deck.slide_order[0].clone();
-        let mut a = text_element("ca", "t"); a.geometry.width = 20.0; a.geometry.height = 10.0;
-        let mut b = text_element("cb", "t"); b.geometry.x = 30.0; b.geometry.width = 20.0; b.geometry.height = 10.0;
+        let mut a = text_element("ca", "t");
+        a.geometry.width = 20.0;
+        a.geometry.height = 10.0;
+        let mut b = text_element("cb", "t");
+        b.geometry.x = 30.0;
+        b.geometry.width = 20.0;
+        b.geometry.height = 10.0;
         let mut g = group_element("cg", vec![a, b]);
-        g.style = ElementStyle::Group(GroupStyle { alignment: GroupAlignment::Start, ..Default::default() });
+        g.style = ElementStyle::Group(GroupStyle {
+            alignment: GroupAlignment::Start,
+            ..Default::default()
+        });
         deck.slides.get_mut(&sid).unwrap().root.children.push(g);
         let cmd = SetGeometryProperty {
             target: CanvasTarget::Slide(sid.clone()),

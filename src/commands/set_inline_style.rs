@@ -34,8 +34,14 @@ impl Command for SetInlineStyle {
     // Dataflow: locate element -> snapshot prior value -> overwrite the
     // inline_styles entry -> invalidate index -> build patch + inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
-        assert!(!self.target.id().is_empty(), "SetInlineStyle: target id is empty");
-        assert!(!self.element_id.is_empty(), "SetInlineStyle: element_id is empty");
+        assert!(
+            !self.target.id().is_empty(),
+            "SetInlineStyle: target id is empty"
+        );
+        assert!(
+            !self.element_id.is_empty(),
+            "SetInlineStyle: element_id is empty"
+        );
         if self.property.trim().is_empty() {
             return Err(CommandError::InvalidOperation(
                 "SetInlineStyle: empty property name".into(),
@@ -105,8 +111,14 @@ impl Command for RemoveInlineStyle {
     // Dataflow: locate element -> remove the entry -> invalidate index
     // -> build patch + inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
-        assert!(!self.target.id().is_empty(), "RemoveInlineStyle: target id is empty");
-        assert!(!self.element_id.is_empty(), "RemoveInlineStyle: element_id is empty");
+        assert!(
+            !self.target.id().is_empty(),
+            "RemoveInlineStyle: target id is empty"
+        );
+        assert!(
+            !self.element_id.is_empty(),
+            "RemoveInlineStyle: element_id is empty"
+        );
         if self.property.trim().is_empty() {
             return Err(CommandError::InvalidOperation(
                 "RemoveInlineStyle: empty property name".into(),
@@ -190,9 +202,16 @@ mod tests {
         };
         let out = cmd.apply(&mut deck).unwrap();
         let stored = &deck.slides[&sid].find_element(&eid).unwrap().inline_styles;
-        assert_eq!(stored.get("background-color").map(String::as_str), Some("#ff0066"));
+        assert_eq!(
+            stored.get("background-color").map(String::as_str),
+            Some("#ff0066")
+        );
         match &out.patches[0] {
-            Patch::SetStyle { property, value, element_id } => {
+            Patch::SetStyle {
+                property,
+                value,
+                element_id,
+            } => {
                 assert_eq!(property, "background-color");
                 assert_eq!(value, "#ff0066");
                 assert_eq!(element_id, &eid);
@@ -241,7 +260,10 @@ mod tests {
         let out = cmd.apply(&mut deck).unwrap();
         out.inverse.apply(&mut deck).unwrap();
         let stored = &deck.slides[&sid].find_element(&eid).unwrap().inline_styles;
-        assert_eq!(stored.get("border").map(String::as_str), Some("1px dotted #aaa"));
+        assert_eq!(
+            stored.get("border").map(String::as_str),
+            Some("1px dotted #aaa")
+        );
     }
 
     #[test]
@@ -262,7 +284,10 @@ mod tests {
         let out = cmd.apply(&mut deck).unwrap();
         assert_eq!(out.patches.len(), 1);
         match &out.patches[0] {
-            Patch::RemoveStyle { property, element_id } => {
+            Patch::RemoveStyle {
+                property,
+                element_id,
+            } => {
                 assert_eq!(property, "border-radius");
                 assert_eq!(element_id, &eid);
             }
@@ -300,7 +325,10 @@ mod tests {
         let out = cmd.apply(&mut deck).unwrap();
         out.inverse.apply(&mut deck).unwrap();
         let stored = &deck.slides[&sid].find_element(&eid).unwrap().inline_styles;
-        assert_eq!(stored.get("background-color").map(String::as_str), Some("#abc"));
+        assert_eq!(
+            stored.get("background-color").map(String::as_str),
+            Some("#abc")
+        );
     }
 
     #[test]

@@ -31,8 +31,14 @@ impl Command for SetTextContent {
     // Dataflow: locate slide -> locate element -> assert it carries Text
     // content -> snapshot prior -> overwrite -> build patch + inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
-        assert!(!self.target.id().is_empty(), "SetTextContent: target id is empty");
-        assert!(!self.element_id.is_empty(), "SetTextContent: element_id is empty");
+        assert!(
+            !self.target.id().is_empty(),
+            "SetTextContent: target id is empty"
+        );
+        assert!(
+            !self.element_id.is_empty(),
+            "SetTextContent: element_id is empty"
+        );
         let canvas = resolve_canvas_mut(deck, &self.target)?;
         let element = canvas
             .find_element_mut(&self.element_id)

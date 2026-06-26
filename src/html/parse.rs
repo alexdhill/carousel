@@ -67,13 +67,18 @@ pub fn parse_element(html: &str) -> Result<ElementNode, ParseError> {
 // Errors: missing section, missing slide id, missing content div, or any
 // per-element parse error.
 pub fn parse_slide_fragment(html: &str) -> Result<SlideNode, ParseError> {
-    assert!(!html.is_empty(), "parse_slide_fragment received empty input");
+    assert!(
+        !html.is_empty(),
+        "parse_slide_fragment received empty input"
+    );
     let doc: NodeRef = kuchikiki::parse_html().one(html);
     let section_ref = doc
         .select_first("section.slide")
         .map_err(|_| ParseError::MissingSlideRoot)?;
     let section_node: &NodeRef = section_ref.as_node();
-    let section_ed = section_node.as_element().ok_or(ParseError::MissingSlideRoot)?;
+    let section_ed = section_node
+        .as_element()
+        .ok_or(ParseError::MissingSlideRoot)?;
     let section_attrs = section_ed.attributes.borrow();
     let slide_id: String = section_attrs
         .get("data-slide-id")
@@ -146,14 +151,11 @@ fn parse_node(node: &NodeRef) -> Result<ElementNode, ParseError> {
     let element_type: ElementType = ElementType::from_html(&type_token)
         .ok_or_else(|| ParseError::UnknownElementType(type_token.clone()))?;
 
-    let style_decls: BTreeMap<String, String> =
-        parse_style_decls(attrs.get("style").unwrap_or(""));
+    let style_decls: BTreeMap<String, String> = parse_style_decls(attrs.get("style").unwrap_or(""));
     let geometry: Geometry = parse_geometry(&style_decls);
     let name: Option<String> = attrs.get("data-name").map(str::to_string);
     let link: Option<String> = attrs.get("data-link").map(str::to_string);
-    let placeholder_fill: Option<String> = attrs
-        .get("data-placeholder-fill")
-        .map(str::to_string);
+    let placeholder_fill: Option<String> = attrs.get("data-placeholder-fill").map(str::to_string);
 
     let mut custom: BTreeMap<String, String> = BTreeMap::new();
     for (qn, attr) in attrs.map.iter() {
@@ -175,15 +177,19 @@ fn parse_node(node: &NodeRef) -> Result<ElementNode, ParseError> {
         element_type,
         &style_decls,
         node,
-        ParsedTypedInputs { asset_id, shape_kind, shape_radius, shape_d },
+        ParsedTypedInputs {
+            asset_id,
+            shape_kind,
+            shape_radius,
+            shape_d,
+        },
     )?;
 
     // Stage 8: leftover CSS declarations (anything the typed style
     // parsers did not consume) land in inline_styles so the inspector's
     // custom-CSS workflow can read and edit them, and so save/load
     // round-trips preserve them.
-    let inline_styles: BTreeMap<String, String> =
-        extract_inline_styles(&style_decls, element_type);
+    let inline_styles: BTreeMap<String, String> = extract_inline_styles(&style_decls, element_type);
 
     let result = ElementNode {
         id,
@@ -198,7 +204,10 @@ fn parse_node(node: &NodeRef) -> Result<ElementNode, ParseError> {
         attributes: custom,
         inline_styles,
     };
-    assert!(result.is_consistent(), "parser produced inconsistent triple");
+    assert!(
+        result.is_consistent(),
+        "parser produced inconsistent triple"
+    );
     Ok(result)
 }
 
@@ -232,7 +241,9 @@ fn parse_typed_payload(
         }
         ElementType::Image => Ok((
             ElementStyle::Image(ImageStyle::default()),
-            ElementContent::Image(AssetRef { asset_id: typed.asset_id }),
+            ElementContent::Image(AssetRef {
+                asset_id: typed.asset_id,
+            }),
             vec![],
         )),
         ElementType::Shape => Ok((
@@ -246,7 +257,9 @@ fn parse_typed_payload(
         )),
         ElementType::Media => Ok((
             ElementStyle::Media(MediaStyle::default()),
-            ElementContent::Media(AssetRef { asset_id: typed.asset_id }),
+            ElementContent::Media(AssetRef {
+                asset_id: typed.asset_id,
+            }),
             vec![],
         )),
         ElementType::Table => Ok((
@@ -258,8 +271,12 @@ fn parse_typed_payload(
             let children: Vec<ElementNode> = parse_element_children(node)?;
             let ed = node.as_element().ok_or(ParseError::NoElement)?;
             let a = ed.attributes.borrow();
-            let scale: f64 =
-                parse_scale(style_decls.get("transform").map(String::as_str).unwrap_or(""));
+            let scale: f64 = parse_scale(
+                style_decls
+                    .get("transform")
+                    .map(String::as_str)
+                    .unwrap_or(""),
+            );
             let gs = crate::deck::style::GroupStyle {
                 direction: parse_group_dir(a.get("data-flex-dir")),
                 distribution: parse_group_dist(a.get("data-flex-dist")),
@@ -307,7 +324,13 @@ fn parse_table(node: &NodeRef) -> TableData {
     let columns: usize =
         attr_columns.unwrap_or_else(|| cells.iter().map(Vec::len).max().unwrap_or(0));
     normalize_grid(&mut cells, rows, columns);
-    TableData { rows, columns, cells, header_rows, header_columns }
+    TableData {
+        rows,
+        columns,
+        cells,
+        header_rows,
+        header_columns,
+    }
 }
 
 // read_table_attrs — header counts + optional declared dimensions.
@@ -433,7 +456,9 @@ fn extract_text(node: &NodeRef) -> String {
 fn serialize_inner_html(node: &NodeRef) -> Result<String, ParseError> {
     let mut buf: Vec<u8> = Vec::new();
     for child in node.children() {
-        child.serialize(&mut buf).map_err(|_| ParseError::Serialization)?;
+        child
+            .serialize(&mut buf)
+            .map_err(|_| ParseError::Serialization)?;
     }
     String::from_utf8(buf).map_err(|_| ParseError::Serialization)
 }
@@ -485,11 +510,24 @@ fn parse_geometry(map: &BTreeMap<String, String>) -> Geometry {
 // can show and edit it (and so save/load round-trips preserve it).
 fn known_style_keys(element_type: ElementType) -> &'static [&'static str] {
     const GEOMETRY: &[&str] = &[
-        "left", "top", "width", "height", "transform", "transform-origin", "opacity", "z-index",
+        "left",
+        "top",
+        "width",
+        "height",
+        "transform",
+        "transform-origin",
+        "opacity",
+        "z-index",
     ];
     const TEXT_EXTRA: &[&str] = &[
-        "font-family", "font-size", "font-weight", "font-style",
-        "color", "text-align", "line-height", "letter-spacing",
+        "font-family",
+        "font-size",
+        "font-weight",
+        "font-style",
+        "color",
+        "text-align",
+        "line-height",
+        "letter-spacing",
     ];
     match element_type {
         ElementType::Text => {
@@ -508,9 +546,22 @@ fn known_style_keys(element_type: ElementType) -> &'static [&'static str] {
 // Kept as a single const so `known_style_keys` can return a &'static
 // slice without runtime allocation.
 const TEXT_KEYS: &[&str] = &[
-    "left", "top", "width", "height", "transform", "transform-origin", "opacity", "z-index",
-    "font-family", "font-size", "font-weight", "font-style",
-    "color", "text-align", "line-height", "letter-spacing",
+    "left",
+    "top",
+    "width",
+    "height",
+    "transform",
+    "transform-origin",
+    "opacity",
+    "z-index",
+    "font-family",
+    "font-size",
+    "font-weight",
+    "font-style",
+    "color",
+    "text-align",
+    "line-height",
+    "letter-spacing",
 ];
 
 // extract_inline_styles
@@ -550,7 +601,10 @@ fn parse_length(s: &str) -> Option<Length> {
     for (suffix, unit) in suffixes {
         if let Some(num) = s.strip_suffix(*suffix) {
             let v: f64 = num.trim().parse::<f64>().ok()?;
-            return Some(Length { value: v, unit: *unit });
+            return Some(Length {
+                value: v,
+                unit: *unit,
+            });
         }
     }
     None
@@ -578,19 +632,31 @@ fn scale_regex() -> &'static Regex {
 
 fn parse_group_dir(s: Option<&str>) -> crate::deck::style::GroupDirection {
     use crate::deck::style::GroupDirection::*;
-    match s { Some("column") => Column, _ => Row }
+    match s {
+        Some("column") => Column,
+        _ => Row,
+    }
 }
 fn parse_group_dist(s: Option<&str>) -> crate::deck::style::GroupDistribution {
     use crate::deck::style::GroupDistribution::*;
     match s {
-        Some("start") => Start, Some("center") => Center, Some("end") => End,
-        Some("space-between") => SpaceBetween, Some("space-around") => SpaceAround,
-        Some("space-evenly") => SpaceEvenly, _ => None,
+        Some("start") => Start,
+        Some("center") => Center,
+        Some("end") => End,
+        Some("space-between") => SpaceBetween,
+        Some("space-around") => SpaceAround,
+        Some("space-evenly") => SpaceEvenly,
+        _ => None,
     }
 }
 fn parse_group_align(s: Option<&str>) -> crate::deck::style::GroupAlignment {
     use crate::deck::style::GroupAlignment::*;
-    match s { Some("start") => Start, Some("center") => Center, Some("end") => End, _ => None }
+    match s {
+        Some("start") => Start,
+        Some("center") => Center,
+        Some("end") => End,
+        _ => None,
+    }
 }
 
 fn parse_text_style(map: &BTreeMap<String, String>) -> TextStyle {
@@ -687,7 +753,8 @@ mod tests {
         use crate::deck::element::ElementStyle;
         use crate::deck::style::{GroupAlignment, GroupDirection, GroupDistribution, GroupStyle};
         let mut g = group_element("g", vec![]);
-        g.geometry.width = 100.0; g.geometry.height = 50.0;
+        g.geometry.width = 100.0;
+        g.geometry.height = 50.0;
         g.style = ElementStyle::Group(GroupStyle {
             direction: GroupDirection::Column,
             distribution: GroupDistribution::SpaceAround,
@@ -889,19 +956,31 @@ mod tests {
     fn parse_length_handles_units() {
         assert_eq!(
             parse_length("72px"),
-            Some(Length { value: 72.0, unit: LengthUnit::Px })
+            Some(Length {
+                value: 72.0,
+                unit: LengthUnit::Px
+            })
         );
         assert_eq!(
             parse_length("1.5em"),
-            Some(Length { value: 1.5, unit: LengthUnit::Em })
+            Some(Length {
+                value: 1.5,
+                unit: LengthUnit::Em
+            })
         );
         assert_eq!(
             parse_length("12pt"),
-            Some(Length { value: 12.0, unit: LengthUnit::Pt })
+            Some(Length {
+                value: 12.0,
+                unit: LengthUnit::Pt
+            })
         );
         assert_eq!(
             parse_length("50%"),
-            Some(Length { value: 50.0, unit: LengthUnit::Pct })
+            Some(Length {
+                value: 50.0,
+                unit: LengthUnit::Pct
+            })
         );
     }
 
@@ -921,7 +1000,10 @@ mod tests {
 
     #[test]
     fn extract_theme_var_round_trips_underscore_keys() {
-        assert_eq!(extract_theme_var("var(--theme-accent)"), Some("accent".into()));
+        assert_eq!(
+            extract_theme_var("var(--theme-accent)"),
+            Some("accent".into())
+        );
         assert_eq!(
             extract_theme_var("var(--theme-title-family)"),
             Some("title_family".into())
@@ -951,7 +1033,11 @@ mod tests {
             ts.text_align = TextAlign::Center;
         }
         n.geometry = Geometry {
-            x: 120.0, y: 200.0, width: 800.0, height: 100.0, ..Default::default()
+            x: 120.0,
+            y: 200.0,
+            width: 800.0,
+            height: 100.0,
+            ..Default::default()
         };
         let html = serialize_element(&n);
         let back = parse_element(&html).unwrap();
@@ -974,10 +1060,16 @@ mod tests {
         // the inline styles must survive a serialize → parse cycle so
         // save / load preserves dropped images.
         let mut n = image_element("im_a", "asset_deadbeef");
-        n.inline_styles.insert("background-image".into(), "var(--asset-asset_deadbeef)".into());
-        n.inline_styles.insert("background-size".into(), "cover".into());
-        n.inline_styles.insert("background-position".into(), "center".into());
-        n.inline_styles.insert("background-repeat".into(), "no-repeat".into());
+        n.inline_styles.insert(
+            "background-image".into(),
+            "var(--asset-asset_deadbeef)".into(),
+        );
+        n.inline_styles
+            .insert("background-size".into(), "cover".into());
+        n.inline_styles
+            .insert("background-position".into(), "center".into());
+        n.inline_styles
+            .insert("background-repeat".into(), "no-repeat".into());
         let html = serialize_element(&n);
         let back = parse_element(&html).unwrap();
         assert_eq!(back, n);
@@ -988,7 +1080,9 @@ mod tests {
             ref other => panic!("expected Image content, got {other:?}"),
         }
         assert_eq!(
-            back.inline_styles.get("background-size").map(String::as_str),
+            back.inline_styles
+                .get("background-size")
+                .map(String::as_str),
             Some("cover")
         );
     }
@@ -999,7 +1093,9 @@ mod tests {
             ShapeGeometry::Rectangle,
             ShapeGeometry::Ellipse,
             ShapeGeometry::RoundedRect { radius_px: 4 },
-            ShapeGeometry::Path { d: "M0 0 L10 10".into() },
+            ShapeGeometry::Path {
+                d: "M0 0 L10 10".into(),
+            },
         ] {
             let n = shape_element("sh", sg.clone());
             let html = serialize_element(&n);
@@ -1022,7 +1118,12 @@ mod tests {
         for (k, v) in overrides {
             so.insert((*k).into(), (*v).into());
         }
-        TableCell { content: RichText::new(text), style_overrides: so, colspan: 1, rowspan: 1 }
+        TableCell {
+            content: RichText::new(text),
+            style_overrides: so,
+            colspan: 1,
+            rowspan: 1,
+        }
     }
 
     #[test]
@@ -1059,8 +1160,16 @@ mod tests {
             rows: 2,
             columns: 3,
             cells: vec![
-                vec![TableCell::default(), TableCell::default(), TableCell::default()],
-                vec![TableCell::default(), TableCell::default(), TableCell::default()],
+                vec![
+                    TableCell::default(),
+                    TableCell::default(),
+                    TableCell::default(),
+                ],
+                vec![
+                    TableCell::default(),
+                    TableCell::default(),
+                    TableCell::default(),
+                ],
             ],
             header_rows: 0,
             header_columns: 0,
@@ -1070,7 +1179,10 @@ mod tests {
         let expected_cells: Vec<Vec<TableCell>> = (0..2)
             .map(|_| (0..3).map(|_| sample_cell("", &[])).collect())
             .collect();
-        let expected = TableData { cells: expected_cells, ..td.clone() };
+        let expected = TableData {
+            cells: expected_cells,
+            ..td.clone()
+        };
         let n = table_element("t2", td);
         let html = serialize_element(&n);
         let back = parse_element(&html).unwrap();
@@ -1090,7 +1202,8 @@ mod tests {
     #[test]
     fn roundtrip_preserves_custom_attributes() {
         let mut n = text_element("a", "x");
-        n.attributes.insert("data-custom".into(), "value-here".into());
+        n.attributes
+            .insert("data-custom".into(), "value-here".into());
         let html = serialize_element(&n);
         let back = parse_element(&html).unwrap();
         assert_eq!(back, n);
@@ -1099,8 +1212,10 @@ mod tests {
     #[test]
     fn roundtrip_preserves_inline_styles() {
         let mut n = text_element("a", "x");
-        n.inline_styles.insert("background-color".into(), "#ff0066".into());
-        n.inline_styles.insert("border".into(), "2px solid #000".into());
+        n.inline_styles
+            .insert("background-color".into(), "#ff0066".into());
+        n.inline_styles
+            .insert("border".into(), "2px solid #000".into());
         n.inline_styles.insert("border-radius".into(), "8px".into());
         let html = serialize_element(&n);
         let back = parse_element(&html).unwrap();
@@ -1128,7 +1243,9 @@ mod tests {
                    background-color:#fafafa;border-radius:12px">x</div>"#;
         let back = parse_element(html).unwrap();
         assert_eq!(
-            back.inline_styles.get("background-color").map(String::as_str),
+            back.inline_styles
+                .get("background-color")
+                .map(String::as_str),
             Some("#fafafa")
         );
         assert_eq!(
@@ -1143,14 +1260,12 @@ mod tests {
     #[test]
     fn slide_roundtrip_after_inserting_inline_styles_is_stable() {
         let mut a = text_element("c0", "x");
-        a.inline_styles.insert("background-color".into(), "#abc".into());
+        a.inline_styles
+            .insert("background-color".into(), "#abc".into());
         let mut b = text_element("c1", "y");
-        b.inline_styles.insert("border".into(), "1px solid #def".into());
-        let slide = SlideNode::new(
-            "s".into(),
-            "title".into(),
-            group_element("rt", vec![a, b]),
-        );
+        b.inline_styles
+            .insert("border".into(), "1px solid #def".into());
+        let slide = SlideNode::new("s".into(), "title".into(), group_element("rt", vec![a, b]));
         let html = serialize_slide(&slide);
         let back = parse_slide_fragment(&html).unwrap();
         assert_eq!(back, slide);
@@ -1170,17 +1285,15 @@ mod tests {
     // ---------- proptest strategies ----------
 
     fn arb_geometry() -> impl Strategy<Value = Geometry> {
-        (-1000i32..1000, -1000i32..1000, 1i32..2000, 1i32..2000).prop_map(
-            |(x, y, w, h)| Geometry {
-                x: x as f64,
-                y: y as f64,
-                width: w as f64,
-                height: h as f64,
-                rotation: 0.0,
-                opacity: 1.0,
-                z_order: 0,
-            },
-        )
+        (-1000i32..1000, -1000i32..1000, 1i32..2000, 1i32..2000).prop_map(|(x, y, w, h)| Geometry {
+            x: x as f64,
+            y: y as f64,
+            width: w as f64,
+            height: h as f64,
+            rotation: 0.0,
+            opacity: 1.0,
+            z_order: 0,
+        })
     }
 
     fn arb_color_ref() -> impl Strategy<Value = ColorRef> {
@@ -1237,8 +1350,13 @@ mod tests {
     }
 
     fn arb_text_element() -> impl Strategy<Value = ElementNode> {
-        (arb_element_id(), arb_geometry(), arb_text_style(), arb_safe_text()).prop_map(
-            |(id, geom, style, text)| ElementNode {
+        (
+            arb_element_id(),
+            arb_geometry(),
+            arb_text_style(),
+            arb_safe_text(),
+        )
+            .prop_map(|(id, geom, style, text)| ElementNode {
                 id,
                 element_type: ElementType::Text,
                 geometry: geom,
@@ -1250,8 +1368,7 @@ mod tests {
                 link: None,
                 attributes: BTreeMap::new(),
                 inline_styles: BTreeMap::new(),
-            },
-        )
+            })
     }
 
     fn arb_image_element() -> impl Strategy<Value = ElementNode> {

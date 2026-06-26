@@ -112,7 +112,10 @@ impl IoThread {
             .name("carousel-io".into())
             .spawn(move || worker_loop(rx, responses, wake))?;
         info!("IoThread spawned");
-        Ok(Self { sender: tx, handle: Some(handle) })
+        Ok(Self {
+            sender: tx,
+            handle: Some(handle),
+        })
     }
 
     // submit
@@ -181,11 +184,15 @@ fn worker_loop(
 // produces an IoResponse::Error carrying the operation tag.
 fn handle_request(request: IoRequest) -> IoResponse {
     match request {
-        IoRequest::Save { serialized, target_path } => save_blocking(serialized, target_path),
+        IoRequest::Save {
+            serialized,
+            target_path,
+        } => save_blocking(serialized, target_path),
         IoRequest::Load { path } => load_blocking(path),
-        IoRequest::SaveTheme { serialized, target_path } => {
-            save_theme_blocking(serialized, target_path)
-        }
+        IoRequest::SaveTheme {
+            serialized,
+            target_path,
+        } => save_theme_blocking(serialized, target_path),
         IoRequest::LoadTheme { path } => load_theme_blocking(path),
         IoRequest::ExportHtml { files, dest_dir } => export_html_blocking(files, dest_dir),
     }
@@ -315,8 +322,8 @@ mod tests {
     use super::*;
     use crate::bundle::deck_io::serialize_deck;
     use crate::deck::Deck;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     use tempfile::TempDir;
 
@@ -330,9 +337,12 @@ mod tests {
         let (rtx, rrx) = mpsc::channel::<IoResponse>();
         let wakes = Arc::new(AtomicUsize::new(0));
         let wakes_for_closure = wakes.clone();
-        let io = IoThread::spawn(rtx, Box::new(move || {
-            wakes_for_closure.fetch_add(1, Ordering::SeqCst);
-        }))
+        let io = IoThread::spawn(
+            rtx,
+            Box::new(move || {
+                wakes_for_closure.fetch_add(1, Ordering::SeqCst);
+            }),
+        )
         .unwrap();
 
         let dir = TempDir::new().unwrap();
@@ -352,7 +362,10 @@ mod tests {
 
         io.submit(IoRequest::Load { path: path.clone() }).unwrap();
         match drain_one(&rrx) {
-            IoResponse::Loaded { serialized, path: p } => {
+            IoResponse::Loaded {
+                serialized,
+                path: p,
+            } => {
                 assert_eq!(p, path);
                 assert!(!serialized.slide_files.is_empty());
             }
@@ -364,24 +377,33 @@ mod tests {
 
     #[test]
     fn save_then_load_theme_round_trips_through_thread() {
-        use crate::bundle::{serialize_theme, AssetRegistry};
+        use crate::bundle::{AssetRegistry, serialize_theme};
         use crate::deck::ThemeData;
         let (rtx, rrx) = mpsc::channel::<IoResponse>();
         let io = IoThread::spawn(rtx, Box::new(|| {})).unwrap();
 
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("t.slidetheme");
-        let serialized = serialize_theme(&ThemeData::default(), &AssetRegistry::new_empty()).unwrap();
+        let serialized =
+            serialize_theme(&ThemeData::default(), &AssetRegistry::new_empty()).unwrap();
 
-        io.submit(IoRequest::SaveTheme { serialized, target_path: path.clone() }).unwrap();
+        io.submit(IoRequest::SaveTheme {
+            serialized,
+            target_path: path.clone(),
+        })
+        .unwrap();
         match drain_one(&rrx) {
             IoResponse::ThemeSaved { path: p } => assert_eq!(p, path),
             other => panic!("expected ThemeSaved, got {other:?}"),
         }
 
-        io.submit(IoRequest::LoadTheme { path: path.clone() }).unwrap();
+        io.submit(IoRequest::LoadTheme { path: path.clone() })
+            .unwrap();
         match drain_one(&rrx) {
-            IoResponse::ThemeLoaded { serialized, path: p } => {
+            IoResponse::ThemeLoaded {
+                serialized,
+                path: p,
+            } => {
                 assert_eq!(p, path);
                 assert!(serialized.theme_json.contains("theme_id"));
             }

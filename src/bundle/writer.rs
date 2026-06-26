@@ -40,7 +40,10 @@ impl BundleWriter {
     // eventual rename stays on the same volume; create the file with
     // truncate; wrap in a ZipWriter.
     pub fn create(target_path: &Path) -> BundleResult<Self> {
-        assert!(!target_path.as_os_str().is_empty(), "BundleWriter::create: empty path");
+        assert!(
+            !target_path.as_os_str().is_empty(),
+            "BundleWriter::create: empty path"
+        );
         let tmp_path: PathBuf = tmp_path_for(target_path);
         debug!(target = %target_path.display(), tmp = %tmp_path.display(), "bundle: create");
         if let Some(parent) = tmp_path.parent()
@@ -215,13 +218,25 @@ mod tests {
         let mut w1 = BundleWriter::create(&path).unwrap();
         w1.write_string("manifest.json", "v1").unwrap();
         w1.finish().unwrap();
-        assert_eq!(BundleReader::open(&path).unwrap().read_string("manifest.json").unwrap(), "v1");
+        assert_eq!(
+            BundleReader::open(&path)
+                .unwrap()
+                .read_string("manifest.json")
+                .unwrap(),
+            "v1"
+        );
 
         // Second save overwrites.
         let mut w2 = BundleWriter::create(&path).unwrap();
         w2.write_string("manifest.json", "v2").unwrap();
         w2.finish().unwrap();
-        assert_eq!(BundleReader::open(&path).unwrap().read_string("manifest.json").unwrap(), "v2");
+        assert_eq!(
+            BundleReader::open(&path)
+                .unwrap()
+                .read_string("manifest.json")
+                .unwrap(),
+            "v2"
+        );
     }
 
     #[test]

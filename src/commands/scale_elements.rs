@@ -45,7 +45,10 @@ impl Command for SetElementsTransform {
     // state of each element, and the canvas marked dirty.
     // Errors: SlideNotFound / ElementNotFound (a missing id aborts).
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
-        assert!(!self.target.id().is_empty(), "SetElementsTransform: target id empty");
+        assert!(
+            !self.target.id().is_empty(),
+            "SetElementsTransform: target id empty"
+        );
         assert!(!self.items.is_empty(), "SetElementsTransform: no items");
         let canvas = resolve_canvas_mut(deck, &self.target)?;
         let mut prior: Vec<ElementTransform> = Vec::with_capacity(self.items.len());
@@ -123,7 +126,12 @@ mod tests {
         let (mut deck, sid, eid) = fixture();
         // Make the element a known size + font.
         {
-            let el = deck.slides.get_mut(&sid).unwrap().find_element_mut(&eid).unwrap();
+            let el = deck
+                .slides
+                .get_mut(&sid)
+                .unwrap()
+                .find_element_mut(&eid)
+                .unwrap();
             el.geometry.x = 100.0;
             el.geometry.y = 100.0;
             el.geometry.width = 200.0;
@@ -177,10 +185,17 @@ mod tests {
             target: CanvasTarget::Slide(sid),
             items: vec![ElementTransform {
                 id: "ghost".into(),
-                x: 0.0, y: 0.0, width: 1.0, height: 1.0,
-                font_size_px: None, group_scale: None,
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+                font_size_px: None,
+                group_scale: None,
             }],
         };
-        assert!(matches!(cmd.apply(&mut deck), Err(CommandError::ElementNotFound(_))));
+        assert!(matches!(
+            cmd.apply(&mut deck),
+            Err(CommandError::ElementNotFound(_))
+        ));
     }
 }

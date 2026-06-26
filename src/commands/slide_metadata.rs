@@ -28,7 +28,10 @@ impl Command for SetSlideTitle {
     // Dataflow: locate the manifest entry -> snapshot prior title ->
     // overwrite -> build inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
-        assert!(!self.slide_id.is_empty(), "SetSlideTitle: slide_id is empty");
+        assert!(
+            !self.slide_id.is_empty(),
+            "SetSlideTitle: slide_id is empty"
+        );
         let entry = deck
             .manifest
             .slides
@@ -107,7 +110,11 @@ mod tests {
     fn deck_title_sets_and_inverts() {
         let mut deck = Deck::sample();
         let original: String = deck.manifest.metadata.title.clone();
-        let out = SetDeckTitle { new_title: "Q3 Review".into() }.apply(&mut deck).unwrap();
+        let out = SetDeckTitle {
+            new_title: "Q3 Review".into(),
+        }
+        .apply(&mut deck)
+        .unwrap();
         assert_eq!(deck.manifest.metadata.title, "Q3 Review");
         assert!(deck.manifest_dirty);
         out.inverse.apply(&mut deck).unwrap();

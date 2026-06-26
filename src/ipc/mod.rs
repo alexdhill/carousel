@@ -40,7 +40,11 @@ impl IpcMessage {
     pub fn new(kind: MessageKind) -> Self {
         let id: String = ulid::Ulid::new().to_string();
         let timestamp: u64 = now_millis();
-        Self { id, timestamp, kind }
+        Self {
+            id,
+            timestamp,
+            kind,
+        }
     }
 }
 
@@ -66,7 +70,10 @@ pub enum MessageKind {
     Ready,
     Interaction(InteractionEvent),
     ThumbnailGenerated(ThumbnailResult),
-    Error { code: String, message: String },
+    Error {
+        code: String,
+        message: String,
+    },
 
     // ---- Rust -> JS ----
     MountSlide(MountSlideArgs),
@@ -112,8 +119,14 @@ pub enum MessageKind {
     // ChromiumDownloadProgress / Done — drive the PDF-export Chromium download
     // modal. Progress `total` is None while the size is unknown (indeterminate
     // bar). Done carries success + a message for the error case.
-    ChromiumDownloadProgress { received: u64, total: Option<u64> },
-    ChromiumDownloadDone { ok: bool, message: String },
+    ChromiumDownloadProgress {
+        received: u64,
+        total: Option<u64>,
+    },
+    ChromiumDownloadDone {
+        ok: bool,
+        message: String,
+    },
     // SlideLayoutPickerData
     // Reply to SlideLayoutPickerRequested: the same layout payload as
     // LayoutListUpdate, but a distinct kind so JS pops the new-slide layout
@@ -123,7 +136,9 @@ pub enum MessageKind {
     // Stage 11 — editor mode echo. Tells JS which mode is now active
     // ("slide" | "layout") so it can flip `body[data-mode]` and swap the
     // slides-vs-layouts list and inspector-vs-globals panels.
-    SetMode { mode: String },
+    SetMode {
+        mode: String,
+    },
     // SlideAnimationsUpdate
     // Stage: animations — the active slide's timeline (id/element/category
     // per entry) so the inspector's Appear/Disappear toggles reflect state.
@@ -131,7 +146,9 @@ pub enum MessageKind {
     // FontList
     // The installed font families (sorted, de-duplicated) for the styles
     // pane font-family combobox. Sent once after the editor webview is Ready.
-    FontList { families: Vec<String> },
+    FontList {
+        families: Vec<String>,
+    },
     // Notice
     // A non-fatal advisory message (e.g. an add-time ordering accommodation).
     // `detail` is an optional longer description the toast reveals on click.
@@ -254,11 +271,17 @@ pub enum InteractionEvent {
     },
     // Clipboard accelerators. Copy/Cut carry a focus-derived scope; paste
     // dispatches by the typed clipboard buffer (focus-independent).
-    CopyRequested { scope: ClipboardScope },
-    CutRequested { scope: ClipboardScope },
+    CopyRequested {
+        scope: ClipboardScope,
+    },
+    CutRequested {
+        scope: ClipboardScope,
+    },
     PasteRequested,
     // Delete a specific slide (navigator focus + Delete, or the thumbnail "×").
-    RemoveSlideRequested { slide_id: SlideId },
+    RemoveSlideRequested {
+        slide_id: SlideId,
+    },
     // TextEditStarted
     // Fired when a text element enters inline editing (double-click). The
     // webview is authoritative for the text content during the session;
@@ -534,29 +557,47 @@ pub enum InteractionEvent {
     // ---- Smart styles pane: Slide box (no selection) ----
     // Each targets the active slide (the Rust side supplies the id). An empty
     // string clears the field (background/notes → None).
-    SetSlideBackgroundRequested { background: String },
+    SetSlideBackgroundRequested {
+        background: String,
+    },
     // Clear the active slide's background image. Setting one happens via
     // AssetImported with as_slide_background=true (it carries the bytes).
     SetSlideBackgroundImageCleared,
-    SetSlideNotesRequested { notes: String },
+    SetSlideNotesRequested {
+        notes: String,
+    },
     // Outgoing presentation transition for the active slide. None = cut (the
     // dropdown's "None" clears the field).
-    SetSlideTransitionRequested { transition: Option<crate::deck::SlideTransition> },
-    SetSlideLayoutRequested { layout_id: LayoutId },
+    SetSlideTransitionRequested {
+        transition: Option<crate::deck::SlideTransition>,
+    },
+    SetSlideLayoutRequested {
+        layout_id: LayoutId,
+    },
     // Arrow-key nudge of the current selection by (dx, dy) px on the active
     // canvas (one undoable step; a CompositeCommand when many are selected).
     // Deck title edit from the top-left title field (manifest.metadata.title).
-    SetDeckTitleRequested { title: String },
-    NudgeSelectionRequested { dx: f64, dy: f64 },
+    SetDeckTitleRequested {
+        title: String,
+    },
+    NudgeSelectionRequested {
+        dx: f64,
+        dy: f64,
+    },
     // Arrow-key slide navigation when the canvas or navigator is focused with
     // no element selected. `forward` = next slide (ArrowRight), else previous.
-    NavigateSlideRequested { forward: bool },
+    NavigateSlideRequested {
+        forward: bool,
+    },
     // SetGroupLayout — patch a group's flex props (None = leave as-is).
     SetGroupLayout {
         element_id: ElementId,
-        #[serde(default)] direction: Option<String>,
-        #[serde(default)] distribution: Option<String>,
-        #[serde(default)] alignment: Option<String>,
+        #[serde(default)]
+        direction: Option<String>,
+        #[serde(default)]
+        distribution: Option<String>,
+        #[serde(default)]
+        alignment: Option<String>,
     },
     // SetGroupScale — set a group's uniform scale.
     SetGroupScale {
@@ -949,7 +990,9 @@ pub enum Patch {
     // cannot carry an internal tag — serde emits an array with no place to
     // merge `op`. Represent it as a struct variant; wire form is
     //   {"op":"Batch","patches":[...]}
-    Batch { patches: Vec<Patch> },
+    Batch {
+        patches: Vec<Patch>,
+    },
 }
 
 #[cfg(test)]
@@ -1061,8 +1104,7 @@ mod tests {
             height: 1080,
         };
         let msg = IpcMessage::new(MessageKind::LayoutListUpdate(data.clone()));
-        let back: IpcMessage =
-            serde_json::from_str(&serde_json::to_string(&msg).unwrap()).unwrap();
+        let back: IpcMessage = serde_json::from_str(&serde_json::to_string(&msg).unwrap()).unwrap();
         match back.kind {
             MessageKind::LayoutListUpdate(d) => assert_eq!(d, data),
             other => panic!("unexpected variant: {other:?}"),
@@ -1071,7 +1113,10 @@ mod tests {
 
     #[test]
     fn chromium_progress_roundtrips() {
-        let m = MessageKind::ChromiumDownloadProgress { received: 5, total: Some(10) };
+        let m = MessageKind::ChromiumDownloadProgress {
+            received: 5,
+            total: Some(10),
+        };
         let j = serde_json::to_string(&m).unwrap();
         assert!(j.contains("ChromiumDownloadProgress"));
         let back: MessageKind = serde_json::from_str(&j).unwrap();
@@ -1086,9 +1131,10 @@ mod tests {
 
     #[test]
     fn set_mode_echo_roundtrips() {
-        let msg = IpcMessage::new(MessageKind::SetMode { mode: "layout".into() });
-        let back: IpcMessage =
-            serde_json::from_str(&serde_json::to_string(&msg).unwrap()).unwrap();
+        let msg = IpcMessage::new(MessageKind::SetMode {
+            mode: "layout".into(),
+        });
+        let back: IpcMessage = serde_json::from_str(&serde_json::to_string(&msg).unwrap()).unwrap();
         match back.kind {
             MessageKind::SetMode { mode } => assert_eq!(mode, "layout"),
             other => panic!("unexpected variant: {other:?}"),
@@ -1107,11 +1153,13 @@ mod tests {
             background_image: String::new(),
             transition: None,
             layout_id: "title".into(),
-            layouts: vec![SlideInspectorLayout { id: "blank".into(), name: "Blank".into() }],
+            layouts: vec![SlideInspectorLayout {
+                id: "blank".into(),
+                name: "Blank".into(),
+            }],
         };
         let msg = IpcMessage::new(MessageKind::SlideInspectorUpdate(data.clone()));
-        let back: IpcMessage =
-            serde_json::from_str(&serde_json::to_string(&msg).unwrap()).unwrap();
+        let back: IpcMessage = serde_json::from_str(&serde_json::to_string(&msg).unwrap()).unwrap();
         match back.kind {
             MessageKind::SlideInspectorUpdate(d) => assert_eq!(d, data),
             other => panic!("unexpected variant: {other:?}"),
@@ -1129,11 +1177,15 @@ mod tests {
     #[test]
     fn group_layout_and_scale_events_decode() {
         let a = r#"{"kind":"SetGroupLayout","element_id":"g","direction":"column","distribution":"space-between","alignment":null}"#;
-        assert!(matches!(serde_json::from_str::<InteractionEvent>(a).unwrap(),
-            InteractionEvent::SetGroupLayout { .. }));
+        assert!(matches!(
+            serde_json::from_str::<InteractionEvent>(a).unwrap(),
+            InteractionEvent::SetGroupLayout { .. }
+        ));
         let b = r#"{"kind":"SetGroupScale","element_id":"g","scale":1.5}"#;
-        assert!(matches!(serde_json::from_str::<InteractionEvent>(b).unwrap(),
-            InteractionEvent::SetGroupScale { .. }));
+        assert!(matches!(
+            serde_json::from_str::<InteractionEvent>(b).unwrap(),
+            InteractionEvent::SetGroupScale { .. }
+        ));
     }
 
     #[test]
@@ -1153,7 +1205,11 @@ mod tests {
         let raw = r#"{"kind":"SetElementAnimation","element_id":"el_a","category":"entrance","enabled":true}"#;
         let parsed: InteractionEvent = serde_json::from_str(raw).unwrap();
         match parsed {
-            InteractionEvent::SetElementAnimation { element_id, category, enabled } => {
+            InteractionEvent::SetElementAnimation {
+                element_id,
+                category,
+                enabled,
+            } => {
                 assert_eq!(element_id, "el_a");
                 assert_eq!(category, "entrance");
                 assert!(enabled);
@@ -1166,15 +1222,21 @@ mod tests {
     fn add_and_update_animation_decode() {
         let raw = r#"{"kind":"AddAnimation","element_id":"el_a","catalog_id":"fade-in","direction":null}"#;
         match serde_json::from_str::<InteractionEvent>(raw).unwrap() {
-            InteractionEvent::AddAnimation { element_id, catalog_id, .. } => {
+            InteractionEvent::AddAnimation {
+                element_id,
+                catalog_id,
+                ..
+            } => {
                 assert_eq!(element_id, "el_a");
                 assert_eq!(catalog_id, "fade-in");
             }
             _ => panic!("wrong variant"),
         }
         let raw2 = r#"{"kind":"UpdateAnimation","animation_id":"a1","trigger":"on_click","duration_ms":700,"delay_ms":null,"easing":null,"iterations":null,"targets":null}"#;
-        assert!(matches!(serde_json::from_str::<InteractionEvent>(raw2).unwrap(),
-            InteractionEvent::UpdateAnimation { .. }));
+        assert!(matches!(
+            serde_json::from_str::<InteractionEvent>(raw2).unwrap(),
+            InteractionEvent::UpdateAnimation { .. }
+        ));
     }
 
     #[test]
@@ -1196,8 +1258,7 @@ mod tests {
             }],
         };
         let msg = IpcMessage::new(MessageKind::SlideAnimationsUpdate(data.clone()));
-        let back: IpcMessage =
-            serde_json::from_str(&serde_json::to_string(&msg).unwrap()).unwrap();
+        let back: IpcMessage = serde_json::from_str(&serde_json::to_string(&msg).unwrap()).unwrap();
         match back.kind {
             MessageKind::SlideAnimationsUpdate(d) => assert_eq!(d, data),
             other => panic!("unexpected variant: {other:?}"),
@@ -1207,8 +1268,7 @@ mod tests {
             message: "moved".into(),
             detail: Some("the element was clamped into view".into()),
         });
-        let back_n: IpcMessage =
-            serde_json::from_str(&serde_json::to_string(&n).unwrap()).unwrap();
+        let back_n: IpcMessage = serde_json::from_str(&serde_json::to_string(&n).unwrap()).unwrap();
         match back_n.kind {
             MessageKind::Notice { message, detail } => {
                 assert_eq!(message, "moved");
@@ -1229,7 +1289,13 @@ mod tests {
 
     #[test]
     fn editor_config_carries_keyframes() {
-        let cfg = EditorConfig { debug: false, animation_keyframes_css: "@keyframes appear{}".into(), animation_catalog: Vec::new(), deck_title: "Deck".into(), focus_title: true };
+        let cfg = EditorConfig {
+            debug: false,
+            animation_keyframes_css: "@keyframes appear{}".into(),
+            animation_catalog: Vec::new(),
+            deck_title: "Deck".into(),
+            focus_title: true,
+        };
         let back: EditorConfig =
             serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
         assert_eq!(back.animation_keyframes_css, "@keyframes appear{}");
@@ -1239,14 +1305,19 @@ mod tests {
     fn interaction_clicked_roundtrip() {
         let event = InteractionEvent::ElementClicked {
             element_id: "el_a".into(),
-            modifiers: Modifiers { shift: true, ..Default::default() },
+            modifiers: Modifiers {
+                shift: true,
+                ..Default::default()
+            },
             position: Point { x: 10.0, y: 20.0 },
         };
         let msg = IpcMessage::new(MessageKind::Interaction(event));
         let parsed: IpcMessage = round_trip(&msg);
         match parsed.kind {
             MessageKind::Interaction(InteractionEvent::ElementClicked {
-                element_id, modifiers, position,
+                element_id,
+                modifiers,
+                position,
             }) => {
                 assert_eq!(element_id, "el_a");
                 assert!(modifiers.shift);
@@ -1273,16 +1344,49 @@ mod tests {
     #[test]
     fn patch_variants_all_roundtrip() {
         let patches = [
-            Patch::SetAttribute { element_id: "a".into(), attribute: "data-x".into(), value: "1".into() },
-            Patch::RemoveAttribute { element_id: "a".into(), attribute: "data-x".into() },
-            Patch::SetStyle { element_id: "a".into(), property: "left".into(), value: "10px".into() },
-            Patch::RemoveStyle { element_id: "a".into(), property: "left".into() },
-            Patch::SetText { element_id: "a".into(), text: "hi".into() },
-            Patch::SetInnerHtml { element_id: "a".into(), html: "<b/>".into() },
-            Patch::ReplaceElement { element_id: "a".into(), new_html: "<b/>".into() },
-            Patch::InsertElement { parent_id: "p".into(), position: 0, html: "<b/>".into() },
-            Patch::RemoveElement { element_id: "a".into() },
-            Patch::Batch { patches: vec![Patch::RemoveElement { element_id: "a".into() }] },
+            Patch::SetAttribute {
+                element_id: "a".into(),
+                attribute: "data-x".into(),
+                value: "1".into(),
+            },
+            Patch::RemoveAttribute {
+                element_id: "a".into(),
+                attribute: "data-x".into(),
+            },
+            Patch::SetStyle {
+                element_id: "a".into(),
+                property: "left".into(),
+                value: "10px".into(),
+            },
+            Patch::RemoveStyle {
+                element_id: "a".into(),
+                property: "left".into(),
+            },
+            Patch::SetText {
+                element_id: "a".into(),
+                text: "hi".into(),
+            },
+            Patch::SetInnerHtml {
+                element_id: "a".into(),
+                html: "<b/>".into(),
+            },
+            Patch::ReplaceElement {
+                element_id: "a".into(),
+                new_html: "<b/>".into(),
+            },
+            Patch::InsertElement {
+                parent_id: "p".into(),
+                position: 0,
+                html: "<b/>".into(),
+            },
+            Patch::RemoveElement {
+                element_id: "a".into(),
+            },
+            Patch::Batch {
+                patches: vec![Patch::RemoveElement {
+                    element_id: "a".into(),
+                }],
+            },
         ];
         for p in patches {
             let json = serde_json::to_string(&p).unwrap();
@@ -1378,19 +1482,22 @@ mod tests {
         let data = ObjectTreeData {
             slide_id: "s1".into(),
             root_id: "el_root".into(),
-            nodes: vec![ObjectTreeNode {
-                id: "el_a".into(),
-                element_type: "text".into(),
-                children: vec![],
-            }, ObjectTreeNode {
-                id: "el_g".into(),
-                element_type: "group".into(),
-                children: vec![ObjectTreeNode {
-                    id: "el_inner".into(),
-                    element_type: "shape".into(),
+            nodes: vec![
+                ObjectTreeNode {
+                    id: "el_a".into(),
+                    element_type: "text".into(),
                     children: vec![],
-                }],
-            }],
+                },
+                ObjectTreeNode {
+                    id: "el_g".into(),
+                    element_type: "group".into(),
+                    children: vec![ObjectTreeNode {
+                        id: "el_inner".into(),
+                        element_type: "shape".into(),
+                        children: vec![],
+                    }],
+                },
+            ],
         };
         let msg = IpcMessage::new(MessageKind::ObjectTreeUpdate(data.clone()));
         let json = serde_json::to_string(&msg).unwrap();
@@ -1423,7 +1530,9 @@ mod tests {
         let parsed: InteractionEvent = serde_json::from_str(raw).unwrap();
         match parsed {
             InteractionEvent::InsertElementRequested {
-                element_type, parent_id, position,
+                element_type,
+                parent_id,
+                position,
             } => {
                 assert_eq!(element_type, "text");
                 assert!(parent_id.is_none());
@@ -1444,7 +1553,9 @@ mod tests {
         let back: InteractionEvent = serde_json::from_str(&json).unwrap();
         match back {
             InteractionEvent::InsertElementRequested {
-                element_type, parent_id, position,
+                element_type,
+                parent_id,
+                position,
             } => {
                 assert_eq!(element_type, "shape");
                 assert_eq!(parent_id.as_deref(), Some("el_group"));
@@ -1470,7 +1581,13 @@ mod tests {
         let back: InteractionEvent = serde_json::from_str(&json).unwrap();
         match back {
             InteractionEvent::AssetImported {
-                content_base64, original_filename, media_type, width, height, position, ..
+                content_base64,
+                original_filename,
+                media_type,
+                width,
+                height,
+                position,
+                ..
             } => {
                 assert_eq!(content_base64, "ZmFrZS1ieXRlcw==");
                 assert_eq!(original_filename, "logo.png");
@@ -1509,15 +1626,19 @@ mod tests {
             original_filename: "logo.png".into(),
         };
         let msg_one = IpcMessage::new(MessageKind::AssetAdded(payload.clone()));
-        let back_one: IpcMessage = serde_json::from_str(&serde_json::to_string(&msg_one).unwrap()).unwrap();
+        let back_one: IpcMessage =
+            serde_json::from_str(&serde_json::to_string(&msg_one).unwrap()).unwrap();
         match back_one.kind {
             MessageKind::AssetAdded(p) => assert_eq!(p, payload),
             other => panic!("unexpected variant: {other:?}"),
         }
 
-        let bundle = AssetsBundle { assets: vec![payload] };
+        let bundle = AssetsBundle {
+            assets: vec![payload],
+        };
         let msg_all = IpcMessage::new(MessageKind::AssetsUpdate(bundle.clone()));
-        let back_all: IpcMessage = serde_json::from_str(&serde_json::to_string(&msg_all).unwrap()).unwrap();
+        let back_all: IpcMessage =
+            serde_json::from_str(&serde_json::to_string(&msg_all).unwrap()).unwrap();
         match back_all.kind {
             MessageKind::AssetsUpdate(b) => assert_eq!(b, bundle),
             other => panic!("unexpected variant: {other:?}"),
@@ -1598,10 +1719,9 @@ mod tests {
                 if element_id == "el_t" && text == "Hello world"
         ));
 
-        let cleared: InteractionEvent = serde_json::from_str(
-            r#"{"kind":"TextEditEnded","element_id":"el_t","text":""}"#,
-        )
-        .unwrap();
+        let cleared: InteractionEvent =
+            serde_json::from_str(r#"{"kind":"TextEditEnded","element_id":"el_t","text":""}"#)
+                .unwrap();
         assert!(matches!(
             cleared,
             InteractionEvent::TextEditEnded { ref text, .. } if text.is_empty()

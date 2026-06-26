@@ -48,7 +48,10 @@ impl Command for GroupElements {
     // top member's slot, shrink-wrap. Inverse restores the originals exactly.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(!self.group_id.is_empty(), "GroupElements: empty group_id");
-        assert!(self.element_ids.len() >= 2, "GroupElements: need >= 2 members");
+        assert!(
+            self.element_ids.len() >= 2,
+            "GroupElements: need >= 2 members"
+        );
         let canvas = resolve_canvas_mut(deck, &self.target)?;
 
         // All members must exist, be non-root, and share one direct parent.
@@ -58,12 +61,17 @@ impl Command for GroupElements {
         };
         for id in &self.element_ids {
             if canvas.is_root_id(id) {
-                return Err(CommandError::InvalidOperation("GroupElements: cannot group the root".into()));
+                return Err(CommandError::InvalidOperation(
+                    "GroupElements: cannot group the root".into(),
+                ));
             }
             match parent_of(canvas.root(), id) {
                 Some(p) if p == parent_id => {}
-                Some(_) => return Err(CommandError::InvalidOperation(
-                    "GroupElements: members must share one parent".into())),
+                Some(_) => {
+                    return Err(CommandError::InvalidOperation(
+                        "GroupElements: members must share one parent".into(),
+                    ));
+                }
                 None => return Err(CommandError::ElementNotFound(id.clone())),
             }
         }
@@ -114,9 +122,15 @@ impl Command for GroupElements {
             warnings: Vec::new(),
         })
     }
-    fn label(&self) -> &'static str { "Group Elements" }
-    fn affects_object_tree(&self) -> bool { true }
-    fn requires_remount(&self) -> bool { true }
+    fn label(&self) -> &'static str {
+        "Group Elements"
+    }
+    fn affects_object_tree(&self) -> bool {
+        true
+    }
+    fn requires_remount(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -140,7 +154,9 @@ impl Command for DissolveGroup {
         for (pos, node) in &self.originals {
             canvas
                 .insert_child(&self.parent_id, *pos, node.clone())
-                .map_err(|_| CommandError::InvalidOperation("DissolveGroup: insert failed".into()))?;
+                .map_err(|_| {
+                    CommandError::InvalidOperation("DissolveGroup: insert failed".into())
+                })?;
         }
         // Re-fit the parent chain (the parent may itself be a flex group).
         relayout_ancestors(canvas.root_mut(), &self.parent_id);
@@ -160,9 +176,15 @@ impl Command for DissolveGroup {
             warnings: Vec::new(),
         })
     }
-    fn label(&self) -> &'static str { "Ungroup Elements" }
-    fn affects_object_tree(&self) -> bool { true }
-    fn requires_remount(&self) -> bool { true }
+    fn label(&self) -> &'static str {
+        "Ungroup Elements"
+    }
+    fn affects_object_tree(&self) -> bool {
+        true
+    }
+    fn requires_remount(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
@@ -186,7 +208,10 @@ mod tests {
     }
     fn kid(id: &str, x: f64, y: f64, w: f64, h: f64) -> ElementNode {
         let mut n = text_element(id, "t");
-        n.geometry.x = x; n.geometry.y = y; n.geometry.width = w; n.geometry.height = h;
+        n.geometry.x = x;
+        n.geometry.y = y;
+        n.geometry.width = w;
+        n.geometry.height = h;
         n
     }
 
@@ -202,7 +227,9 @@ mod tests {
             target: CanvasTarget::Slide("s".into()),
             group_id: "grp".into(),
             element_ids: vec!["a".into(), "b".into()],
-        }.apply(&mut deck).unwrap();
+        }
+        .apply(&mut deck)
+        .unwrap();
 
         let sid: SlideId = "s".into();
         let root = &deck.slides[&sid].root;
@@ -232,7 +259,9 @@ mod tests {
             target: CanvasTarget::Slide("s".into()),
             group_id: "grp".into(),
             element_ids: vec!["a".into(), "b".into()],
-        }.apply(&mut deck).unwrap();
+        }
+        .apply(&mut deck)
+        .unwrap();
         out.inverse.apply(&mut deck).unwrap();
         let sid: SlideId = "s".into();
         let root = &deck.slides[&sid].root;
@@ -251,7 +280,9 @@ mod tests {
             target: CanvasTarget::Slide("s".into()),
             group_id: "grp".into(),
             element_ids: vec!["a".into(), "b".into()],
-        }.apply(&mut deck).unwrap_err();
+        }
+        .apply(&mut deck)
+        .unwrap_err();
         assert!(matches!(err, CommandError::InvalidOperation(_)));
     }
 }

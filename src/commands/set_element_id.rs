@@ -35,7 +35,10 @@ impl Command for SetElementId {
     // Dataflow: locate slide -> guard collision -> locate element by old
     // id -> overwrite its id -> invalidate index -> build inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
-        assert!(!self.target.id().is_empty(), "SetElementId: target id is empty");
+        assert!(
+            !self.target.id().is_empty(),
+            "SetElementId: target id is empty"
+        );
         assert!(!self.new_id.is_empty(), "SetElementId: new_id is empty");
         let canvas = resolve_canvas_mut(deck, &self.target)?;
         if self.new_id != self.old_id && canvas.find_element(&self.new_id).is_some() {

@@ -1,7 +1,7 @@
 // HTML export: assemble a self-contained playable folder for the deck.
-use crate::deck::animation::step_count;
 use crate::deck::Deck;
-use crate::html::serialize::{serialize_slide_themed, ANIMATION_KEYFRAMES_CSS};
+use crate::deck::animation::step_count;
+use crate::html::serialize::{ANIMATION_KEYFRAMES_CSS, serialize_slide_themed};
 use crate::present::reveal::{forward_reveal, snap_reveal};
 use serde::Serialize;
 
@@ -74,14 +74,21 @@ pub fn build_html_export(deck: &Deck) -> Result<ExportBundle, serde_json::Error>
         }
         let (fill, img) = deck.effective_slide_bg(slide);
         let html: String = serialize_slide_themed(slide, fill.as_deref(), img.as_deref());
-        slides.push(SlideData { html, snaps, forwards });
+        slides.push(SlideData {
+            html,
+            snaps,
+            forwards,
+        });
     }
     // Only assets whose bytes are present get written and listed.
     let mut assets: Vec<AssetFile> = Vec::new();
     let mut asset_files: Vec<(String, Vec<u8>)> = Vec::new();
     for entry in &deck.assets.assets {
         if let Some(bytes) = deck.assets.files.get(&entry.path) {
-            assets.push(AssetFile { id: entry.id.clone(), path: entry.path.clone() });
+            assets.push(AssetFile {
+                id: entry.id.clone(),
+                path: entry.path.clone(),
+            });
             asset_files.push((entry.path.clone(), bytes.clone()));
         }
     }
@@ -123,7 +130,10 @@ mod tests {
     use crate::deck::Deck;
 
     fn file<'a>(b: &'a ExportBundle, name: &str) -> Option<&'a [u8]> {
-        b.files.iter().find(|(p, _)| p == name).map(|(_, v)| v.as_slice())
+        b.files
+            .iter()
+            .find(|(p, _)| p == name)
+            .map(|(_, v)| v.as_slice())
     }
 
     #[test]
@@ -142,7 +152,9 @@ mod tests {
         // player can absolutize it.
         let deck_js = std::str::from_utf8(file(&bundle, "deck.js").unwrap()).unwrap();
         let v: serde_json::Value = serde_json::from_str(
-            deck_js.trim_start_matches("window.__DECK = ").trim_end_matches(';'),
+            deck_js
+                .trim_start_matches("window.__DECK = ")
+                .trim_end_matches(';'),
         )
         .unwrap();
         let assets = v["assets"].as_array().unwrap();
@@ -176,7 +188,11 @@ mod tests {
             assert_eq!(slides[i]["forwards"].as_array().unwrap().len(), n);
         }
         for entry in &deck.assets.assets {
-            assert!(file(&bundle, &entry.path).is_some(), "missing asset {}", entry.path);
+            assert!(
+                file(&bundle, &entry.path).is_some(),
+                "missing asset {}",
+                entry.path
+            );
         }
     }
 }

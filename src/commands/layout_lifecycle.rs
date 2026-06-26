@@ -49,13 +49,17 @@ impl Command for InsertLayout {
             )));
         }
         let order_pos: usize = self.position.min(deck.theme.layout_order.len());
-        deck.theme.layouts.insert(layout_id.clone(), self.layout.clone());
+        deck.theme
+            .layouts
+            .insert(layout_id.clone(), self.layout.clone());
         deck.theme.layout_order.insert(order_pos, layout_id.clone());
         deck.manifest_dirty = true;
 
         Ok(CommandOutput {
             patches: Vec::new(),
-            inverse: Box::new(RemoveLayout { layout_id: layout_id.clone() }),
+            inverse: Box::new(RemoveLayout {
+                layout_id: layout_id.clone(),
+            }),
             dirty_targets: vec![CanvasTarget::Layout(layout_id)],
             manifest_dirty: true,
             warnings: Vec::new(),
@@ -92,7 +96,10 @@ impl Command for RemoveLayout {
     // Dataflow: guard last-layout -> find order position -> remove from
     // layout_order + layouts -> build inverse with the captured node.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
-        assert!(!self.layout_id.is_empty(), "RemoveLayout: layout id is empty");
+        assert!(
+            !self.layout_id.is_empty(),
+            "RemoveLayout: layout id is empty"
+        );
         if !deck.theme.layouts.contains_key(&self.layout_id) {
             return Err(CommandError::LayoutNotFound(self.layout_id.clone()));
         }
@@ -157,7 +164,10 @@ impl Command for SetLayoutName {
     // Dataflow: locate layout -> snapshot prior name -> overwrite -> build
     // inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
-        assert!(!self.layout_id.is_empty(), "SetLayoutName: layout id is empty");
+        assert!(
+            !self.layout_id.is_empty(),
+            "SetLayoutName: layout id is empty"
+        );
         let layout = deck
             .theme
             .layouts
@@ -203,7 +213,10 @@ pub struct SetLayoutBackground {
 
 impl Command for SetLayoutBackground {
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
-        assert!(!self.layout_id.is_empty(), "SetLayoutBackground: layout id is empty");
+        assert!(
+            !self.layout_id.is_empty(),
+            "SetLayoutBackground: layout id is empty"
+        );
         let layout = deck
             .theme
             .layouts
@@ -246,7 +259,10 @@ pub struct SetLayoutBackgroundImage {
 
 impl Command for SetLayoutBackgroundImage {
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
-        assert!(!self.layout_id.is_empty(), "SetLayoutBackgroundImage: layout id is empty");
+        assert!(
+            !self.layout_id.is_empty(),
+            "SetLayoutBackgroundImage: layout id is empty"
+        );
         let layout = deck
             .theme
             .layouts
@@ -289,16 +305,26 @@ mod tests {
     use crate::deck::builders::group_element;
 
     fn blank_layout(id: &str, name: &str) -> LayoutNode {
-        LayoutNode::new(id.into(), name.into(), group_element("el_layout_root", vec![]))
+        LayoutNode::new(
+            id.into(),
+            name.into(),
+            group_element("el_layout_root", vec![]),
+        )
     }
 
     #[test]
     fn layout_background_sets_and_inverts() {
         let mut deck = Deck::default();
         let lid = deck.theme.layout_order[0].clone();
-        let cmd = SetLayoutBackground { layout_id: lid.clone(), background: Some("#0af".into()) };
+        let cmd = SetLayoutBackground {
+            layout_id: lid.clone(),
+            background: Some("#0af".into()),
+        };
         let out = cmd.apply(&mut deck).unwrap();
-        assert_eq!(deck.theme.layouts[&lid].background, Some("#0af".to_string()));
+        assert_eq!(
+            deck.theme.layouts[&lid].background,
+            Some("#0af".to_string())
+        );
         assert!(cmd.requires_remount());
         assert!(cmd.affects_layout_list());
         out.inverse.apply(&mut deck).unwrap();
@@ -327,11 +353,17 @@ mod tests {
     fn insert_layout_adds_to_map_and_order() {
         let mut deck = Deck::default();
         let before = deck.theme.layout_order.len();
-        let cmd = InsertLayout { position: before, layout: blank_layout("title", "Title") };
+        let cmd = InsertLayout {
+            position: before,
+            layout: blank_layout("title", "Title"),
+        };
         let out = cmd.apply(&mut deck).unwrap();
         assert_eq!(deck.theme.layout_order.len(), before + 1);
         assert!(deck.theme.layouts.contains_key("title"));
-        assert_eq!(deck.theme.layout_order.last().map(String::as_str), Some("title"));
+        assert_eq!(
+            deck.theme.layout_order.last().map(String::as_str),
+            Some("title")
+        );
         assert!(out.patches.is_empty());
         assert!(out.manifest_dirty);
         assert!(cmd.affects_layout_list());
@@ -340,7 +372,10 @@ mod tests {
     #[test]
     fn insert_layout_at_position_inserts_in_order() {
         let mut deck = Deck::default();
-        let cmd = InsertLayout { position: 0, layout: blank_layout("first", "First") };
+        let cmd = InsertLayout {
+            position: 0,
+            layout: blank_layout("first", "First"),
+        };
         cmd.apply(&mut deck).unwrap();
         assert_eq!(deck.theme.layout_order[0], "first");
     }
@@ -348,16 +383,25 @@ mod tests {
     #[test]
     fn insert_layout_clamps_out_of_range_position() {
         let mut deck = Deck::default();
-        let cmd = InsertLayout { position: 999, layout: blank_layout("app", "App") };
+        let cmd = InsertLayout {
+            position: 999,
+            layout: blank_layout("app", "App"),
+        };
         cmd.apply(&mut deck).unwrap();
-        assert_eq!(deck.theme.layout_order.last().map(String::as_str), Some("app"));
+        assert_eq!(
+            deck.theme.layout_order.last().map(String::as_str),
+            Some("app")
+        );
     }
 
     #[test]
     fn insert_layout_rejects_duplicate_id() {
         let mut deck = Deck::default();
         // "blank" is the seeded default layout.
-        let cmd = InsertLayout { position: 0, layout: blank_layout("blank", "Dup") };
+        let cmd = InsertLayout {
+            position: 0,
+            layout: blank_layout("blank", "Dup"),
+        };
         let err = cmd.apply(&mut deck).unwrap_err();
         assert!(matches!(err, CommandError::Conflict(_)));
     }
@@ -366,9 +410,12 @@ mod tests {
     fn insert_then_inverse_removes_the_layout() {
         let mut deck = Deck::default();
         let before = deck.theme.layout_order.clone();
-        let out = InsertLayout { position: 1, layout: blank_layout("tmp", "Tmp") }
-            .apply(&mut deck)
-            .unwrap();
+        let out = InsertLayout {
+            position: 1,
+            layout: blank_layout("tmp", "Tmp"),
+        }
+        .apply(&mut deck)
+        .unwrap();
         out.inverse.apply(&mut deck).unwrap();
         assert_eq!(deck.theme.layout_order, before);
         assert!(!deck.theme.layouts.contains_key("tmp"));
@@ -377,10 +424,15 @@ mod tests {
     #[test]
     fn remove_layout_drops_from_map_and_order() {
         let mut deck = Deck::default();
-        InsertLayout { position: 1, layout: blank_layout("b", "B") }
-            .apply(&mut deck)
-            .unwrap();
-        let cmd = RemoveLayout { layout_id: "b".into() };
+        InsertLayout {
+            position: 1,
+            layout: blank_layout("b", "B"),
+        }
+        .apply(&mut deck)
+        .unwrap();
+        let cmd = RemoveLayout {
+            layout_id: "b".into(),
+        };
         let out = cmd.apply(&mut deck).unwrap();
         assert!(!deck.theme.layouts.contains_key("b"));
         assert!(!deck.theme.layout_order.iter().any(|id| id == "b"));
@@ -393,30 +445,46 @@ mod tests {
         let mut deck = Deck::default();
         assert_eq!(deck.theme.layout_order.len(), 1);
         let only = deck.theme.layout_order[0].clone();
-        let err = RemoveLayout { layout_id: only }.apply(&mut deck).unwrap_err();
+        let err = RemoveLayout { layout_id: only }
+            .apply(&mut deck)
+            .unwrap_err();
         assert!(matches!(err, CommandError::InvalidOperation(_)));
     }
 
     #[test]
     fn remove_missing_layout_errors() {
         let mut deck = Deck::default();
-        InsertLayout { position: 1, layout: blank_layout("b", "B") }
-            .apply(&mut deck)
-            .unwrap();
-        let err = RemoveLayout { layout_id: "ghost".into() }.apply(&mut deck).unwrap_err();
+        InsertLayout {
+            position: 1,
+            layout: blank_layout("b", "B"),
+        }
+        .apply(&mut deck)
+        .unwrap();
+        let err = RemoveLayout {
+            layout_id: "ghost".into(),
+        }
+        .apply(&mut deck)
+        .unwrap_err();
         assert!(matches!(err, CommandError::LayoutNotFound(_)));
     }
 
     #[test]
     fn remove_then_inverse_restores_layout_verbatim() {
         let mut deck = Deck::default();
-        InsertLayout { position: 1, layout: blank_layout("b", "B") }
-            .apply(&mut deck)
-            .unwrap();
+        InsertLayout {
+            position: 1,
+            layout: blank_layout("b", "B"),
+        }
+        .apply(&mut deck)
+        .unwrap();
         let order_before = deck.theme.layout_order.clone();
         let layout_before = deck.theme.layouts.get("b").cloned().unwrap();
 
-        let out = RemoveLayout { layout_id: "b".into() }.apply(&mut deck).unwrap();
+        let out = RemoveLayout {
+            layout_id: "b".into(),
+        }
+        .apply(&mut deck)
+        .unwrap();
         out.inverse.apply(&mut deck).unwrap();
 
         assert_eq!(deck.theme.layout_order, order_before);
@@ -426,10 +494,24 @@ mod tests {
     #[test]
     fn remove_preserves_position_for_inverse() {
         let mut deck = Deck::default();
-        InsertLayout { position: 1, layout: blank_layout("b", "B") }.apply(&mut deck).unwrap();
-        InsertLayout { position: 2, layout: blank_layout("c", "C") }.apply(&mut deck).unwrap();
+        InsertLayout {
+            position: 1,
+            layout: blank_layout("b", "B"),
+        }
+        .apply(&mut deck)
+        .unwrap();
+        InsertLayout {
+            position: 2,
+            layout: blank_layout("c", "C"),
+        }
+        .apply(&mut deck)
+        .unwrap();
         let order_before = deck.theme.layout_order.clone();
-        let out = RemoveLayout { layout_id: "b".into() }.apply(&mut deck).unwrap();
+        let out = RemoveLayout {
+            layout_id: "b".into(),
+        }
+        .apply(&mut deck)
+        .unwrap();
         out.inverse.apply(&mut deck).unwrap();
         assert_eq!(deck.theme.layout_order, order_before);
         assert_eq!(deck.theme.layout_order[1], "b");
@@ -438,7 +520,10 @@ mod tests {
     #[test]
     fn set_layout_name_updates_and_inverts() {
         let mut deck = Deck::default();
-        let cmd = SetLayoutName { layout_id: "blank".into(), new_name: "Renamed".into() };
+        let cmd = SetLayoutName {
+            layout_id: "blank".into(),
+            new_name: "Renamed".into(),
+        };
         let out = cmd.apply(&mut deck).unwrap();
         assert_eq!(deck.theme.layouts["blank"].name, "Renamed");
         assert!(cmd.affects_layout_list());
@@ -449,9 +534,12 @@ mod tests {
     #[test]
     fn set_layout_name_errors_on_missing_layout() {
         let mut deck = Deck::default();
-        let err = SetLayoutName { layout_id: "ghost".into(), new_name: "X".into() }
-            .apply(&mut deck)
-            .unwrap_err();
+        let err = SetLayoutName {
+            layout_id: "ghost".into(),
+            new_name: "X".into(),
+        }
+        .apply(&mut deck)
+        .unwrap_err();
         assert!(matches!(err, CommandError::LayoutNotFound(_)));
     }
 }

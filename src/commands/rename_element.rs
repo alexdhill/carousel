@@ -32,8 +32,14 @@ impl Command for RenameElement {
     // Dataflow: locate element -> snapshot prior name -> overwrite ->
     // invalidate index -> build patch + inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
-        assert!(!self.target.id().is_empty(), "RenameElement: target id is empty");
-        assert!(!self.element_id.is_empty(), "RenameElement: element_id is empty");
+        assert!(
+            !self.target.id().is_empty(),
+            "RenameElement: target id is empty"
+        );
+        assert!(
+            !self.element_id.is_empty(),
+            "RenameElement: element_id is empty"
+        );
         let canvas = resolve_canvas_mut(deck, &self.target)?;
         let element = canvas
             .find_element_mut(&self.element_id)
@@ -109,11 +115,19 @@ mod tests {
         };
         let out = cmd.apply(&mut deck).unwrap();
         assert_eq!(
-            deck.slides[&sid].find_element(&eid).unwrap().name.as_deref(),
+            deck.slides[&sid]
+                .find_element(&eid)
+                .unwrap()
+                .name
+                .as_deref(),
             Some("Header")
         );
         match &out.patches[0] {
-            Patch::SetAttribute { element_id, attribute, value } => {
+            Patch::SetAttribute {
+                element_id,
+                attribute,
+                value,
+            } => {
                 assert_eq!(element_id, &eid);
                 assert_eq!(attribute, "data-name");
                 assert_eq!(value, "Header");
@@ -175,7 +189,11 @@ mod tests {
         let out = cmd.apply(&mut deck).unwrap();
         out.inverse.apply(&mut deck).unwrap();
         assert_eq!(
-            deck.slides[&sid].find_element(&eid).unwrap().name.as_deref(),
+            deck.slides[&sid]
+                .find_element(&eid)
+                .unwrap()
+                .name
+                .as_deref(),
             Some("Original")
         );
     }

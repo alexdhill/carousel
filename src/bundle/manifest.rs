@@ -126,9 +126,9 @@ pub fn slide_path_for(slide_id: &str) -> String {
 pub fn validate_format_version(version: &str) -> Result<(), BundleError> {
     assert!(!version.is_empty(), "validate_format_version: empty input");
     let major_str: &str = version.split('.').next().unwrap_or("");
-    let major: u32 = major_str
-        .parse()
-        .map_err(|_| BundleError::IncompatibleVersion(version.to_string(), SUPPORTED_FORMAT_MAJOR))?;
+    let major: u32 = major_str.parse().map_err(|_| {
+        BundleError::IncompatibleVersion(version.to_string(), SUPPORTED_FORMAT_MAJOR)
+    })?;
     if major != SUPPORTED_FORMAT_MAJOR {
         return Err(BundleError::IncompatibleVersion(
             version.to_string(),
@@ -172,7 +172,11 @@ impl Default for Metadata {
 
 impl Default for Dimensions {
     fn default() -> Self {
-        Self { width: 1920, height: 1080, unit: "px".to_string() }
+        Self {
+            width: 1920,
+            height: 1080,
+            unit: "px".to_string(),
+        }
     }
 }
 
@@ -209,7 +213,10 @@ fn current_iso8601() -> String {
 // walk forward from 1970-01-01 year-by-year with a bounded loop (max
 // iterations capped well above any plausible session time).
 fn civil_iso8601_from_unix(secs: u64) -> String {
-    assert!(secs < (u64::MAX / 2), "civil_iso8601_from_unix: implausible time");
+    assert!(
+        secs < (u64::MAX / 2),
+        "civil_iso8601_from_unix: implausible time"
+    );
     const SECS_PER_DAY: u64 = 86_400;
     let days_total: u64 = secs / SECS_PER_DAY;
     let time_of_day: u64 = secs % SECS_PER_DAY;
@@ -273,10 +280,7 @@ mod tests {
 
     #[test]
     fn slide_path_uses_canonical_layout() {
-        assert_eq!(
-            slide_path_for("01HQTEST"),
-            "slides/slide_01HQTEST.html"
-        );
+        assert_eq!(slide_path_for("01HQTEST"), "slides/slide_01HQTEST.html");
     }
 
     #[test]

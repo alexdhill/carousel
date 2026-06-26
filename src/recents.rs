@@ -37,10 +37,7 @@ fn now_secs() -> u64 {
 // when $HOME is unset. The parent directory is created lazily on write.
 pub fn recents_file() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
-    Some(
-        PathBuf::from(home)
-            .join("Library/Application Support/Carousel/recents.json"),
-    )
+    Some(PathBuf::from(home).join("Library/Application Support/Carousel/recents.json"))
 }
 
 // upsert
@@ -109,7 +106,11 @@ mod tests {
     use super::*;
 
     fn entry(path: &str, modified: u64) -> RecentEntry {
-        RecentEntry { path: path.into(), title: path.into(), modified }
+        RecentEntry {
+            path: path.into(),
+            title: path.into(),
+            modified,
+        }
     }
 
     #[test]

@@ -2,9 +2,9 @@
 // (slide, step) rendered at that step's snapped reveal — for the macOS webview
 // print-to-PDF path. This module is pure (string in/out); the rendering lives
 // in the macOS print integration.
-use crate::deck::animation::step_count;
 use crate::deck::Deck;
-use crate::html::serialize::{serialize_slide_themed, ANIMATION_KEYFRAMES_CSS};
+use crate::deck::animation::step_count;
+use crate::html::serialize::{ANIMATION_KEYFRAMES_CSS, serialize_slide_themed};
 use crate::present::reveal::snap_reveal;
 use base64::Engine;
 
@@ -54,7 +54,10 @@ const RASTER_TRIGGERS: [&str; 3] = ["backdrop-filter", "mix-blend-mode", "isolat
 // property in its inline_styles (key or value).
 fn node_uses_trigger(node: &crate::deck::element::ElementNode) -> bool {
     for (k, v) in &node.inline_styles {
-        if RASTER_TRIGGERS.iter().any(|t| k.contains(t) || v.contains(t)) {
+        if RASTER_TRIGGERS
+            .iter()
+            .any(|t| k.contains(t) || v.contains(t))
+        {
             return true;
         }
     }
@@ -93,7 +96,13 @@ pub fn raster_page_rects(deck: &Deck) -> Vec<PageRect> {
         let needs: bool = slide_needs_raster(slide, globals);
         for _ in 0..steps {
             if needs {
-                out.push(PageRect { index: page_index, x: 0.0, y: 0.0, width: w, height: h });
+                out.push(PageRect {
+                    index: page_index,
+                    x: 0.0,
+                    y: 0.0,
+                    width: w,
+                    height: h,
+                });
             }
             page_index += 1;
         }
@@ -216,7 +225,9 @@ mod tests {
     #[test]
     fn globals_css_trigger_flags_all_pages() {
         let mut d = Deck::sample();
-        d.theme.globals_css.push_str("\n.x{mix-blend-mode:multiply;}");
+        d.theme
+            .globals_css
+            .push_str("\n.x{mix-blend-mode:multiply;}");
         let total_steps: usize = d
             .slide_order
             .iter()

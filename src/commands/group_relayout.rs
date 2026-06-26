@@ -59,7 +59,11 @@ fn geom_patches(node: &ElementNode, before: &BTreeMap<String, Geometry>) -> Vec<
 }
 
 fn set_style(id: &str, prop: &str, v: f64) -> Patch {
-    Patch::SetStyle { element_id: id.to_string(), property: prop.to_string(), value: format!("{}px", v) }
+    Patch::SetStyle {
+        element_id: id.to_string(),
+        property: prop.to_string(),
+        value: format!("{}px", v),
+    }
 }
 
 // relayout_patches
@@ -91,22 +95,32 @@ mod tests {
     #[test]
     fn relayout_patches_emit_for_changed_nodes() {
         let mut a = text_element("a", "t");
-        a.geometry.x = 0.0; a.geometry.width = 20.0; a.geometry.height = 10.0;
+        a.geometry.x = 0.0;
+        a.geometry.width = 20.0;
+        a.geometry.height = 10.0;
         let mut b = text_element("b", "t");
-        b.geometry.x = 80.0; b.geometry.width = 20.0; b.geometry.height = 10.0;
+        b.geometry.x = 80.0;
+        b.geometry.width = 20.0;
+        b.geometry.height = 10.0;
         let mut c = text_element("c", "t");
-        c.geometry.x = 50.0; c.geometry.width = 20.0; c.geometry.height = 10.0;
+        c.geometry.x = 50.0;
+        c.geometry.width = 20.0;
+        c.geometry.height = 10.0;
         let mut g = group_element("g", vec![a, c, b]);
         g.style = ElementStyle::Group(GroupStyle {
-            distribution: GroupDistribution::SpaceBetween, ..Default::default() });
+            distribution: GroupDistribution::SpaceBetween,
+            ..Default::default()
+        });
         // The flex group sits under a structural root (the slide root is never
         // a user flex group); relayout against that root.
         let mut root = group_element("root", vec![g]);
         let patches = relayout_patches(&mut root, "a");
         // c moved 50 -> 40, so at least one SetStyle left patch for c exists.
-        let has_c_left = patches.iter().any(|p| matches!(p,
+        let has_c_left = patches.iter().any(|p| {
+            matches!(p,
             Patch::SetStyle { element_id, property, value }
-                if element_id == "c" && property == "left" && value == "40px"));
+                if element_id == "c" && property == "left" && value == "40px")
+        });
         assert!(has_c_left);
     }
 }

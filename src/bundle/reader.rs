@@ -30,11 +30,17 @@ impl BundleReader {
     // is malformed.
     // Dataflow: File::open -> ZipArchive::new -> wrap.
     pub fn open(path: &Path) -> BundleResult<Self> {
-        assert!(!path.as_os_str().is_empty(), "BundleReader::open: empty path");
+        assert!(
+            !path.as_os_str().is_empty(),
+            "BundleReader::open: empty path"
+        );
         debug!(path = %path.display(), "bundle: opening archive");
         let file: File = File::open(path)?;
         let archive: ZipArchive<File> = ZipArchive::new(file)?;
-        Ok(Self { archive, path: path.to_path_buf() })
+        Ok(Self {
+            archive,
+            path: path.to_path_buf(),
+        })
     }
 
     // path
@@ -80,15 +86,10 @@ impl BundleReader {
     // on UTF-8 decode (wrapped through std::io::Error -> BundleError::Io).
     pub fn read_string(&mut self, name: &str) -> BundleResult<String> {
         assert!(!name.is_empty(), "read_string: empty name");
-        let mut entry = self
-            .archive
-            .by_name(name)
-            .map_err(|e| match e {
-                zip::result::ZipError::FileNotFound => {
-                    BundleError::MissingEntry(name.to_string())
-                }
-                other => BundleError::Zip(other),
-            })?;
+        let mut entry = self.archive.by_name(name).map_err(|e| match e {
+            zip::result::ZipError::FileNotFound => BundleError::MissingEntry(name.to_string()),
+            other => BundleError::Zip(other),
+        })?;
         let mut buf: String = String::new();
         entry.read_to_string(&mut buf)?;
         Ok(buf)
@@ -100,15 +101,10 @@ impl BundleReader {
     // Errors: MissingEntry if absent; Zip / Io on read.
     pub fn read_bytes(&mut self, name: &str) -> BundleResult<Vec<u8>> {
         assert!(!name.is_empty(), "read_bytes: empty name");
-        let mut entry = self
-            .archive
-            .by_name(name)
-            .map_err(|e| match e {
-                zip::result::ZipError::FileNotFound => {
-                    BundleError::MissingEntry(name.to_string())
-                }
-                other => BundleError::Zip(other),
-            })?;
+        let mut entry = self.archive.by_name(name).map_err(|e| match e {
+            zip::result::ZipError::FileNotFound => BundleError::MissingEntry(name.to_string()),
+            other => BundleError::Zip(other),
+        })?;
         let mut buf: Vec<u8> = Vec::with_capacity(entry.size() as usize);
         entry.read_to_end(&mut buf)?;
         Ok(buf)

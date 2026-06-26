@@ -9,7 +9,7 @@
 // (which owns the WebView). `ApplicationCore` drives it; the sender plays no
 // part in the cursor logic, which is why the tests target `PresentCursor`.
 
-use crate::deck::animation::{step_count, AnimationState};
+use crate::deck::animation::{AnimationState, step_count};
 use crate::deck::{Deck, SlideId};
 use crate::html::serialize::serialize_slide_themed;
 use crate::ipc::bridge::WebviewSender;
@@ -24,7 +24,10 @@ use crate::present::reveal::{forward_reveal, snap_reveal};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PresentStep {
     Reveal(RevealPayload),
-    SlideChanged { slide: PresentSlidePayload, reveal: RevealPayload },
+    SlideChanged {
+        slide: PresentSlidePayload,
+        reveal: RevealPayload,
+    },
     Unchanged,
 }
 
@@ -40,7 +43,10 @@ impl PresentCursor {
     // Inputs: the starting index into deck.slide_order.
     // Output: a cursor parked at step 0 of that slide.
     pub fn new(slide_index: usize) -> Self {
-        Self { cursor: AnimationState::default(), slide_index }
+        Self {
+            cursor: AnimationState::default(),
+            slide_index,
+        }
     }
 
     pub fn slide_index(&self) -> usize {
@@ -144,7 +150,10 @@ impl PresentCursor {
 
     // timeline: clone the slide's timeline (empty if the slide is missing).
     fn timeline(&self, deck: &Deck, sid: &str) -> Vec<crate::deck::AnimationEntry> {
-        deck.slides.get(sid).map(|s| s.animations.clone()).unwrap_or_default()
+        deck.slides
+            .get(sid)
+            .map(|s| s.animations.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -184,7 +193,10 @@ impl PresentationSession {
     // new
     // Inputs: the presentation WebviewSender and the starting slide index.
     pub fn new(sender: WebviewSender, slide_index: usize) -> Self {
-        Self { sender, cursor: PresentCursor::new(slide_index) }
+        Self {
+            sender,
+            cursor: PresentCursor::new(slide_index),
+        }
     }
 
     pub fn sender(&self) -> &WebviewSender {
@@ -212,17 +224,22 @@ impl PresentationSession {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
-    use crate::deck::animation::{AnimationCategory, AnimationEntry, AnimationTiming, AnimationTrigger};
+    use crate::deck::Deck;
+    use crate::deck::animation::{
+        AnimationCategory, AnimationEntry, AnimationTiming, AnimationTrigger,
+    };
     use crate::deck::builders::group_element;
     use crate::deck::slide::SlideNode;
-    use crate::deck::Deck;
     use std::collections::BTreeMap;
 
     fn click_entry(id: &str, el: &str) -> AnimationEntry {
         AnimationEntry::new(
-            id.into(), el.into(),
+            id.into(),
+            el.into(),
             crate::deck::animation::AnimationEffect::Named("appear".into()),
-            AnimationCategory::Entrance, AnimationTrigger::OnClick, AnimationTiming::default(),
+            AnimationCategory::Entrance,
+            AnimationTrigger::OnClick,
+            AnimationTiming::default(),
         )
     }
 
@@ -237,7 +254,11 @@ mod tests {
             slides.insert(sid.into(), s);
             order.push(sid.into());
         }
-        Deck { slides, slide_order: order, ..Deck::default() }
+        Deck {
+            slides,
+            slide_order: order,
+            ..Deck::default()
+        }
     }
 
     #[test]
@@ -350,7 +371,10 @@ mod tests {
         // Back s2 -> s1: never animates, payload transition is None.
         match cur.back(&deck) {
             PresentStep::SlideChanged { slide, .. } => {
-                assert!(slide.transition.is_none(), "back never carries a transition");
+                assert!(
+                    slide.transition.is_none(),
+                    "back never carries a transition"
+                );
             }
             other => panic!("expected SlideChanged, got {other:?}"),
         }

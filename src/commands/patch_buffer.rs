@@ -25,7 +25,9 @@ impl PatchBuffer {
     // Inputs: none.
     // Output: an empty PatchBuffer.
     pub fn new() -> Self {
-        Self { pending: Vec::new() }
+        Self {
+            pending: Vec::new(),
+        }
     }
 
     // is_empty
@@ -93,12 +95,16 @@ fn coalesce_patches(patches: Vec<Patch>) -> Vec<Patch> {
     let mut keep: Vec<bool> = vec![true; n];
     for (i, patch) in patches.iter().enumerate() {
         let key_opt: Option<(ElementId, String, &'static str)> = match patch {
-            Patch::SetStyle { element_id, property, .. } => {
-                Some((element_id.clone(), property.clone(), STYLE_KIND))
-            }
-            Patch::SetAttribute { element_id, attribute, .. } => {
-                Some((element_id.clone(), attribute.clone(), ATTR_KIND))
-            }
+            Patch::SetStyle {
+                element_id,
+                property,
+                ..
+            } => Some((element_id.clone(), property.clone(), STYLE_KIND)),
+            Patch::SetAttribute {
+                element_id,
+                attribute,
+                ..
+            } => Some((element_id.clone(), attribute.clone(), ATTR_KIND)),
             _ => None,
         };
         if let Some(key) = key_opt {
@@ -139,7 +145,10 @@ mod tests {
     }
 
     fn set_text(id: &str, t: &str) -> Patch {
-        Patch::SetText { element_id: id.into(), text: t.into() }
+        Patch::SetText {
+            element_id: id.into(),
+            text: t.into(),
+        }
     }
 
     #[test]
@@ -182,14 +191,18 @@ mod tests {
         assert_eq!(out.len(), 2);
         // Last left write survives; top write also.
         match &out[0] {
-            Patch::SetStyle { property, value, .. } => {
+            Patch::SetStyle {
+                property, value, ..
+            } => {
                 assert_eq!(property, "left");
                 assert_eq!(value, "200px");
             }
             other => panic!("expected SetStyle, got {other:?}"),
         }
         match &out[1] {
-            Patch::SetStyle { property, value, .. } => {
+            Patch::SetStyle {
+                property, value, ..
+            } => {
                 assert_eq!(property, "top");
                 assert_eq!(value, "50px");
             }
@@ -211,14 +224,22 @@ mod tests {
         // the third input, so order becomes [b/top, a/left(200)].
         assert_eq!(out.len(), 2);
         match &out[0] {
-            Patch::SetStyle { element_id, property, .. } => {
+            Patch::SetStyle {
+                element_id,
+                property,
+                ..
+            } => {
                 assert_eq!(element_id, "b");
                 assert_eq!(property, "top");
             }
             _ => panic!(),
         }
         match &out[1] {
-            Patch::SetStyle { element_id, property, value } => {
+            Patch::SetStyle {
+                element_id,
+                property,
+                value,
+            } => {
                 assert_eq!(element_id, "a");
                 assert_eq!(property, "left");
                 assert_eq!(value, "200px");
@@ -239,7 +260,9 @@ mod tests {
         let out = buf.take_coalesced();
         assert_eq!(out.len(), 2);
         match &out[0] {
-            Patch::SetAttribute { attribute, value, .. } => {
+            Patch::SetAttribute {
+                attribute, value, ..
+            } => {
                 assert_eq!(attribute, "data-x");
                 assert_eq!(value, "2");
             }
@@ -264,7 +287,9 @@ mod tests {
         let patches = vec![
             set_text("a", "first"),
             set_text("a", "second"),
-            Patch::RemoveElement { element_id: "b".into() },
+            Patch::RemoveElement {
+                element_id: "b".into(),
+            },
         ];
         let mut buf = PatchBuffer::new();
         buf.add(patches);
@@ -317,7 +342,9 @@ mod tests {
         let inner = vec![set_style("c", "top", "10px")];
         let patches = vec![
             set_style("a", "left", "1px"),
-            Patch::Batch { patches: inner.clone() },
+            Patch::Batch {
+                patches: inner.clone(),
+            },
             set_style("a", "left", "2px"),
         ];
         let mut buf = PatchBuffer::new();

@@ -46,7 +46,14 @@ impl LayoutNode {
             matches!(root.element_type, crate::deck::element::ElementType::Group),
             "layout root must be a Group element"
         );
-        Self { id, name, root, background: None, background_image: None, dirty: false }
+        Self {
+            id,
+            name,
+            root,
+            background: None,
+            background_image: None,
+            dirty: false,
+        }
     }
 
     // preview_slide
@@ -54,11 +61,8 @@ impl LayoutNode {
     // the slide serializer / object-tree builder, carrying the layout's own
     // background so the layout preview and its on-disk HTML show it.
     pub fn preview_slide(&self) -> crate::deck::slide::SlideNode {
-        let mut s = crate::deck::slide::SlideNode::new(
-            self.id.clone(),
-            self.id.clone(),
-            self.root.clone(),
-        );
+        let mut s =
+            crate::deck::slide::SlideNode::new(self.id.clone(), self.id.clone(), self.root.clone());
         s.metadata.background = self.background.clone();
         s.metadata.background_image = self.background_image.clone();
         s

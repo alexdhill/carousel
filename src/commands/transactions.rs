@@ -49,8 +49,14 @@ impl TransactionSnapshot {
         element_id: ElementId,
         geometry: Geometry,
     ) {
-        assert!(!target.id().is_empty(), "record_geometry: target id is empty");
-        assert!(!element_id.is_empty(), "record_geometry: element_id is empty");
+        assert!(
+            !target.id().is_empty(),
+            "record_geometry: target id is empty"
+        );
+        assert!(
+            !element_id.is_empty(),
+            "record_geometry: element_id is empty"
+        );
         self.geometry.insert((target, element_id), geometry);
     }
 
@@ -101,7 +107,11 @@ mod tests {
     use crate::deck::style::Geometry;
 
     fn geom(x: f64, y: f64) -> Geometry {
-        Geometry { x, y, ..Default::default() }
+        Geometry {
+            x,
+            y,
+            ..Default::default()
+        }
     }
 
     fn slide(id: &str) -> CanvasTarget {

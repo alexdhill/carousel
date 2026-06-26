@@ -187,8 +187,16 @@ mod tests {
             "Multi-Move",
         );
         let out = cc.apply(&mut deck).unwrap();
-        let geo_a = deck.slides[&sid].find_element(&eid_a).unwrap().geometry.clone();
-        let geo_b = deck.slides[&sid].find_element(&eid_b).unwrap().geometry.clone();
+        let geo_a = deck.slides[&sid]
+            .find_element(&eid_a)
+            .unwrap()
+            .geometry
+            .clone();
+        let geo_b = deck.slides[&sid]
+            .find_element(&eid_b)
+            .unwrap()
+            .geometry
+            .clone();
         assert_eq!(geo_a.x, 100.0);
         assert_eq!(geo_a.y, 200.0);
         assert_eq!(geo_b.x, 300.0);
@@ -197,18 +205,27 @@ mod tests {
         assert_eq!(out.patches.len(), 4);
         // Dirty targets aggregated.
         assert_eq!(out.dirty_targets.len(), 2);
-        assert!(out
-            .dirty_targets
-            .iter()
-            .all(|t| t == &CanvasTarget::Slide(sid.clone())));
+        assert!(
+            out.dirty_targets
+                .iter()
+                .all(|t| t == &CanvasTarget::Slide(sid.clone()))
+        );
         assert!(!out.manifest_dirty);
     }
 
     #[test]
     fn inverse_reverses_sub_command_order() {
         let (mut deck, sid, eid_a, eid_b) = fresh_deck_with_two_children();
-        let original_a = deck.slides[&sid].find_element(&eid_a).unwrap().geometry.clone();
-        let original_b = deck.slides[&sid].find_element(&eid_b).unwrap().geometry.clone();
+        let original_a = deck.slides[&sid]
+            .find_element(&eid_a)
+            .unwrap()
+            .geometry
+            .clone();
+        let original_b = deck.slides[&sid]
+            .find_element(&eid_b)
+            .unwrap()
+            .geometry
+            .clone();
         let cc = CompositeCommand::new(
             vec![
                 move_cmd(&sid, &eid_a, 11.0, 22.0),
@@ -218,8 +235,16 @@ mod tests {
         );
         let out = cc.apply(&mut deck).unwrap();
         out.inverse.apply(&mut deck).unwrap();
-        let geo_a = deck.slides[&sid].find_element(&eid_a).unwrap().geometry.clone();
-        let geo_b = deck.slides[&sid].find_element(&eid_b).unwrap().geometry.clone();
+        let geo_a = deck.slides[&sid]
+            .find_element(&eid_a)
+            .unwrap()
+            .geometry
+            .clone();
+        let geo_b = deck.slides[&sid]
+            .find_element(&eid_b)
+            .unwrap()
+            .geometry
+            .clone();
         assert_eq!(geo_a.x, original_a.x);
         assert_eq!(geo_a.y, original_a.y);
         assert_eq!(geo_b.x, original_b.x);
@@ -239,8 +264,16 @@ mod tests {
         let first = cc.apply(&mut deck).unwrap();
         let second = first.inverse.apply(&mut deck).unwrap();
         second.inverse.apply(&mut deck).unwrap();
-        let geo_a = deck.slides[&sid].find_element(&eid_a).unwrap().geometry.clone();
-        let geo_b = deck.slides[&sid].find_element(&eid_b).unwrap().geometry.clone();
+        let geo_a = deck.slides[&sid]
+            .find_element(&eid_a)
+            .unwrap()
+            .geometry
+            .clone();
+        let geo_b = deck.slides[&sid]
+            .find_element(&eid_b)
+            .unwrap()
+            .geometry
+            .clone();
         assert_eq!(geo_a.x, 50.0);
         assert_eq!(geo_a.y, 60.0);
         assert_eq!(geo_b.x, 70.0);
@@ -289,11 +322,19 @@ mod tests {
     #[test]
     fn single_sub_command_composite_round_trips() {
         let (mut deck, sid, eid, _) = fresh_deck_with_two_children();
-        let original = deck.slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let original = deck.slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
         let cc = CompositeCommand::new(vec![move_cmd(&sid, &eid, 999.0, -1.0)], "Single");
         let out = cc.apply(&mut deck).unwrap();
         out.inverse.apply(&mut deck).unwrap();
-        let geo = deck.slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let geo = deck.slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
         assert_eq!(geo.x, original.x);
         assert_eq!(geo.y, original.y);
     }

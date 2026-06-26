@@ -57,7 +57,9 @@ mod tests {
     fn set_globals_replaces_blob_and_flags_globals() {
         let mut deck = Deck::default();
         assert!(deck.theme.globals_css.is_empty());
-        let cmd = SetGlobalsCss { new_css: "@keyframes spin { to { rotate: 360deg; } }".into() };
+        let cmd = SetGlobalsCss {
+            new_css: "@keyframes spin { to { rotate: 360deg; } }".into(),
+        };
         let out = cmd.apply(&mut deck).unwrap();
         assert!(deck.theme.globals_css.contains("@keyframes spin"));
         assert!(out.patches.is_empty());
@@ -69,7 +71,9 @@ mod tests {
     fn set_globals_inverse_restores_prior_blob() {
         let mut deck = Deck::default();
         deck.theme.globals_css = ":root { --x: 1; }".into();
-        let cmd = SetGlobalsCss { new_css: ":root { --x: 2; }".into() };
+        let cmd = SetGlobalsCss {
+            new_css: ":root { --x: 2; }".into(),
+        };
         let out = cmd.apply(&mut deck).unwrap();
         assert_eq!(deck.theme.globals_css, ":root { --x: 2; }");
         out.inverse.apply(&mut deck).unwrap();
@@ -80,7 +84,9 @@ mod tests {
     fn set_globals_accepts_empty_string() {
         let mut deck = Deck::default();
         deck.theme.globals_css = "body{}".into();
-        let cmd = SetGlobalsCss { new_css: String::new() };
+        let cmd = SetGlobalsCss {
+            new_css: String::new(),
+        };
         cmd.apply(&mut deck).unwrap();
         assert!(deck.theme.globals_css.is_empty());
     }

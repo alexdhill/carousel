@@ -29,8 +29,14 @@ impl Command for MoveElement {
     // Dataflow: resolve canvas -> locate element -> snapshot prior (x,y)
     // -> write new geometry -> invalidate index -> build patches/inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
-        assert!(!self.target.id().is_empty(), "MoveElement: target id is empty");
-        assert!(!self.element_id.is_empty(), "MoveElement: element_id is empty");
+        assert!(
+            !self.target.id().is_empty(),
+            "MoveElement: target id is empty"
+        );
+        assert!(
+            !self.element_id.is_empty(),
+            "MoveElement: element_id is empty"
+        );
         let canvas = resolve_canvas_mut(deck, &self.target)?;
         let element = canvas
             .find_element_mut(&self.element_id)
@@ -64,7 +70,10 @@ impl Command for MoveElement {
                 value: format!("{}px", self.new_position.y),
             },
         ];
-        patches.extend(crate::commands::relayout_patches(canvas.root_mut(), &self.element_id));
+        patches.extend(crate::commands::relayout_patches(
+            canvas.root_mut(),
+            &self.element_id,
+        ));
 
         Ok(CommandOutput {
             patches,
@@ -100,10 +109,18 @@ mod tests {
         use crate::deck::style::{GroupDistribution, GroupStyle};
         let mut deck = Deck::sample();
         let sid: SlideId = deck.slide_order[0].clone();
-        let mut a = text_element("ca", "t"); a.geometry.width = 20.0; a.geometry.height = 10.0;
-        let mut b = text_element("cb", "t"); b.geometry.x = 80.0; b.geometry.width = 20.0; b.geometry.height = 10.0;
+        let mut a = text_element("ca", "t");
+        a.geometry.width = 20.0;
+        a.geometry.height = 10.0;
+        let mut b = text_element("cb", "t");
+        b.geometry.x = 80.0;
+        b.geometry.width = 20.0;
+        b.geometry.height = 10.0;
         let mut g = group_element("cg", vec![a, b]);
-        g.style = ElementStyle::Group(GroupStyle { distribution: GroupDistribution::SpaceBetween, ..Default::default() });
+        g.style = ElementStyle::Group(GroupStyle {
+            distribution: GroupDistribution::SpaceBetween,
+            ..Default::default()
+        });
         deck.slides.get_mut(&sid).unwrap().root.children.push(g);
         let cmd = MoveElement {
             target: CanvasTarget::Slide(sid.clone()),
@@ -123,7 +140,11 @@ mod tests {
     #[test]
     fn move_updates_geometry_xy_only() {
         let (mut deck, sid, eid) = fresh_deck_first_child();
-        let before = deck.slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let before = deck.slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
         let cmd = MoveElement {
             target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
@@ -131,7 +152,11 @@ mod tests {
             previous_position: None,
         };
         let out = cmd.apply(&mut deck).unwrap();
-        let after = deck.slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let after = deck.slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
         assert_eq!(after.x, 500.0);
         assert_eq!(after.y, 300.0);
         // Width/height/opacity/rotation/z_order untouched.
@@ -158,7 +183,12 @@ mod tests {
         let mut found_left = false;
         let mut found_top = false;
         for p in &out.patches {
-            if let Patch::SetStyle { element_id, property, value } = p {
+            if let Patch::SetStyle {
+                element_id,
+                property,
+                value,
+            } = p
+            {
                 assert_eq!(element_id, &eid);
                 if property == "left" {
                     assert_eq!(value, "12.5px");
@@ -176,17 +206,28 @@ mod tests {
     #[test]
     fn move_inverse_restores_prior_position() {
         let (mut deck, sid, eid) = fresh_deck_first_child();
-        let original = deck.slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let original = deck.slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
 
         let cmd = MoveElement {
             target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
-            new_position: Point { x: 999.0, y: -123.0 },
+            new_position: Point {
+                x: 999.0,
+                y: -123.0,
+            },
             previous_position: None,
         };
         let out = cmd.apply(&mut deck).unwrap();
         out.inverse.apply(&mut deck).unwrap();
-        let after = deck.slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let after = deck.slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
         assert_eq!(after.x, original.x);
         assert_eq!(after.y, original.y);
     }
@@ -221,7 +262,11 @@ mod tests {
         let second = first.inverse.apply(&mut deck).unwrap();
         // Apply inverse of inverse: back to new_position.
         second.inverse.apply(&mut deck).unwrap();
-        let geo = deck.slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let geo = deck.slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
         assert_eq!(geo.x, 50.0);
         assert_eq!(geo.y, 60.0);
     }
@@ -308,7 +353,10 @@ mod tests {
             previous_position: None,
         };
         let out = cmd.apply(&mut deck).unwrap();
-        assert_eq!(out.dirty_targets, vec![CanvasTarget::Layout("blank".into())]);
+        assert_eq!(
+            out.dirty_targets,
+            vec![CanvasTarget::Layout("blank".into())]
+        );
         let moved = deck.theme.layouts["blank"].find_element("el_lt").unwrap();
         assert_eq!(moved.geometry.x, 7.0);
         assert_eq!(moved.geometry.y, 8.0);

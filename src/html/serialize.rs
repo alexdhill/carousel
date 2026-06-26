@@ -66,7 +66,10 @@ type AnimMap<'a> = BTreeMap<&'a str, Vec<&'a str>>;
 // element receives no z-index — z-index is only meaningful relative to
 // siblings, and a standalone element has none.
 pub fn serialize_element(node: &ElementNode) -> String {
-    assert!(node.is_consistent(), "cannot serialize inconsistent element");
+    assert!(
+        node.is_consistent(),
+        "cannot serialize inconsistent element"
+    );
     let mut out: String = String::new();
     // Standalone elements (e.g. InsertElement patches) have no slide-level
     // animation context, so they carry no targeting tag; the element picks
@@ -108,7 +111,9 @@ pub fn serialize_slide_themed(
     // Build the element → animation-ids map (timeline order) for the tag.
     let mut anim: AnimMap = AnimMap::new();
     for e in &slide.animations {
-        anim.entry(e.element_id.as_str()).or_default().push(e.id.as_str());
+        anim.entry(e.element_id.as_str())
+            .or_default()
+            .push(e.id.as_str());
     }
     let mut out: String = String::new();
     out.push_str("<section class=\"slide\" data-slide-id=\"");
@@ -146,7 +151,9 @@ pub fn serialize_slide_themed(
         if let Some(img) = bg_img {
             out.push_str("background-image:");
             out.push_str(&escape_attr(img));
-            out.push_str(";background-size:cover;background-position:center;background-repeat:no-repeat;");
+            out.push_str(
+                ";background-size:cover;background-position:center;background-repeat:no-repeat;",
+            );
         }
         out.push('"');
     }
@@ -178,7 +185,12 @@ fn write_node(node: &ElementNode, sibling_index: Option<i32>, anim: &AnimMap, ou
 // Output: side-effect; appends ` k="v"` pairs in BTreeMap (alphabetic)
 // order. Model-owned attributes overwrite user-supplied ones of the same
 // key so the parser can rely on canonical key names.
-fn write_attributes(node: &ElementNode, sibling_index: Option<i32>, anim: &AnimMap, out: &mut String) {
+fn write_attributes(
+    node: &ElementNode,
+    sibling_index: Option<i32>,
+    anim: &AnimMap,
+    out: &mut String,
+) {
     let mut attrs: BTreeMap<String, String> = node.attributes.clone();
     attrs.insert("data-element-id".into(), node.id.clone());
     attrs.insert(
@@ -243,26 +255,45 @@ fn add_content_attrs(node: &ElementNode, attrs: &mut BTreeMap<String, String>) {
     }
     if let ElementStyle::Group(gs) = &node.style {
         attrs.insert("data-flex-dir".into(), group_dir_token(gs.direction).into());
-        attrs.insert("data-flex-dist".into(), group_dist_token(gs.distribution).into());
-        attrs.insert("data-flex-align".into(), group_align_token(gs.alignment).into());
+        attrs.insert(
+            "data-flex-dist".into(),
+            group_dist_token(gs.distribution).into(),
+        );
+        attrs.insert(
+            "data-flex-align".into(),
+            group_align_token(gs.alignment).into(),
+        );
         attrs.insert("data-flex-scale".into(), format!("{}", gs.scale));
     }
 }
 
 fn group_dir_token(d: crate::deck::style::GroupDirection) -> &'static str {
     use crate::deck::style::GroupDirection::*;
-    match d { Row => "row", Column => "column" }
+    match d {
+        Row => "row",
+        Column => "column",
+    }
 }
 fn group_dist_token(d: crate::deck::style::GroupDistribution) -> &'static str {
     use crate::deck::style::GroupDistribution::*;
     match d {
-        None => "none", Start => "start", Center => "center", End => "end",
-        SpaceBetween => "space-between", SpaceAround => "space-around", SpaceEvenly => "space-evenly",
+        None => "none",
+        Start => "start",
+        Center => "center",
+        End => "end",
+        SpaceBetween => "space-between",
+        SpaceAround => "space-around",
+        SpaceEvenly => "space-evenly",
     }
 }
 fn group_align_token(a: crate::deck::style::GroupAlignment) -> &'static str {
     use crate::deck::style::GroupAlignment::*;
-    match a { None => "none", Start => "start", Center => "center", End => "end" }
+    match a {
+        None => "none",
+        Start => "start",
+        Center => "center",
+        End => "end",
+    }
 }
 
 // write_content
@@ -281,9 +312,7 @@ fn write_content(node: &ElementNode, anim: &AnimMap, out: &mut String) {
         }
         ElementContent::Embed(html) => out.push_str(html),
         ElementContent::Table(td) => write_table(td, out),
-        ElementContent::Image(_)
-        | ElementContent::Media(_)
-        | ElementContent::Shape(_) => {}
+        ElementContent::Image(_) | ElementContent::Media(_) | ElementContent::Shape(_) => {}
     }
 }
 
@@ -493,12 +522,18 @@ mod tests {
         use crate::deck::animation::{
             AnimationCategory, AnimationEntry, AnimationTiming, AnimationTrigger,
         };
-        let root = group_element("rt", vec![text_element("el_a", "x"), text_element("el_b", "y")]);
+        let root = group_element(
+            "rt",
+            vec![text_element("el_a", "x"), text_element("el_b", "y")],
+        );
         let mut slide = SlideNode::new("s".into(), "title".into(), root);
         slide.animations.push(AnimationEntry::new(
-            "anim_1".into(), "el_a".into(),
+            "anim_1".into(),
+            "el_a".into(),
             crate::deck::animation::AnimationEffect::Named("appear".into()),
-            AnimationCategory::Entrance, AnimationTrigger::OnClick, AnimationTiming::default(),
+            AnimationCategory::Entrance,
+            AnimationTrigger::OnClick,
+            AnimationTiming::default(),
         ));
         let html = serialize_slide(&slide);
         assert!(html.contains(r#"data-anim-ids="anim_1""#));
@@ -592,7 +627,11 @@ mod tests {
     fn geometry_emits_left_top_width_height() {
         let mut n = text_element("a", "x");
         n.geometry = Geometry {
-            x: 10.0, y: 20.0, width: 100.0, height: 50.0, ..Default::default()
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 50.0,
+            ..Default::default()
         };
         let html = serialize_element(&n);
         assert!(html.contains("left:10px"));
@@ -683,8 +722,10 @@ mod tests {
     #[test]
     fn inline_styles_appear_after_typed_properties() {
         let mut n = text_element("a", "x");
-        n.inline_styles.insert("background-color".into(), "#ff0066".into());
-        n.inline_styles.insert("border".into(), "2px solid #000".into());
+        n.inline_styles
+            .insert("background-color".into(), "#ff0066".into());
+        n.inline_styles
+            .insert("border".into(), "2px solid #000".into());
         let html = serialize_element(&n);
         let style_start = html.find("style=\"").expect("style attr present") + 7;
         let style_end = html[style_start..].find('"').expect("end quote") + style_start;
@@ -717,10 +758,7 @@ mod tests {
 
     #[test]
     fn group_children_get_per_child_z_index() {
-        let group = group_element(
-            "g",
-            vec![text_element("c0", "a"), text_element("c1", "b")],
-        );
+        let group = group_element("g", vec![text_element("c0", "a"), text_element("c1", "b")]);
         let html = serialize_element(&group);
         // The group itself is the top-level element → no z-index.
         // Its children carry z-index 0 and 1.

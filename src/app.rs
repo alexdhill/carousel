@@ -19,18 +19,16 @@ use crate::bundle::{
     serialize_deck, serialize_theme,
 };
 use crate::commands::{
-    Command, CommandDispatcher, CompositeCommand, EditorMode, FileAction, GeometryProperty,
-    GroupElements, InsertAnimation, InsertElement, InsertLayout, InsertSlide, InterpretResult, MoveElement, SetDeckTitle,
-    ElementTransform, RemoveAnimation, RemoveElementCommand, RemoveInlineStyle, RemoveSlide,
-    RenameElement, ReparentElement,
-    ResizeElement, SetElementsTransform, SetAnimationProperty, SetElementId, SetGeometryProperty, SetGlobalsCss, SetGroupLayout,
-    SetGroupScale, SetInlineStyle, SetLayoutBackground, SetLayoutBackgroundImage, SetLayoutName,
-    SetEmbedHtml,
-    DeleteTableColumn, DeleteTableRow, InsertTableColumn, InsertTableRow, SetCellStyles,
-    SetCellText, SetTableHeaderColumns, SetTableHeaderRows,
-    SetSlideBackground, SetSlideBackgroundImage, SetSlideLayout, SetSlideNotes, SetSlideTitle,
-    SetSlideTransition, SetTextContent, SwapTheme,
-    TransactionSnapshot,
+    Command, CommandDispatcher, CompositeCommand, DeleteTableColumn, DeleteTableRow, EditorMode,
+    ElementTransform, FileAction, GeometryProperty, GroupElements, InsertAnimation, InsertElement,
+    InsertLayout, InsertSlide, InsertTableColumn, InsertTableRow, InterpretResult, MoveElement,
+    RemoveAnimation, RemoveElementCommand, RemoveInlineStyle, RemoveSlide, RenameElement,
+    ReparentElement, ResizeElement, SetAnimationProperty, SetCellStyles, SetCellText, SetDeckTitle,
+    SetElementId, SetElementsTransform, SetEmbedHtml, SetGeometryProperty, SetGlobalsCss,
+    SetGroupLayout, SetGroupScale, SetInlineStyle, SetLayoutBackground, SetLayoutBackgroundImage,
+    SetLayoutName, SetSlideBackground, SetSlideBackgroundImage, SetSlideLayout, SetSlideNotes,
+    SetSlideTitle, SetSlideTransition, SetTableHeaderColumns, SetTableHeaderRows, SetTextContent,
+    SwapTheme, TransactionSnapshot,
 };
 use crate::deck::animation::{
     AnimationCategory, AnimationEffect, AnimationEntry, AnimationTiming, AnimationTrigger,
@@ -42,21 +40,19 @@ use crate::deck::element::{
 use crate::deck::ids::{new_animation_id, new_element_id};
 use crate::deck::layout::LayoutNode;
 use crate::deck::slide::SlideNode;
-use crate::deck::style::{
-    ColorRef, FontRef, Geometry, ImageStyle, Length, ShapeStyle, TextStyle,
-};
+use crate::deck::style::{ColorRef, FontRef, Geometry, ImageStyle, Length, ShapeStyle, TextStyle};
 use crate::deck::{Canvas, CanvasTarget, Deck, ElementId, LayoutId, ShapeGeometry, SlideId};
 use crate::error::{AppError, AppResult};
-use crate::html::serialize::{serialize_slide, serialize_slide_themed, ANIMATION_KEYFRAMES_CSS};
+use crate::html::serialize::{ANIMATION_KEYFRAMES_CSS, serialize_slide, serialize_slide_themed};
 use crate::ipc::bridge::WebviewSender;
 use crate::ipc::present::{PresentInbound, PresentInitPayload};
-use crate::present::session::{PresentationSession, PresentStep};
 use crate::ipc::{
     AssetPayload, AssetsBundle, EditorConfig, InteractionEvent, IpcMessage, LayoutListData,
     LayoutListEntry, MessageKind, MountSlideArgs, ObjectTreeData, ObjectTreeNode, Patch, Point,
     SelectionState, Size, SlideAnimationEntry, SlideAnimationsData, SlideInspectorData,
     SlideInspectorLayout, SlideListData, SlideListEntry,
 };
+use crate::present::session::{PresentStep, PresentationSession};
 use base64::Engine;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -336,7 +332,10 @@ impl ApplicationCore {
             }
             MessageKind::Interaction(event) => self.handle_interaction(event),
             other => {
-                warn!("unhandled message kind: {:?}", std::mem::discriminant(&other));
+                warn!(
+                    "unhandled message kind: {:?}",
+                    std::mem::discriminant(&other)
+                );
                 Ok(())
             }
         }
@@ -354,7 +353,10 @@ impl ApplicationCore {
             return Ok(());
         }
         let payload: Patch = if patches.len() == 1 {
-            patches.into_iter().next().unwrap_or(Patch::Batch { patches: vec![] })
+            patches
+                .into_iter()
+                .next()
+                .unwrap_or(Patch::Batch { patches: vec![] })
         } else {
             Patch::Batch { patches }
         };
@@ -422,7 +424,10 @@ impl ApplicationCore {
                 cmds.push(Box::new(MoveElement {
                     target: target.clone(),
                     element_id: id.clone(),
-                    new_position: Point { x: el.geometry.x + dx, y: el.geometry.y + dy },
+                    new_position: Point {
+                        x: el.geometry.x + dx,
+                        y: el.geometry.y + dy,
+                    },
                     previous_position: None,
                 }));
             }
@@ -452,7 +457,11 @@ impl ApplicationCore {
             Some(i) => i,
             None => return InterpretResult::Nothing,
         };
-        let next: usize = if forward { cur + 1 } else { cur.wrapping_sub(1) };
+        let next: usize = if forward {
+            cur + 1
+        } else {
+            cur.wrapping_sub(1)
+        };
         match order.get(next) {
             Some(sid) if forward || cur > 0 => InterpretResult::SetActiveSlide(sid.clone()),
             _ => InterpretResult::Nothing,
@@ -579,10 +588,8 @@ impl ApplicationCore {
     }
 
     fn send_slide_list(&self) -> AppResult<()> {
-        let data: SlideListData = build_slide_list_data(
-            self.dispatcher.deck(),
-            self.active_slide.as_ref(),
-        );
+        let data: SlideListData =
+            build_slide_list_data(self.dispatcher.deck(), self.active_slide.as_ref());
         debug!(
             slide_count = data.slides.len(),
             active = ?data.active_slide_id,
@@ -634,10 +641,11 @@ impl ApplicationCore {
                 iterations: e.timing.iterations,
             })
             .collect();
-        self.sender.send(MessageKind::SlideAnimationsUpdate(SlideAnimationsData {
-            slide_id: sid,
-            entries,
-        }))
+        self.sender
+            .send(MessageKind::SlideAnimationsUpdate(SlideAnimationsData {
+                slide_id: sid,
+                entries,
+            }))
     }
 
     // set_active_slide
@@ -708,7 +716,9 @@ impl ApplicationCore {
             EditorMode::Slide => "slide",
             EditorMode::Layout => "layout",
         };
-        self.sender.send(MessageKind::SetMode { mode: mode_str.to_string() })?;
+        self.sender.send(MessageKind::SetMode {
+            mode: mode_str.to_string(),
+        })?;
         self.sender
             .send(MessageKind::SetSelection(SelectionState::empty()))?;
         match mode {
@@ -727,7 +737,13 @@ impl ApplicationCore {
         if layout_id.is_empty() {
             return Ok(());
         }
-        if !self.dispatcher.deck().theme.layouts.contains_key(&layout_id) {
+        if !self
+            .dispatcher
+            .deck()
+            .theme
+            .layouts
+            .contains_key(&layout_id)
+        {
             warn!(target = %layout_id, "set_active_layout: unknown layout id");
             return Ok(());
         }
@@ -769,7 +785,10 @@ impl ApplicationCore {
     fn send_slide_layout_picker(&self) -> AppResult<()> {
         let data: LayoutListData =
             build_layout_list_data(self.dispatcher.deck(), self.active_layout.as_ref());
-        debug!(layout_count = data.layouts.len(), "ipc -> SlideLayoutPickerData");
+        debug!(
+            layout_count = data.layouts.len(),
+            "ipc -> SlideLayoutPickerData"
+        );
         self.sender.send(MessageKind::SlideLayoutPickerData(data))
     }
 
@@ -780,7 +799,11 @@ impl ApplicationCore {
     // state but does not mutate. Side effects belong to the caller.
     pub fn interpret(&mut self, event: InteractionEvent) -> InterpretResult {
         match event {
-            InteractionEvent::ElementClicked { element_id, modifiers, .. } => {
+            InteractionEvent::ElementClicked {
+                element_id,
+                modifiers,
+                ..
+            } => {
                 let mut sel: SelectionState = if modifiers.shift {
                     self.selection.clone()
                 } else {
@@ -844,7 +867,10 @@ impl ApplicationCore {
                             cmds.push(Box::new(MoveElement {
                                 target: target.clone(),
                                 element_id: id.clone(),
-                                new_position: Point { x: sx + delta.x, y: sy + delta.y },
+                                new_position: Point {
+                                    x: sx + delta.x,
+                                    y: sy + delta.y,
+                                },
                                 previous_position: None,
                             }));
                         }
@@ -854,18 +880,21 @@ impl ApplicationCore {
                     return InterpretResult::Nothing;
                 }
                 InterpretResult::CommitTransactionWith(Box::new(CompositeCommand::new(
-                    cmds, "Move Elements",
+                    cmds,
+                    "Move Elements",
                 )))
             }
-            InteractionEvent::ScaleElements { element_ids, factor, anchor } => {
-                interpret_scale_elements(
-                    self.dispatcher.deck(),
-                    self.active_canvas(),
-                    &element_ids,
-                    factor,
-                    anchor,
-                )
-            }
+            InteractionEvent::ScaleElements {
+                element_ids,
+                factor,
+                anchor,
+            } => interpret_scale_elements(
+                self.dispatcher.deck(),
+                self.active_canvas(),
+                &element_ids,
+                factor,
+                anchor,
+            ),
             InteractionEvent::ElementResizeStarted { element_id, .. } => {
                 let snapshot: TransactionSnapshot = self.snapshot_for_drag(&element_id);
                 InterpretResult::TransactionBegin {
@@ -1000,19 +1029,27 @@ impl ApplicationCore {
                 }
             }
             // ---- Table editing ----
-            InteractionEvent::CellTextEditRequested { element_id, row, col, text } => {
-                match self.active_canvas() {
-                    Some(target) => InterpretResult::Command(Box::new(SetCellText {
-                        target,
-                        element_id,
-                        row,
-                        col,
-                        text,
-                    })),
-                    None => InterpretResult::Nothing,
-                }
-            }
-            InteractionEvent::CellStyleChanged { element_id, cells, property, value } => {
+            InteractionEvent::CellTextEditRequested {
+                element_id,
+                row,
+                col,
+                text,
+            } => match self.active_canvas() {
+                Some(target) => InterpretResult::Command(Box::new(SetCellText {
+                    target,
+                    element_id,
+                    row,
+                    col,
+                    text,
+                })),
+                None => InterpretResult::Nothing,
+            },
+            InteractionEvent::CellStyleChanged {
+                element_id,
+                cells,
+                property,
+                value,
+            } => {
                 if property.is_empty() || cells.is_empty() {
                     InterpretResult::Nothing
                 } else {
@@ -1029,37 +1066,47 @@ impl ApplicationCore {
                 }
             }
             InteractionEvent::TableInsertRow { element_id, at } => match self.active_canvas() {
-                Some(target) => {
-                    InterpretResult::Command(Box::new(InsertTableRow { target, element_id, at }))
-                }
-                None => InterpretResult::Nothing,
-            },
-            InteractionEvent::TableDeleteRow { element_id, at } => match self.active_canvas() {
-                Some(target) => {
-                    InterpretResult::Command(Box::new(DeleteTableRow { target, element_id, at }))
-                }
-                None => InterpretResult::Nothing,
-            },
-            InteractionEvent::TableInsertColumn { element_id, at } => match self.active_canvas() {
-                Some(target) => {
-                    InterpretResult::Command(Box::new(InsertTableColumn { target, element_id, at }))
-                }
-                None => InterpretResult::Nothing,
-            },
-            InteractionEvent::TableDeleteColumn { element_id, at } => match self.active_canvas() {
-                Some(target) => {
-                    InterpretResult::Command(Box::new(DeleteTableColumn { target, element_id, at }))
-                }
-                None => InterpretResult::Nothing,
-            },
-            InteractionEvent::TableSetHeaderRows { element_id, count } => match self.active_canvas() {
-                Some(target) => InterpretResult::Command(Box::new(SetTableHeaderRows {
+                Some(target) => InterpretResult::Command(Box::new(InsertTableRow {
                     target,
                     element_id,
-                    count,
+                    at,
                 })),
                 None => InterpretResult::Nothing,
             },
+            InteractionEvent::TableDeleteRow { element_id, at } => match self.active_canvas() {
+                Some(target) => InterpretResult::Command(Box::new(DeleteTableRow {
+                    target,
+                    element_id,
+                    at,
+                })),
+                None => InterpretResult::Nothing,
+            },
+            InteractionEvent::TableInsertColumn { element_id, at } => match self.active_canvas() {
+                Some(target) => InterpretResult::Command(Box::new(InsertTableColumn {
+                    target,
+                    element_id,
+                    at,
+                })),
+                None => InterpretResult::Nothing,
+            },
+            InteractionEvent::TableDeleteColumn { element_id, at } => match self.active_canvas() {
+                Some(target) => InterpretResult::Command(Box::new(DeleteTableColumn {
+                    target,
+                    element_id,
+                    at,
+                })),
+                None => InterpretResult::Nothing,
+            },
+            InteractionEvent::TableSetHeaderRows { element_id, count } => {
+                match self.active_canvas() {
+                    Some(target) => InterpretResult::Command(Box::new(SetTableHeaderRows {
+                        target,
+                        element_id,
+                        count,
+                    })),
+                    None => InterpretResult::Nothing,
+                }
+            }
             InteractionEvent::TableSetHeaderColumns { element_id, count } => {
                 match self.active_canvas() {
                     Some(target) => InterpretResult::Command(Box::new(SetTableHeaderColumns {
@@ -1073,14 +1120,11 @@ impl ApplicationCore {
             InteractionEvent::BackgroundClicked { .. } => {
                 InterpretResult::Selection(SelectionState::empty())
             }
-            InteractionEvent::PropertyChanged { element_id, property, value } => {
-                interpret_property_changed(
-                    self.active_canvas(),
-                    element_id,
-                    property,
-                    value,
-                )
-            }
+            InteractionEvent::PropertyChanged {
+                element_id,
+                property,
+                value,
+            } => interpret_property_changed(self.active_canvas(), element_id, property, value),
             InteractionEvent::SetSelectionFromPanel { element_ids } => {
                 let mut sel: SelectionState = SelectionState::empty();
                 sel.slide_id = self.active_canvas_id();
@@ -1098,9 +1142,10 @@ impl ApplicationCore {
                 parent_id,
                 position,
             ),
-            InteractionEvent::RenameElementRequested { element_id, new_name } => {
-                interpret_rename_request(self.active_canvas(), element_id, new_name)
-            }
+            InteractionEvent::RenameElementRequested {
+                element_id,
+                new_name,
+            } => interpret_rename_request(self.active_canvas(), element_id, new_name),
             InteractionEvent::ReparentElementRequested {
                 element_id,
                 new_parent_id,
@@ -1152,15 +1197,14 @@ impl ApplicationCore {
                     None => InterpretResult::Nothing,
                 }
             }
-            InteractionEvent::SlideLayoutPickerRequested => {
-                InterpretResult::SendSlideLayoutPicker
-            }
-            InteractionEvent::SlideTitleEditRequested { slide_id, new_title } => {
-                match build_set_slide_title_command(&self.dispatcher, &slide_id, &new_title) {
-                    Some(cmd) => InterpretResult::Command(cmd),
-                    None => InterpretResult::Nothing,
-                }
-            }
+            InteractionEvent::SlideLayoutPickerRequested => InterpretResult::SendSlideLayoutPicker,
+            InteractionEvent::SlideTitleEditRequested {
+                slide_id,
+                new_title,
+            } => match build_set_slide_title_command(&self.dispatcher, &slide_id, &new_title) {
+                Some(cmd) => InterpretResult::Command(cmd),
+                None => InterpretResult::Nothing,
+            },
             // ---- Stage 11: layout editor ----
             InteractionEvent::SetEditorMode { mode } => match mode.as_str() {
                 "slide" => InterpretResult::SetEditorMode(EditorMode::Slide),
@@ -1189,13 +1233,24 @@ impl ApplicationCore {
                     None => InterpretResult::Nothing,
                 }
             }
-            InteractionEvent::LayoutNameEditRequested { layout_id, new_name } => {
+            InteractionEvent::LayoutNameEditRequested {
+                layout_id,
+                new_name,
+            } => {
                 if layout_id.is_empty()
-                    || !self.dispatcher.deck().theme.layouts.contains_key(&layout_id)
+                    || !self
+                        .dispatcher
+                        .deck()
+                        .theme
+                        .layouts
+                        .contains_key(&layout_id)
                 {
                     InterpretResult::Nothing
                 } else {
-                    InterpretResult::Command(Box::new(SetLayoutName { layout_id, new_name }))
+                    InterpretResult::Command(Box::new(SetLayoutName {
+                        layout_id,
+                        new_name,
+                    }))
                 }
             }
             InteractionEvent::GlobalsCssEditRequested { new_css } => {
@@ -1208,28 +1263,38 @@ impl ApplicationCore {
                 }
             }
             // ---- Stage: animations ----
-            InteractionEvent::SetElementAnimation { element_id, category, enabled } => {
-                interpret_set_element_animation(
-                    self.dispatcher.deck(),
-                    self.dispatcher.mode(),
-                    self.active_slide.as_ref(),
-                    element_id,
-                    &category,
-                    enabled,
-                )
-            }
-            InteractionEvent::AddAnimation { element_id, catalog_id, direction } => {
-                interpret_add_animation(
-                    self.dispatcher.deck(),
-                    self.dispatcher.mode(),
-                    self.active_slide.as_ref(),
-                    element_id,
-                    &catalog_id,
-                    direction.as_deref(),
-                )
-            }
+            InteractionEvent::SetElementAnimation {
+                element_id,
+                category,
+                enabled,
+            } => interpret_set_element_animation(
+                self.dispatcher.deck(),
+                self.dispatcher.mode(),
+                self.active_slide.as_ref(),
+                element_id,
+                &category,
+                enabled,
+            ),
+            InteractionEvent::AddAnimation {
+                element_id,
+                catalog_id,
+                direction,
+            } => interpret_add_animation(
+                self.dispatcher.deck(),
+                self.dispatcher.mode(),
+                self.active_slide.as_ref(),
+                element_id,
+                &catalog_id,
+                direction.as_deref(),
+            ),
             InteractionEvent::UpdateAnimation {
-                animation_id, trigger, duration_ms, delay_ms, easing, iterations, targets,
+                animation_id,
+                trigger,
+                duration_ms,
+                delay_ms,
+                easing,
+                iterations,
+                targets,
             } => interpret_update_animation(
                 self.dispatcher.deck(),
                 self.active_slide.as_ref(),
@@ -1243,20 +1308,24 @@ impl ApplicationCore {
             ),
             InteractionEvent::RemoveAnimationRequested { animation_id } => {
                 match self.active_slide.clone() {
-                    Some(slide_id) => InterpretResult::Command(Box::new(
-                        RemoveAnimation { slide_id, animation_id })),
+                    Some(slide_id) => InterpretResult::Command(Box::new(RemoveAnimation {
+                        slide_id,
+                        animation_id,
+                    })),
                     None => InterpretResult::Nothing,
                 }
             }
-            InteractionEvent::MoveAnimation { animation_id, new_index, trigger } => {
-                interpret_move_animation(
-                    self.dispatcher.deck(),
-                    self.active_slide.as_ref(),
-                    &animation_id,
-                    new_index,
-                    &trigger,
-                )
-            }
+            InteractionEvent::MoveAnimation {
+                animation_id,
+                new_index,
+                trigger,
+            } => interpret_move_animation(
+                self.dispatcher.deck(),
+                self.active_slide.as_ref(),
+                &animation_id,
+                new_index,
+                &trigger,
+            ),
             InteractionEvent::SaveThemeRequested => {
                 InterpretResult::FileAction(FileAction::SaveTheme)
             }
@@ -1316,9 +1385,7 @@ impl ApplicationCore {
             InteractionEvent::SetDeckTitleRequested { title } => {
                 InterpretResult::Command(Box::new(SetDeckTitle { new_title: title }))
             }
-            InteractionEvent::NudgeSelectionRequested { dx, dy } => {
-                self.interpret_nudge(dx, dy)
-            }
+            InteractionEvent::NudgeSelectionRequested { dx, dy } => self.interpret_nudge(dx, dy),
             InteractionEvent::NavigateSlideRequested { forward } => {
                 self.interpret_navigate_slide(forward)
             }
@@ -1336,22 +1403,27 @@ impl ApplicationCore {
                     }
                 }
             }
-            InteractionEvent::SetGroupLayout { element_id, direction, distribution, alignment } => {
-                match self.active_slide.clone() {
-                    Some(sid) => InterpretResult::Command(Box::new(SetGroupLayout {
-                        target: CanvasTarget::Slide(sid),
-                        element_id,
-                        direction: parse_group_dir_opt(direction.as_deref()),
-                        distribution: parse_group_dist_opt(distribution.as_deref()),
-                        alignment: parse_group_align_opt(alignment.as_deref()),
-                    })),
-                    None => InterpretResult::Nothing,
-                }
-            }
+            InteractionEvent::SetGroupLayout {
+                element_id,
+                direction,
+                distribution,
+                alignment,
+            } => match self.active_slide.clone() {
+                Some(sid) => InterpretResult::Command(Box::new(SetGroupLayout {
+                    target: CanvasTarget::Slide(sid),
+                    element_id,
+                    direction: parse_group_dir_opt(direction.as_deref()),
+                    distribution: parse_group_dist_opt(distribution.as_deref()),
+                    alignment: parse_group_align_opt(alignment.as_deref()),
+                })),
+                None => InterpretResult::Nothing,
+            },
             InteractionEvent::SetGroupScale { element_id, scale } => {
                 match self.active_slide.clone() {
                     Some(sid) => InterpretResult::Command(Box::new(SetGroupScale {
-                        target: CanvasTarget::Slide(sid), element_id, scale,
+                        target: CanvasTarget::Slide(sid),
+                        element_id,
+                        scale,
                     })),
                     None => InterpretResult::Nothing,
                 }
@@ -1514,16 +1586,14 @@ impl ApplicationCore {
             debug!("start_presentation: already presenting; ignoring");
             return;
         }
-        let idx: usize = match present_start_index(
-            self.dispatcher.deck(),
-            self.active_slide.as_ref(),
-        ) {
-            Some(i) => i,
-            None => {
-                warn!("start_presentation: empty deck; nothing to present");
-                return;
-            }
-        };
+        let idx: usize =
+            match present_start_index(self.dispatcher.deck(), self.active_slide.as_ref()) {
+                Some(i) => i,
+                None => {
+                    warn!("start_presentation: empty deck; nothing to present");
+                    return;
+                }
+            };
         info!(slide_index = idx, "presentation requested");
         self.pending_present_index = Some(idx);
         (self.request_present_open)();
@@ -1540,7 +1610,10 @@ impl ApplicationCore {
             !self.dispatcher.deck().slide_order.is_empty(),
             "begin_presentation: empty deck"
         );
-        info!(slide_index = idx, "presentation window ready; session begun");
+        info!(
+            slide_index = idx,
+            "presentation window ready; session begun"
+        );
         self.present = Some(PresentationSession::new(sender, idx));
     }
 
@@ -1605,7 +1678,11 @@ impl ApplicationCore {
             Some(s) => s,
             None => return Ok(()),
         };
-        let step: PresentStep = if forward { session.advance(deck) } else { session.back(deck) };
+        let step: PresentStep = if forward {
+            session.advance(deck)
+        } else {
+            session.back(deck)
+        };
         match step {
             PresentStep::Reveal(reveal) => {
                 session.sender().send(MessageKind::PresentReveal(reveal))
@@ -1746,7 +1823,8 @@ impl ApplicationCore {
             }
         }
         if remapped {
-            self.sender.send(MessageKind::SetSelection(self.selection.clone()))?;
+            self.sender
+                .send(MessageKind::SetSelection(self.selection.clone()))?;
         }
         Ok(())
     }
@@ -1876,7 +1954,10 @@ impl ApplicationCore {
         if let Err(e) = self.send_slide_list() {
             warn!("slide list broadcast after slide-list change failed: {}", e);
         }
-        if let Err(e) = self.sender.send(MessageKind::SetSelection(SelectionState::empty())) {
+        if let Err(e) = self
+            .sender
+            .send(MessageKind::SetSelection(SelectionState::empty()))
+        {
             warn!("selection clear after slide-list change failed: {}", e);
         }
         if let Err(e) = self.send_active_slide() {
@@ -1905,9 +1986,15 @@ impl ApplicationCore {
         }
         self.selection = SelectionState::empty();
         if let Err(e) = self.send_layout_list() {
-            warn!("layout list broadcast after layout-list change failed: {}", e);
+            warn!(
+                "layout list broadcast after layout-list change failed: {}",
+                e
+            );
         }
-        if let Err(e) = self.sender.send(MessageKind::SetSelection(SelectionState::empty())) {
+        if let Err(e) = self
+            .sender
+            .send(MessageKind::SetSelection(SelectionState::empty()))
+        {
             warn!("selection clear after layout-list change failed: {}", e);
         }
         if let Err(e) = self.send_active_slide() {
@@ -1990,18 +2077,18 @@ impl ApplicationCore {
             Some(t) => t,
             None => return InterpretResult::Nothing,
         };
-        let bytes: Vec<u8> =
-            match base64::engine::general_purpose::STANDARD.decode(content_base64) {
-                Ok(b) if !b.is_empty() => b,
-                Ok(_) => {
-                    warn!("AssetImported: empty bytes after decode");
-                    return InterpretResult::Nothing;
-                }
-                Err(e) => {
-                    warn!("AssetImported: base64 decode failed: {}", e);
-                    return InterpretResult::Nothing;
-                }
-            };
+        let bytes: Vec<u8> = match base64::engine::general_purpose::STANDARD.decode(content_base64)
+        {
+            Ok(b) if !b.is_empty() => b,
+            Ok(_) => {
+                warn!("AssetImported: empty bytes after decode");
+                return InterpretResult::Nothing;
+            }
+            Err(e) => {
+                warn!("AssetImported: base64 decode failed: {}", e);
+                return InterpretResult::Nothing;
+            }
+        };
         let dims = if width > 0 && height > 0 {
             Some(AssetDimensions { width, height })
         } else {
@@ -2167,7 +2254,10 @@ impl ApplicationCore {
         };
         if self
             .io_thread
-            .submit(IoRequest::ExportHtml { files: bundle.files, dest_dir: dest })
+            .submit(IoRequest::ExportHtml {
+                files: bundle.files,
+                dest_dir: dest,
+            })
             .is_err()
         {
             warn!("export: could not queue (io thread closed)");
@@ -2199,7 +2289,12 @@ impl ApplicationCore {
         }
         let html: String = crate::export::build_pdf_print_html(self.dispatcher.deck());
         let raster = crate::export::pdf::raster_page_rects(self.dispatcher.deck());
-        (self.dispatch_pdf_job)(PdfJob { html, raster, chrome, dest });
+        (self.dispatch_pdf_job)(PdfJob {
+            html,
+            raster,
+            chrome,
+            dest,
+        });
         Ok(())
     }
 
@@ -2240,7 +2335,10 @@ private copy (~150 MB).",
                 // inner executable before validating.
                 let picked = normalize_chrome_path(rfd::FileDialog::new().pick_file()?);
                 if !is_valid_chrome(&picked) {
-                    self.toast("PDF export", "That file is not a working Chrome/Chromium binary.");
+                    self.toast(
+                        "PDF export",
+                        "That file is not a working Chrome/Chromium binary.",
+                    );
                     return None;
                 }
                 let mut cfg = crate::config::load();
@@ -2278,15 +2376,19 @@ private copy (~150 MB).",
     // Outbound bridges driven by the Chromium worker thread (via the event
     // loop) so the download modal in the webview can update.
     pub fn send_chromium_progress(&self, received: u64, total: Option<u64>) {
-        if let Err(e) =
-            self.sender.send(MessageKind::ChromiumDownloadProgress { received, total })
+        if let Err(e) = self
+            .sender
+            .send(MessageKind::ChromiumDownloadProgress { received, total })
         {
             warn!("chromium progress send failed: {}", e);
         }
     }
 
     pub fn send_chromium_done(&self, ok: bool, message: String) {
-        if let Err(e) = self.sender.send(MessageKind::ChromiumDownloadDone { ok, message }) {
+        if let Err(e) = self
+            .sender
+            .send(MessageKind::ChromiumDownloadDone { ok, message })
+        {
             warn!("chromium done send failed: {}", e);
         }
     }
@@ -2307,7 +2409,11 @@ private copy (~150 MB).",
     // side-effect; surfaces a success/failure toast. Called by the event loop
     // after the headless print operation returns.
     pub fn notify_pdf_export(&self, dest: &std::path::Path, ok: bool) {
-        let message = if ok { "Exported PDF" } else { "PDF export failed" };
+        let message = if ok {
+            "Exported PDF"
+        } else {
+            "PDF export failed"
+        };
         if let Err(e) = self.sender.send(MessageKind::Notice {
             message: message.to_string(),
             detail: Some(dest.display().to_string()),
@@ -2390,12 +2496,17 @@ private copy (~150 MB).",
                 return Ok(());
             }
         };
-        let serialized =
-            serialize_theme(&self.dispatcher.deck().theme, &self.dispatcher.deck().assets)?;
+        let serialized = serialize_theme(
+            &self.dispatcher.deck().theme,
+            &self.dispatcher.deck().assets,
+        )?;
         info!(target = %target.display(), "theme: save queued");
         if self
             .io_thread
-            .submit(IoRequest::SaveTheme { serialized, target_path: target })
+            .submit(IoRequest::SaveTheme {
+                serialized,
+                target_path: target,
+            })
             .is_err()
         {
             warn!("theme: save could not be queued (io thread closed)");
@@ -2419,7 +2530,11 @@ private copy (~150 MB).",
             }
         };
         info!(path = %path.display(), "theme: load requested");
-        if self.io_thread.submit(IoRequest::LoadTheme { path }).is_err() {
+        if self
+            .io_thread
+            .submit(IoRequest::LoadTheme { path })
+            .is_err()
+        {
             warn!("theme: load could not be queued (io thread closed)");
         }
         Ok(())
@@ -2496,7 +2611,11 @@ private copy (~150 MB).",
                     }
                 }
             }
-            IoResponse::Error { operation, path, message } => {
+            IoResponse::Error {
+                operation,
+                path,
+                message,
+            } => {
                 warn!(operation, ?path, "file: io error: {}", message);
                 Ok(())
             }
@@ -2714,7 +2833,10 @@ fn interpret_crop_committed(
     background_size: String,
     background_position: String,
 ) -> InterpretResult {
-    assert!(!element_id.is_empty(), "interpret_crop_committed: empty element_id");
+    assert!(
+        !element_id.is_empty(),
+        "interpret_crop_committed: empty element_id"
+    );
     let target: CanvasTarget = match active {
         Some(t) => t,
         None => return InterpretResult::Nothing,
@@ -2753,7 +2875,10 @@ fn interpret_crop_committed(
             new_height: new_size.height,
         }),
     ];
-    InterpretResult::Command(Box::new(CompositeCommand::new(cmds, CROP_TRANSACTION_LABEL)))
+    InterpretResult::Command(Box::new(CompositeCommand::new(
+        cmds,
+        CROP_TRANSACTION_LABEL,
+    )))
 }
 
 // resize_commit_command
@@ -2812,7 +2937,9 @@ fn interpret_remove_slide(deck: &Deck, slide_id: &SlideId) -> InterpretResult {
     if deck.slide_order.len() <= 1 || !deck.slides.contains_key(slide_id) {
         return InterpretResult::Nothing;
     }
-    InterpretResult::Command(Box::new(RemoveSlide { slide_id: slide_id.clone() }))
+    InterpretResult::Command(Box::new(RemoveSlide {
+        slide_id: slide_id.clone(),
+    }))
 }
 
 // collect_copy
@@ -2969,7 +3096,9 @@ fn build_cut_removal(
             if !deck.slides.contains_key(sid) {
                 return None;
             }
-            Some(Box::new(RemoveSlide { slide_id: sid.clone() }))
+            Some(Box::new(RemoveSlide {
+                slide_id: sid.clone(),
+            }))
         }
     }
 }
@@ -2982,7 +3111,10 @@ fn interpret_property_changed(
     property: String,
     value: String,
 ) -> InterpretResult {
-    assert!(!element_id.is_empty(), "interpret_property_changed: empty element_id");
+    assert!(
+        !element_id.is_empty(),
+        "interpret_property_changed: empty element_id"
+    );
     let target: CanvasTarget = match active {
         Some(t) => t,
         None => return InterpretResult::Nothing,
@@ -3050,11 +3182,8 @@ fn interpret_delete_selection(
     // Filter out elements whose ancestor is also selected — removing
     // the ancestor removes the descendant as part of its subtree, so
     // explicitly deleting the descendant after would error out.
-    let selected_set: std::collections::HashSet<&str> = selection
-        .element_ids
-        .iter()
-        .map(String::as_str)
-        .collect();
+    let selected_set: std::collections::HashSet<&str> =
+        selection.element_ids.iter().map(String::as_str).collect();
     let mut commands: Vec<Box<dyn Command>> = Vec::new();
     for eid in &selection.element_ids {
         if eid.is_empty() || canvas.is_root_id(eid) {
@@ -3078,10 +3207,7 @@ fn interpret_delete_selection(
             Some(cmd) => InterpretResult::Command(cmd),
             None => InterpretResult::Nothing,
         },
-        _ => InterpretResult::Command(Box::new(CompositeCommand::new(
-            commands,
-            "Delete Elements",
-        ))),
+        _ => InterpretResult::Command(Box::new(CompositeCommand::new(commands, "Delete Elements"))),
     }
 }
 
@@ -3106,7 +3232,10 @@ fn has_selected_ancestor(
     stack.push((root, 0));
     let mut iter: usize = 0;
     while let Some((node, ancestor_hits)) = stack.pop() {
-        assert!(iter < MAX_FRAMES, "has_selected_ancestor: depth bound exceeded");
+        assert!(
+            iter < MAX_FRAMES,
+            "has_selected_ancestor: depth bound exceeded"
+        );
         iter += 1;
         if node.id == target {
             return ancestor_hits > 0;
@@ -3207,10 +3336,7 @@ fn build_slide_list_data(deck: &Deck, active_slide: Option<&SlideId>) -> SlideLi
 // from the manifest entry, background from the SlideNode metadata, and the
 // theme's layouts (id + name) in display order for the picker. None when there
 // is no active slide.
-fn build_slide_inspector_data(
-    deck: &Deck,
-    active: Option<&SlideId>,
-) -> Option<SlideInspectorData> {
+fn build_slide_inspector_data(deck: &Deck, active: Option<&SlideId>) -> Option<SlideInspectorData> {
     let sid: &SlideId = active?;
     let entry = deck.manifest.slides.iter().find(|e| &e.id == sid);
     let title: String = entry.map(|e| e.title.clone()).unwrap_or_default();
@@ -3229,17 +3355,19 @@ fn build_slide_inspector_data(
         .get(sid)
         .and_then(|s| s.metadata.background_image.clone())
         .unwrap_or_default();
-    let transition: Option<crate::deck::SlideTransition> =
-        deck.slides.get(sid).and_then(|s| s.metadata.transition.clone());
+    let transition: Option<crate::deck::SlideTransition> = deck
+        .slides
+        .get(sid)
+        .and_then(|s| s.metadata.transition.clone());
     let layouts: Vec<SlideInspectorLayout> = deck
         .theme
         .layout_order
         .iter()
         .filter_map(|lid| {
-            deck.theme
-                .layouts
-                .get(lid)
-                .map(|l| SlideInspectorLayout { id: lid.clone(), name: l.name.clone() })
+            deck.theme.layouts.get(lid).map(|l| SlideInspectorLayout {
+                id: lid.clone(),
+                name: l.name.clone(),
+            })
         })
         .collect();
     Some(SlideInspectorData {
@@ -3284,10 +3412,21 @@ fn build_image_element_from_asset(
     drop_position: Option<Point>,
     slide_dims: (u32, u32),
 ) -> ElementNode {
-    assert!(!entry.id.is_empty(), "build_image_element_from_asset: empty asset id");
+    assert!(
+        !entry.id.is_empty(),
+        "build_image_element_from_asset: empty asset id"
+    );
     let (slide_w, slide_h) = slide_dims;
-    let width: f64 = if natural_w > 0 { natural_w as f64 } else { 320.0 };
-    let height: f64 = if natural_h > 0 { natural_h as f64 } else { 180.0 };
+    let width: f64 = if natural_w > 0 {
+        natural_w as f64
+    } else {
+        320.0
+    };
+    let height: f64 = if natural_h > 0 {
+        natural_h as f64
+    } else {
+        180.0
+    };
     let (px, py) = match drop_position {
         Some(p) => (p.x - width / 2.0, p.y - height / 2.0),
         None => (
@@ -3296,7 +3435,10 @@ fn build_image_element_from_asset(
         ),
     };
     let mut inline_styles: BTreeMap<String, String> = BTreeMap::new();
-    inline_styles.insert("background-image".into(), format!("var(--asset-{})", entry.id));
+    inline_styles.insert(
+        "background-image".into(),
+        format!("var(--asset-{})", entry.id),
+    );
     inline_styles.insert("background-size".into(), "cover".into());
     inline_styles.insert("background-position".into(), "center".into());
     inline_styles.insert("background-repeat".into(), "no-repeat".into());
@@ -3313,7 +3455,9 @@ fn build_image_element_from_asset(
             ..crate::deck::style::Geometry::default()
         },
         style: ElementStyle::Image(ImageStyle::default()),
-        content: ElementContent::Image(AssetRef { asset_id: entry.id.clone() }),
+        content: ElementContent::Image(AssetRef {
+            asset_id: entry.id.clone(),
+        }),
         children: vec![],
         placeholder_fill: None,
         name: None,
@@ -3359,8 +3503,14 @@ fn interpret_reparent_request(
     new_parent_id: ElementId,
     new_position: usize,
 ) -> InterpretResult {
-    assert!(!element_id.is_empty(), "interpret_reparent_request: empty element id");
-    assert!(!new_parent_id.is_empty(), "interpret_reparent_request: empty parent id");
+    assert!(
+        !element_id.is_empty(),
+        "interpret_reparent_request: empty element id"
+    );
+    assert!(
+        !new_parent_id.is_empty(),
+        "interpret_reparent_request: empty parent id"
+    );
     let target: CanvasTarget = match active {
         Some(t) => t,
         None => return InterpretResult::Nothing,
@@ -3408,7 +3558,10 @@ fn interpret_insert_element_request(
     let node: ElementNode = match construct_default_element_for_type(&element_type) {
         Some(n) => n,
         None => {
-            warn!("InsertElementRequested with unknown element_type: {}", element_type);
+            warn!(
+                "InsertElementRequested with unknown element_type: {}",
+                element_type
+            );
             return InterpretResult::Nothing;
         }
     };
@@ -3478,7 +3631,10 @@ fn build_set_text_command(
     new_text: String,
 ) -> Option<Box<dyn Command>> {
     let target: CanvasTarget = active?;
-    assert!(!target.id().is_empty(), "build_set_text_command: active canvas id is empty");
+    assert!(
+        !target.id().is_empty(),
+        "build_set_text_command: active canvas id is empty"
+    );
     let canvas = dispatcher.deck().canvas(&target)?;
     let element = canvas.find_element(&element_id)?;
     let current: &str = match &element.content {
@@ -3507,7 +3663,10 @@ fn build_set_embed_command(
     new_html: String,
 ) -> Option<Box<dyn Command>> {
     let target: CanvasTarget = active?;
-    assert!(!target.id().is_empty(), "build_set_embed_command: active canvas id is empty");
+    assert!(
+        !target.id().is_empty(),
+        "build_set_embed_command: active canvas id is empty"
+    );
     let canvas = dispatcher.deck().canvas(&target)?;
     let element = canvas.find_element(&element_id)?;
     let current: &str = match &element.content {
@@ -3517,7 +3676,11 @@ fn build_set_embed_command(
     if current == new_html {
         return None;
     }
-    Some(Box::new(SetEmbedHtml { target, element_id, new_html }))
+    Some(Box::new(SetEmbedHtml {
+        target,
+        element_id,
+        new_html,
+    }))
 }
 
 // interpret_set_element_animation
@@ -3525,22 +3688,33 @@ fn build_set_embed_command(
 // parse_group_dir/dist/align — IPC token → enum (None token → keep via Option).
 fn parse_group_dir_opt(s: Option<&str>) -> Option<crate::deck::style::GroupDirection> {
     use crate::deck::style::GroupDirection::*;
-    match s { Some("row") => Some(Row), Some("column") => Some(Column), _ => None }
+    match s {
+        Some("row") => Some(Row),
+        Some("column") => Some(Column),
+        _ => None,
+    }
 }
 fn parse_group_dist_opt(s: Option<&str>) -> Option<crate::deck::style::GroupDistribution> {
     use crate::deck::style::GroupDistribution::*;
     match s {
-        Some("none") => Some(None), Some("start") => Some(Start), Some("center") => Some(Center),
-        Some("end") => Some(End), Some("space-between") => Some(SpaceBetween),
-        Some("space-around") => Some(SpaceAround), Some("space-evenly") => Some(SpaceEvenly),
+        Some("none") => Some(None),
+        Some("start") => Some(Start),
+        Some("center") => Some(Center),
+        Some("end") => Some(End),
+        Some("space-between") => Some(SpaceBetween),
+        Some("space-around") => Some(SpaceAround),
+        Some("space-evenly") => Some(SpaceEvenly),
         _ => Option::None,
     }
 }
 fn parse_group_align_opt(s: Option<&str>) -> Option<crate::deck::style::GroupAlignment> {
     use crate::deck::style::GroupAlignment::*;
     match s {
-        Some("none") => Some(None), Some("start") => Some(Start), Some("center") => Some(Center),
-        Some("end") => Some(End), _ => Option::None,
+        Some("none") => Some(None),
+        Some("start") => Some(Start),
+        Some("center") => Some(Center),
+        Some("end") => Some(End),
+        _ => Option::None,
     }
 }
 
@@ -3580,7 +3754,11 @@ fn interpret_set_element_animation(
         .map(|e| e.id.clone());
     match (enabled, existing) {
         (true, None) => {
-            let keyframe = if cat == AnimationCategory::Entrance { "appear" } else { "disappear" };
+            let keyframe = if cat == AnimationCategory::Entrance {
+                "appear"
+            } else {
+                "disappear"
+            };
             let entry = AnimationEntry::new(
                 new_animation_id(),
                 element_id,
@@ -3595,9 +3773,10 @@ fn interpret_set_element_animation(
                 entry,
             }))
         }
-        (false, Some(id)) => {
-            InterpretResult::Command(Box::new(RemoveAnimation { slide_id, animation_id: id }))
-        }
+        (false, Some(id)) => InterpretResult::Command(Box::new(RemoveAnimation {
+            slide_id,
+            animation_id: id,
+        })),
         _ => InterpretResult::Nothing,
     }
 }
@@ -3616,7 +3795,10 @@ fn interpret_add_animation(
     catalog_id: &str,
     direction: Option<&str>,
 ) -> InterpretResult {
-    assert!(!element_id.is_empty(), "interpret_add_animation: empty element id");
+    assert!(
+        !element_id.is_empty(),
+        "interpret_add_animation: empty element id"
+    );
     if mode != EditorMode::Slide {
         return InterpretResult::Nothing;
     }
@@ -3651,10 +3833,17 @@ fn interpret_add_animation(
         None => return InterpretResult::Nothing,
     };
     let entry = AnimationEntry::new(
-        new_animation_id(), element_id, effect, category,
-        AnimationTrigger::OnClick, AnimationTiming::default());
+        new_animation_id(),
+        element_id,
+        effect,
+        category,
+        AnimationTrigger::OnClick,
+        AnimationTiming::default(),
+    );
     InterpretResult::Command(Box::new(InsertAnimation {
-        slide_id, position: slide.animations.len(), entry,
+        slide_id,
+        position: slide.animations.len(),
+        entry,
     }))
 }
 
@@ -3671,8 +3860,15 @@ fn directional_keyframe(
         return base.to_string();
     }
     let d: &str = dir.unwrap_or("top");
-    let prefix: &str = if base.starts_with("fly-out") { "fly-out" } else { "fly-in" };
-    assert!(matches!(d, "top" | "bottom" | "left" | "right"), "bad direction");
+    let prefix: &str = if base.starts_with("fly-out") {
+        "fly-out"
+    } else {
+        "fly-in"
+    };
+    assert!(
+        matches!(d, "top" | "bottom" | "left" | "right"),
+        "bad direction"
+    );
     format!("{}-{}", prefix, d)
 }
 
@@ -3693,7 +3889,10 @@ fn interpret_update_animation(
     iterations: Option<crate::deck::animation::AnimationIterations>,
     targets: Option<Vec<PropertyTarget>>,
 ) -> InterpretResult {
-    assert!(!animation_id.is_empty(), "interpret_update_animation: empty id");
+    assert!(
+        !animation_id.is_empty(),
+        "interpret_update_animation: empty id"
+    );
     let slide_id: SlideId = match active_slide {
         Some(s) => s.clone(),
         None => return InterpretResult::Nothing,
@@ -3715,7 +3914,9 @@ fn interpret_update_animation(
     let timing = AnimationTiming {
         duration_ms: duration_ms.unwrap_or(prior.timing.duration_ms),
         delay_ms: delay_ms.unwrap_or(prior.timing.delay_ms),
-        easing: easing.map(str::to_string).unwrap_or_else(|| prior.timing.easing.clone()),
+        easing: easing
+            .map(str::to_string)
+            .unwrap_or_else(|| prior.timing.easing.clone()),
         iterations: iterations.unwrap_or(prior.timing.iterations),
     };
     let effect = match (targets, prior.category) {
@@ -3725,9 +3926,17 @@ fn interpret_update_animation(
         _ => prior.effect.clone(),
     };
     let new_entry = AnimationEntry::new(
-        prior.id.clone(), prior.element_id.clone(), effect, prior.category, trig, timing);
+        prior.id.clone(),
+        prior.element_id.clone(),
+        effect,
+        prior.category,
+        trig,
+        timing,
+    );
     InterpretResult::Command(Box::new(SetAnimationProperty {
-        slide_id, animation_id: animation_id.to_string(), new_entry,
+        slide_id,
+        animation_id: animation_id.to_string(),
+        new_entry,
     }))
 }
 
@@ -3744,7 +3953,10 @@ fn interpret_move_animation(
     new_index: usize,
     trigger: &str,
 ) -> InterpretResult {
-    assert!(!animation_id.is_empty(), "interpret_move_animation: empty id");
+    assert!(
+        !animation_id.is_empty(),
+        "interpret_move_animation: empty id"
+    );
     let slide_id: SlideId = match active_slide {
         Some(s) => s.clone(),
         None => return InterpretResult::Nothing,
@@ -3870,7 +4082,11 @@ fn build_insert_slide_after_active(
 
     let order: &[SlideId] = &dispatcher.deck().slide_order;
     let position: usize = match active_slide {
-        Some(id) => order.iter().position(|s| s == id).map(|i| i + 1).unwrap_or(order.len()),
+        Some(id) => order
+            .iter()
+            .position(|s| s == id)
+            .map(|i| i + 1)
+            .unwrap_or(order.len()),
         None => order.len(),
     };
 
@@ -3878,8 +4094,11 @@ fn build_insert_slide_after_active(
     // elements with fresh ids so the slide is independently editable); empty
     // or unknown layout id falls back to a blank slide.
     let layout = dispatcher.deck().theme.layouts.get(layout_id);
-    let seed_layout: String =
-        if layout.is_some() { layout_id.to_string() } else { "blank".into() };
+    let seed_layout: String = if layout.is_some() {
+        layout_id.to_string()
+    } else {
+        "blank".into()
+    };
     let children: Vec<ElementNode> = layout
         .map(|l| {
             l.root
@@ -3895,7 +4114,10 @@ fn build_insert_slide_after_active(
         .unwrap_or_default();
 
     let slide_id: SlideId = new_slide_id();
-    assert!(!slide_id.is_empty(), "build_insert_slide_after_active: minted empty slide id");
+    assert!(
+        !slide_id.is_empty(),
+        "build_insert_slide_after_active: minted empty slide id"
+    );
     let root: ElementNode = group_element(new_element_id(), children);
     let slide: SlideNode = SlideNode::new(slide_id.clone(), seed_layout.clone(), root);
 
@@ -3914,7 +4136,11 @@ fn build_insert_slide_after_active(
         notes: None,
     };
 
-    let cmd: Box<dyn Command> = Box::new(InsertSlide { position, slide, manifest_entry });
+    let cmd: Box<dyn Command> = Box::new(InsertSlide {
+        position,
+        slide,
+        manifest_entry,
+    });
     Some((cmd, slide_id))
 }
 
@@ -3935,7 +4161,11 @@ fn build_insert_layout_after_active(
 
     let order: &[LayoutId] = &dispatcher.deck().theme.layout_order;
     let position: usize = match active_layout {
-        Some(id) => order.iter().position(|l| l == id).map(|i| i + 1).unwrap_or(order.len()),
+        Some(id) => order
+            .iter()
+            .position(|l| l == id)
+            .map(|i| i + 1)
+            .unwrap_or(order.len()),
         None => order.len(),
     };
 
@@ -3955,7 +4185,10 @@ fn build_insert_layout_after_active(
         n += 1;
         tries += 1;
     }
-    assert!(!layout_id.is_empty(), "build_insert_layout_after_active: minted empty id");
+    assert!(
+        !layout_id.is_empty(),
+        "build_insert_layout_after_active: minted empty id"
+    );
 
     let root: ElementNode = group_element(new_element_id(), vec![]);
     let layout: LayoutNode = LayoutNode::new(layout_id.clone(), name, root);
@@ -4068,7 +4301,10 @@ fn default_shape_element() -> ElementNode {
             let mut m: BTreeMap<String, String> = BTreeMap::new();
             // Give the empty shape a visible default so it doesn't look
             // like nothing happened on insert.
-            m.insert("background-color".into(), "var(--theme-accent, #0066ff)".into());
+            m.insert(
+                "background-color".into(),
+                "var(--theme-accent, #0066ff)".into(),
+            );
             m
         },
     }
@@ -4116,17 +4352,32 @@ fn default_table_element() -> ElementNode {
     for r in 0..rows {
         let mut row: Vec<TableCell> = Vec::with_capacity(columns);
         for c in 0..columns {
-            let text: String =
-                if r == 0 { format!("Header {}", c + 1) } else { String::new() };
+            let text: String = if r == 0 {
+                format!("Header {}", c + 1)
+            } else {
+                String::new()
+            };
             row.push(cell(&text));
         }
         cells.push(row);
     }
-    let data = TableData { rows, columns, cells, header_rows: 1, header_columns: 0 };
+    let data = TableData {
+        rows,
+        columns,
+        cells,
+        header_rows: 1,
+        header_columns: 0,
+    };
     ElementNode {
         id: new_element_id(),
         element_type: ElementType::Table,
-        geometry: Geometry { x: 660.0, y: 440.0, width: 600.0, height: 200.0, ..Geometry::default() },
+        geometry: Geometry {
+            x: 660.0,
+            y: 440.0,
+            width: 600.0,
+            height: 200.0,
+            ..Geometry::default()
+        },
         style: ElementStyle::Table(crate::deck::style::TableStyle::default()),
         content: ElementContent::Table(data),
         children: vec![],
@@ -4144,8 +4395,7 @@ fn default_table_element() -> ElementNode {
 // A dashed border + padding keep an otherwise-empty block selectable.
 fn default_embed_element() -> ElementNode {
     let id: ElementId = new_element_id();
-    let placeholder: &str =
-        "<div style=\"font:14px ui-monospace,monospace;color:var(--theme-muted,#888);\
+    let placeholder: &str = "<div style=\"font:14px ui-monospace,monospace;color:var(--theme-muted,#888);\
 padding:12px;\">&lt;!-- HTML block: double-click to edit --&gt;</div>";
     ElementNode {
         id,
@@ -4166,7 +4416,10 @@ padding:12px;\">&lt;!-- HTML block: double-click to edit --&gt;</div>";
         attributes: BTreeMap::new(),
         inline_styles: {
             let mut m: BTreeMap<String, String> = BTreeMap::new();
-            m.insert("border".into(), "1px dashed var(--theme-muted, #888)".into());
+            m.insert(
+                "border".into(),
+                "1px dashed var(--theme-muted, #888)".into(),
+            );
             m.insert("overflow".into(), "auto".into());
             m
         },
@@ -4190,7 +4443,10 @@ mod tests {
     }
 
     fn modifiers_shift() -> Modifiers {
-        Modifiers { shift: true, ..Modifiers::default() }
+        Modifiers {
+            shift: true,
+            ..Modifiers::default()
+        }
     }
 
     fn fixture() -> (CommandDispatcher, SelectionState, SlideId, ElementId) {
@@ -4215,7 +4471,11 @@ mod tests {
         // Mirrors ApplicationCore::interpret's body. Kept in lock-step
         // with the production method.
         match event {
-            InteractionEvent::ElementClicked { element_id, modifiers, .. } => {
+            InteractionEvent::ElementClicked {
+                element_id,
+                modifiers,
+                ..
+            } => {
                 let mut sel: SelectionState = if modifiers.shift {
                     selection.clone()
                 } else {
@@ -4234,11 +4494,18 @@ mod tests {
                 if let Some(sid) = active_slide.clone() {
                     if let Some(slide) = dispatcher.deck().slides.get(&sid) {
                         if let Some(el) = slide.find_element(&element_id) {
-                            snap.record_geometry(CanvasTarget::Slide(sid), element_id, el.geometry.clone());
+                            snap.record_geometry(
+                                CanvasTarget::Slide(sid),
+                                element_id,
+                                el.geometry.clone(),
+                            );
                         }
                     }
                 }
-                InterpretResult::TransactionBegin { label: DRAG_TRANSACTION_LABEL, snapshot: snap }
+                InterpretResult::TransactionBegin {
+                    label: DRAG_TRANSACTION_LABEL,
+                    snapshot: snap,
+                }
             }
             InteractionEvent::ElementDragged { .. } => InterpretResult::Nothing,
             InteractionEvent::ElementDragEnded { element_id, delta } => {
@@ -4246,17 +4513,20 @@ mod tests {
                     Some(s) => s,
                     None => return InterpretResult::Nothing,
                 };
-                let (sx, sy) = match dispatcher
-                    .transaction()
-                    .and_then(|t| t.start_snapshot.position_of(&CanvasTarget::Slide(sid.clone()), &element_id))
-                {
+                let (sx, sy) = match dispatcher.transaction().and_then(|t| {
+                    t.start_snapshot
+                        .position_of(&CanvasTarget::Slide(sid.clone()), &element_id)
+                }) {
                     Some(p) => p,
                     None => return InterpretResult::Nothing,
                 };
                 InterpretResult::CommitTransactionWith(Box::new(MoveElement {
                     target: CanvasTarget::Slide(sid),
                     element_id,
-                    new_position: Point { x: sx + delta.x, y: sy + delta.y },
+                    new_position: Point {
+                        x: sx + delta.x,
+                        y: sy + delta.y,
+                    },
                     previous_position: None,
                 }))
             }
@@ -4265,7 +4535,11 @@ mod tests {
                 if let Some(sid) = active_slide.clone() {
                     if let Some(slide) = dispatcher.deck().slides.get(&sid) {
                         if let Some(el) = slide.find_element(&element_id) {
-                            snap.record_geometry(CanvasTarget::Slide(sid), element_id, el.geometry.clone());
+                            snap.record_geometry(
+                                CanvasTarget::Slide(sid),
+                                element_id,
+                                el.geometry.clone(),
+                            );
                         }
                     }
                 }
@@ -4288,7 +4562,10 @@ mod tests {
                 };
                 if dispatcher
                     .transaction()
-                    .and_then(|t| t.start_snapshot.position_of(&CanvasTarget::Slide(sid.clone()), &element_id))
+                    .and_then(|t| {
+                        t.start_snapshot
+                            .position_of(&CanvasTarget::Slide(sid.clone()), &element_id)
+                    })
                     .is_none()
                 {
                     return InterpretResult::Nothing;
@@ -4326,14 +4603,16 @@ mod tests {
             InteractionEvent::BackgroundClicked { .. } => {
                 InterpretResult::Selection(SelectionState::empty())
             }
-            InteractionEvent::PropertyChanged { element_id, property, value } => {
-                interpret_property_changed(
-                    active_slide.clone().map(CanvasTarget::Slide),
-                    element_id,
-                    property,
-                    value,
-                )
-            }
+            InteractionEvent::PropertyChanged {
+                element_id,
+                property,
+                value,
+            } => interpret_property_changed(
+                active_slide.clone().map(CanvasTarget::Slide),
+                element_id,
+                property,
+                value,
+            ),
             InteractionEvent::SetSelectionFromPanel { element_ids } => {
                 let mut sel: SelectionState = SelectionState::empty();
                 sel.slide_id = active_slide.clone();
@@ -4351,9 +4630,14 @@ mod tests {
                 parent_id,
                 position,
             ),
-            InteractionEvent::RenameElementRequested { element_id, new_name } => {
-                interpret_rename_request(active_slide.clone().map(CanvasTarget::Slide), element_id, new_name)
-            }
+            InteractionEvent::RenameElementRequested {
+                element_id,
+                new_name,
+            } => interpret_rename_request(
+                active_slide.clone().map(CanvasTarget::Slide),
+                element_id,
+                new_name,
+            ),
             InteractionEvent::ReparentElementRequested {
                 element_id,
                 new_parent_id,
@@ -4398,7 +4682,11 @@ mod tests {
             InteractionEvent::KeyPressed { ref key, .. }
                 if key == DELETE_KEY_BACKSPACE || key == DELETE_KEY_DELETE =>
             {
-                interpret_delete_selection(dispatcher, active_slide.clone().map(CanvasTarget::Slide), selection)
+                interpret_delete_selection(
+                    dispatcher,
+                    active_slide.clone().map(CanvasTarget::Slide),
+                    selection,
+                )
             }
             // Mirrors interpret_nudge (Slide mode only in the test harness).
             InteractionEvent::NudgeSelectionRequested { dx, dy } => {
@@ -4439,11 +4727,13 @@ mod tests {
                     Some(i) => i,
                     None => return InterpretResult::Nothing,
                 };
-                let next: usize = if forward { cur + 1 } else { cur.wrapping_sub(1) };
+                let next: usize = if forward {
+                    cur + 1
+                } else {
+                    cur.wrapping_sub(1)
+                };
                 match order.get(next) {
-                    Some(sid) if forward || cur > 0 => {
-                        InterpretResult::SetActiveSlide(sid.clone())
-                    }
+                    Some(sid) if forward || cur > 0 => InterpretResult::SetActiveSlide(sid.clone()),
                     _ => InterpretResult::Nothing,
                 }
             }
@@ -4529,7 +4819,9 @@ mod tests {
         let (d, mut sel, sid, _) = fixture();
         sel.slide_id = Some(sid.clone());
         sel.element_ids.push("foo".into());
-        let event = InteractionEvent::BackgroundClicked { position: Point { x: 0.0, y: 0.0 } };
+        let event = InteractionEvent::BackgroundClicked {
+            position: Point { x: 0.0, y: 0.0 },
+        };
         match interpret_inline(&d, &sel, &Some(sid), event) {
             InterpretResult::Selection(s) => {
                 assert!(s.is_empty());
@@ -4549,7 +4841,11 @@ mod tests {
         match interpret_inline(&d, &sel, &Some(sid.clone()), event) {
             InterpretResult::TransactionBegin { label, snapshot } => {
                 assert_eq!(label, "Move Element");
-                assert!(snapshot.position_of(&CanvasTarget::Slide(sid.clone()), &eid).is_some());
+                assert!(
+                    snapshot
+                        .position_of(&CanvasTarget::Slide(sid.clone()), &eid)
+                        .is_some()
+                );
             }
             other => panic!("expected TransactionBegin, got {other:?}"),
         }
@@ -4561,7 +4857,11 @@ mod tests {
         // that would double-translate the optimistically-transformed
         // element. The Rust tree is updated once at ElementDragEnded.
         let (mut d, sel, sid, eid) = fixture();
-        let geo = d.deck().slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let geo = d.deck().slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
         let mut snap = TransactionSnapshot::empty();
         snap.record_geometry(CanvasTarget::Slide(sid.clone()), eid.clone(), geo);
         d.begin_transaction("Move Element", snap);
@@ -4580,7 +4880,11 @@ mod tests {
     #[test]
     fn drag_ended_emits_commit_with_final_move() {
         let (mut d, sel, sid, eid) = fixture();
-        let geo = d.deck().slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let geo = d.deck().slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
         let mut snap = TransactionSnapshot::empty();
         snap.record_geometry(CanvasTarget::Slide(sid.clone()), eid.clone(), geo.clone());
         d.begin_transaction("Move Element", snap);
@@ -4597,7 +4901,10 @@ mod tests {
                 let mut left_seen = false;
                 let mut top_seen = false;
                 for p in &out.patches {
-                    if let Patch::SetStyle { property, value, .. } = p {
+                    if let Patch::SetStyle {
+                        property, value, ..
+                    } = p
+                    {
                         if property == "left" {
                             assert_eq!(value, &format!("{}px", geo.x + 25.0));
                             left_seen = true;
@@ -4630,25 +4937,40 @@ mod tests {
     #[test]
     fn drag_lifecycle_end_to_end_updates_geometry() {
         let (mut d, _sel, sid, eid) = fixture();
-        let start_geo = d.deck().slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let start_geo = d.deck().slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
 
         // Begin: snapshot
         let mut snap = TransactionSnapshot::empty();
-        snap.record_geometry(CanvasTarget::Slide(sid.clone()), eid.clone(), start_geo.clone());
+        snap.record_geometry(
+            CanvasTarget::Slide(sid.clone()),
+            eid.clone(),
+            start_geo.clone(),
+        );
         d.begin_transaction("Move Element", snap);
 
         // Update: dispatch a MoveElement against the deck
         let cmd = MoveElement {
             target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
-            new_position: Point { x: start_geo.x + 100.0, y: start_geo.y + 200.0 },
+            new_position: Point {
+                x: start_geo.x + 100.0,
+                y: start_geo.y + 200.0,
+            },
             previous_position: None,
         };
         d.dispatch(Box::new(cmd)).unwrap();
 
         // Commit: drop the transaction; geometry should reflect new pos.
         d.commit_transaction().unwrap();
-        let after = d.deck().slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let after = d.deck().slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
         assert_eq!(after.x, start_geo.x + 100.0);
         assert_eq!(after.y, start_geo.y + 200.0);
     }
@@ -4689,7 +5011,10 @@ mod tests {
         let (d, sel, sid, _) = fixture();
         let event = InteractionEvent::KeyPressed {
             key: UNDO_KEY.into(),
-            modifiers: Modifiers { meta: true, ..Modifiers::default() },
+            modifiers: Modifiers {
+                meta: true,
+                ..Modifiers::default()
+            },
         };
         match interpret_inline(&d, &sel, &Some(sid), event) {
             InterpretResult::Undo => {}
@@ -4703,17 +5028,28 @@ mod tests {
         // Undo branch ultimately triggers (sans the WebviewSender):
         // dispatch -> undo -> verify deck restored.
         let (mut d, _sel, sid, eid) = fixture();
-        let original = d.deck().slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let original = d.deck().slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
         d.dispatch(Box::new(MoveElement {
             target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
-            new_position: Point { x: original.x + 444.0, y: original.y + 222.0 },
+            new_position: Point {
+                x: original.x + 444.0,
+                y: original.y + 222.0,
+            },
             previous_position: None,
         }))
         .unwrap();
         let _ = d.take_patches();
         d.undo().unwrap().expect("undo not a no-op");
-        let geo = d.deck().slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let geo = d.deck().slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
         assert_eq!(geo.x, original.x);
         assert_eq!(geo.y, original.y);
     }
@@ -4732,7 +5068,11 @@ mod tests {
         d.undo().unwrap();
         let _ = d.take_patches();
         d.redo().unwrap().expect("redo not a no-op");
-        let geo = d.deck().slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let geo = d.deck().slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
         assert_eq!(geo.x, 21.0);
         assert_eq!(geo.y, 84.0);
     }
@@ -4801,7 +5141,11 @@ mod tests {
         // -> commit -> undo. After one undo the element returns to the
         // pre-drag position even though 32 mid-drag dispatches happened.
         let (mut d, _sel, sid, eid) = fixture();
-        let start = d.deck().slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let start = d.deck().slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
 
         let mut snap = TransactionSnapshot::empty();
         snap.record_geometry(CanvasTarget::Slide(sid.clone()), eid.clone(), start.clone());
@@ -4811,7 +5155,10 @@ mod tests {
             d.dispatch(Box::new(MoveElement {
                 target: CanvasTarget::Slide(sid.clone()),
                 element_id: eid.clone(),
-                new_position: Point { x: start.x + step, y: start.y },
+                new_position: Point {
+                    x: start.x + step,
+                    y: start.y,
+                },
                 previous_position: None,
             }))
             .unwrap();
@@ -4822,24 +5169,29 @@ mod tests {
 
         assert_eq!(d.history().undo_len(), 1);
         d.undo().unwrap().expect("undo not a no-op");
-        let geo = d.deck().slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let geo = d.deck().slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
         assert_eq!(geo.x, start.x);
         assert_eq!(geo.y, start.y);
     }
 
     // ---------- Stage 8: PropertyChanged interpret ----------
 
-    fn run_property_changed(
-        prop: &str,
-        value: &str,
-    ) -> (InterpretResult, SlideId, ElementId) {
+    fn run_property_changed(prop: &str, value: &str) -> (InterpretResult, SlideId, ElementId) {
         let (d, sel, sid, eid) = fixture();
         let event = InteractionEvent::PropertyChanged {
             element_id: eid.clone(),
             property: prop.into(),
             value: value.into(),
         };
-        (interpret_inline(&d, &sel, &Some(sid.clone()), event), sid, eid)
+        (
+            interpret_inline(&d, &sel, &Some(sid.clone()), event),
+            sid,
+            eid,
+        )
     }
 
     #[test]
@@ -4868,7 +5220,11 @@ mod tests {
                 let mut deck = Deck::sample();
                 cmd.apply(&mut deck).unwrap();
                 assert_eq!(
-                    deck.slides[&sid].find_element(&eid).unwrap().geometry.opacity,
+                    deck.slides[&sid]
+                        .find_element(&eid)
+                        .unwrap()
+                        .geometry
+                        .opacity,
                     0.5
                 );
             }
@@ -4884,7 +5240,11 @@ mod tests {
         sel.slide_id = Some(sid.clone());
         sel.element_ids = vec![eid.clone()];
         match collect_copy(
-            crate::ipc::ClipboardScope::Elements, Some(target.clone()), &sel, Some(&sid), d.deck(),
+            crate::ipc::ClipboardScope::Elements,
+            Some(target.clone()),
+            &sel,
+            Some(&sid),
+            d.deck(),
         ) {
             Some(Clipboard::Elements(v)) => {
                 assert_eq!(v.len(), 1);
@@ -4894,7 +5254,11 @@ mod tests {
         }
         let empty = SelectionState::empty();
         match collect_copy(
-            crate::ipc::ClipboardScope::Slide, Some(target), &empty, Some(&sid), d.deck(),
+            crate::ipc::ClipboardScope::Slide,
+            Some(target),
+            &empty,
+            Some(&sid),
+            d.deck(),
         ) {
             Some(Clipboard::Slide(s)) => assert_eq!(s.id, sid),
             _ => panic!("expected Slide"),
@@ -4905,7 +5269,13 @@ mod tests {
     fn paste_elements_inserts_clones_with_fresh_ids_same_geometry() {
         let (d, _sel, sid, eid) = fixture();
         let target = CanvasTarget::Slide(sid.clone());
-        let source = d.deck().canvas(&target).unwrap().find_element(&eid).unwrap().clone();
+        let source = d
+            .deck()
+            .canvas(&target)
+            .unwrap()
+            .find_element(&eid)
+            .unwrap()
+            .clone();
         let clip = Clipboard::Elements(vec![source.clone()]);
         let (cmd, outcome) = build_paste_command(Some(target.clone()), &clip, d.deck()).unwrap();
         let mut deck = d.deck().clone();
@@ -4958,11 +5328,12 @@ mod tests {
         assert_eq!(cmd.label(), "Cut");
         let mut deck = d.deck().clone();
         cmd.apply(&mut deck).unwrap();
-        assert!(deck
-            .canvas(&CanvasTarget::Slide(sid.clone()))
-            .unwrap()
-            .find_element(&eid)
-            .is_none());
+        assert!(
+            deck.canvas(&CanvasTarget::Slide(sid.clone()))
+                .unwrap()
+                .find_element(&eid)
+                .is_none()
+        );
     }
 
     #[test]
@@ -4970,14 +5341,16 @@ mod tests {
         let (d, _sel, sid, _eid) = fixture();
         let empty = SelectionState::empty();
         // Deck::sample has a single slide; cutting it must yield no removal.
-        assert!(build_cut_removal(
-            crate::ipc::ClipboardScope::Slide,
-            Some(CanvasTarget::Slide(sid.clone())),
-            &empty,
-            Some(&sid),
-            d.deck(),
-        )
-        .is_none());
+        assert!(
+            build_cut_removal(
+                crate::ipc::ClipboardScope::Slide,
+                Some(CanvasTarget::Slide(sid.clone())),
+                &empty,
+                Some(&sid),
+                d.deck(),
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -5015,7 +5388,10 @@ mod tests {
             CanvasTarget::Slide(sid.clone()),
             eid.clone(),
             Point { x: 5.0, y: 6.0 },
-            Size { width: 800.0, height: 600.0 },
+            Size {
+                width: 800.0,
+                height: 600.0,
+            },
             Some("1200px 600px".to_string()),
             Some("-200px 0px".to_string()),
         );
@@ -5028,7 +5404,9 @@ mod tests {
             Some("1200px 600px")
         );
         assert_eq!(
-            el.inline_styles.get("background-position").map(String::as_str),
+            el.inline_styles
+                .get("background-position")
+                .map(String::as_str),
             Some("-200px 0px")
         );
     }
@@ -5040,7 +5418,10 @@ mod tests {
             CanvasTarget::Slide(sid.clone()),
             eid.clone(),
             Point { x: 5.0, y: 6.0 },
-            Size { width: 800.0, height: 600.0 },
+            Size {
+                width: 800.0,
+                height: 600.0,
+            },
             None,
             None,
         );
@@ -5054,7 +5435,10 @@ mod tests {
             Some(CanvasTarget::Slide(sid.clone())),
             eid.clone(),
             Point { x: 10.0, y: 20.0 },
-            Size { width: 400.0, height: 300.0 },
+            Size {
+                width: 400.0,
+                height: 300.0,
+            },
             "600px 300px".to_string(),
             "-100px 0px".to_string(),
         );
@@ -5068,7 +5452,9 @@ mod tests {
                     Some("600px 300px")
                 );
                 assert_eq!(
-                    el.inline_styles.get("background-position").map(String::as_str),
+                    el.inline_styles
+                        .get("background-position")
+                        .map(String::as_str),
                     Some("-100px 0px")
                 );
                 assert_eq!(
@@ -5076,7 +5462,9 @@ mod tests {
                     Some("hidden")
                 );
                 assert_eq!(
-                    el.inline_styles.get("background-repeat").map(String::as_str),
+                    el.inline_styles
+                        .get("background-repeat")
+                        .map(String::as_str),
                     Some("no-repeat")
                 );
                 assert_eq!(el.geometry.width, 400.0);
@@ -5128,8 +5516,7 @@ mod tests {
             InterpretResult::Command(cmd) => {
                 cmd.apply(d.deck_mut()).unwrap();
                 assert!(
-                    !d.deck()
-                        .slides[&sid]
+                    !d.deck().slides[&sid]
                         .find_element(&eid)
                         .unwrap()
                         .inline_styles
@@ -5194,7 +5581,11 @@ mod tests {
                 let mut deck = Deck::sample();
                 let out = cmd.apply(&mut deck).unwrap();
                 // One InsertElement patch; the new node lives under root.
-                assert!(out.patches.iter().any(|p| matches!(p, Patch::InsertElement { .. })));
+                assert!(
+                    out.patches
+                        .iter()
+                        .any(|p| matches!(p, Patch::InsertElement { .. }))
+                );
                 let new_count = deck.slides[&sid].root.children.len();
                 assert_eq!(new_count, 4); // sample has 3 + the new text
             }
@@ -5248,7 +5639,11 @@ mod tests {
                 let mut deck = Deck::sample();
                 cmd.apply(&mut deck).unwrap();
                 assert_eq!(
-                    deck.slides[&sid].find_element(&eid).unwrap().name.as_deref(),
+                    deck.slides[&sid]
+                        .find_element(&eid)
+                        .unwrap()
+                        .name
+                        .as_deref(),
                     Some("Title")
                 );
             }
@@ -5475,7 +5870,9 @@ mod tests {
     #[test]
     fn thumbnail_click_with_empty_slide_id_is_nothing() {
         let (d, sel, sid, _) = fixture();
-        let event = InteractionEvent::SlideThumbnailClicked { slide_id: String::new() };
+        let event = InteractionEvent::SlideThumbnailClicked {
+            slide_id: String::new(),
+        };
         match interpret_inline(&d, &sel, &Some(sid), event) {
             InterpretResult::Nothing => {}
             other => panic!("expected Nothing, got {other:?}"),
@@ -5488,7 +5885,14 @@ mod tests {
         let mut sel = SelectionState::empty();
         sel.element_ids = vec![eid.clone()];
         let target = CanvasTarget::Slide(sid.clone());
-        let prior_x: f64 = d.deck().canvas(&target).unwrap().find_element(&eid).unwrap().geometry.x;
+        let prior_x: f64 = d
+            .deck()
+            .canvas(&target)
+            .unwrap()
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .x;
         let event = InteractionEvent::NudgeSelectionRequested { dx: 1.0, dy: 0.0 };
         match interpret_inline(&d, &sel, &Some(sid.clone()), event) {
             InterpretResult::Command(cmd) => {
@@ -5594,28 +5998,48 @@ mod tests {
 
         // Edit on A.
         let original_x = dispatcher.deck().slides[&sid_a]
-            .find_element("el_a").unwrap().geometry.x;
+            .find_element("el_a")
+            .unwrap()
+            .geometry
+            .x;
         dispatcher
             .dispatch(Box::new(MoveElement {
                 target: CanvasTarget::Slide(sid_a.clone()),
                 element_id: "el_a".into(),
-                new_position: Point { x: original_x + 250.0, y: 0.0 },
+                new_position: Point {
+                    x: original_x + 250.0,
+                    y: 0.0,
+                },
                 previous_position: None,
             }))
             .unwrap();
 
-        assert!(switch_active_slide_in_tree(&mut dispatcher, &mut active, sid_b.clone()));
+        assert!(switch_active_slide_in_tree(
+            &mut dispatcher,
+            &mut active,
+            sid_b.clone()
+        ));
         assert_eq!(active.as_deref(), Some("s_b"));
 
         // Slide A's mutation must survive the switch.
         let x_after = dispatcher.deck().slides[&sid_a]
-            .find_element("el_a").unwrap().geometry.x;
+            .find_element("el_a")
+            .unwrap()
+            .geometry
+            .x;
         assert_eq!(x_after, original_x + 250.0);
 
         // Switch back.
-        assert!(switch_active_slide_in_tree(&mut dispatcher, &mut active, sid_a.clone()));
+        assert!(switch_active_slide_in_tree(
+            &mut dispatcher,
+            &mut active,
+            sid_a.clone()
+        ));
         let x_back = dispatcher.deck().slides[&sid_a]
-            .find_element("el_a").unwrap().geometry.x;
+            .find_element("el_a")
+            .unwrap()
+            .geometry
+            .x;
         assert_eq!(x_back, original_x + 250.0);
     }
 
@@ -5653,7 +6077,11 @@ mod tests {
         match interpret_inline(&d, &sel, &Some(sid.clone()), event) {
             InterpretResult::TransactionBegin { label, snapshot } => {
                 assert_eq!(label, "Resize Element");
-                assert!(snapshot.position_of(&CanvasTarget::Slide(sid.clone()), &eid).is_some());
+                assert!(
+                    snapshot
+                        .position_of(&CanvasTarget::Slide(sid.clone()), &eid)
+                        .is_some()
+                );
             }
             other => panic!("expected TransactionBegin, got {other:?}"),
         }
@@ -5665,7 +6093,10 @@ mod tests {
         let event = InteractionEvent::ElementResized {
             element_id: eid,
             handle: ResizeHandle::Right,
-            new_size: Size { width: 200.0, height: 100.0 },
+            new_size: Size {
+                width: 200.0,
+                height: 100.0,
+            },
             new_position: Point { x: 0.0, y: 0.0 },
         };
         match interpret_inline(&d, &sel, &Some(sid), event) {
@@ -5677,7 +6108,11 @@ mod tests {
     #[test]
     fn resize_ended_emits_commit_with_resize_command() {
         let (mut d, sel, sid, eid) = fixture();
-        let geo = d.deck().slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let geo = d.deck().slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
         let mut snap = TransactionSnapshot::empty();
         snap.record_geometry(CanvasTarget::Slide(sid.clone()), eid.clone(), geo);
         d.begin_transaction("Resize Element", snap);
@@ -5685,7 +6120,10 @@ mod tests {
         let event = InteractionEvent::ElementResizeEnded {
             element_id: eid.clone(),
             new_position: Point { x: 50.0, y: 60.0 },
-            new_size: Size { width: 300.0, height: 200.0 },
+            new_size: Size {
+                width: 300.0,
+                height: 200.0,
+            },
             background_size: None,
             background_position: None,
         };
@@ -5694,7 +6132,11 @@ mod tests {
                 assert_eq!(cmd.label(), "Resize Element");
                 let mut tmp = Deck::sample();
                 let out = cmd.apply(&mut tmp).unwrap();
-                let g = tmp.slides[&sid].find_element(&eid).unwrap().geometry.clone();
+                let g = tmp.slides[&sid]
+                    .find_element(&eid)
+                    .unwrap()
+                    .geometry
+                    .clone();
                 assert_eq!(g.x, 50.0);
                 assert_eq!(g.y, 60.0);
                 assert_eq!(g.width, 300.0);
@@ -5712,7 +6154,10 @@ mod tests {
         let event = InteractionEvent::ElementResizeEnded {
             element_id: eid,
             new_position: Point { x: 0.0, y: 0.0 },
-            new_size: Size { width: 1.0, height: 1.0 },
+            new_size: Size {
+                width: 1.0,
+                height: 1.0,
+            },
             background_size: None,
             background_position: None,
         };
@@ -5725,11 +6170,19 @@ mod tests {
     #[test]
     fn resize_lifecycle_round_trip_undo_restores_original_rect() {
         let (mut d, _, sid, eid) = fixture();
-        let original = d.deck().slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let original = d.deck().slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
 
         // Started → snapshot.
         let mut snap = TransactionSnapshot::empty();
-        snap.record_geometry(CanvasTarget::Slide(sid.clone()), eid.clone(), original.clone());
+        snap.record_geometry(
+            CanvasTarget::Slide(sid.clone()),
+            eid.clone(),
+            original.clone(),
+        );
         d.begin_transaction("Resize Element", snap);
 
         // Ended → commit ResizeElement.
@@ -5745,13 +6198,21 @@ mod tests {
         d.commit_transaction().unwrap();
         let _ = d.take_patches();
 
-        let after = d.deck().slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let after = d.deck().slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
         assert_eq!(after.x, original.x + 100.0);
         assert_eq!(after.width, original.width - 80.0);
 
         // Single undo restores all four fields.
         d.undo().unwrap().expect("undo not a no-op");
-        let restored = d.deck().slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let restored = d.deck().slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
         assert_eq!(restored.x, original.x);
         assert_eq!(restored.y, original.y);
         assert_eq!(restored.width, original.width);
@@ -5787,11 +6248,15 @@ mod tests {
         assert_eq!(node.geometry.y, 240.0);
         // object-fit:cover semantics via background-* shortcuts.
         assert_eq!(
-            node.inline_styles.get("background-size").map(String::as_str),
+            node.inline_styles
+                .get("background-size")
+                .map(String::as_str),
             Some("cover")
         );
         assert_eq!(
-            node.inline_styles.get("background-position").map(String::as_str),
+            node.inline_styles
+                .get("background-position")
+                .map(String::as_str),
             Some("center")
         );
         // The CSS background-image points at a custom property the
@@ -5812,7 +6277,10 @@ mod tests {
     #[test]
     fn build_image_element_centers_around_drop_point_when_provided() {
         let entry = sample_asset_entry();
-        let drop = Some(Point { x: 1000.0, y: 500.0 });
+        let drop = Some(Point {
+            x: 1000.0,
+            y: 500.0,
+        });
         let node = build_image_element_from_asset(&entry, 400, 200, drop, (1920, 1080));
         // The element is sized natural and positioned so its centre
         // lands on the drop point.
@@ -5843,7 +6311,10 @@ mod tests {
             bytes.clone(),
             "x.png".into(),
             "image/png".into(),
-            Some(crate::bundle::assets::AssetDimensions { width: 10, height: 10 }),
+            Some(crate::bundle::assets::AssetDimensions {
+                width: 10,
+                height: 10,
+            }),
         );
         assert_eq!(deck.assets.entry_count(), before_count + 1);
 
@@ -5891,8 +6362,7 @@ mod tests {
         .unwrap();
         let dispatcher = CommandDispatcher::new(deck);
 
-        let (cmd, new_id) =
-            build_insert_slide_after_active(&dispatcher, Some(&orig), "").unwrap();
+        let (cmd, new_id) = build_insert_slide_after_active(&dispatcher, Some(&orig), "").unwrap();
         assert!(!new_id.is_empty());
         assert_eq!(cmd.label(), "Add Slide");
         assert!(cmd.affects_slide_list());
@@ -5960,7 +6430,12 @@ mod tests {
     #[test]
     fn build_set_text_command_some_on_changed_text() {
         let (dispatcher, _sel, sid, eid) = fixture();
-        let out = build_set_text_command(&dispatcher, Some(CanvasTarget::Slide(sid.clone())), eid, "brand new text".into());
+        let out = build_set_text_command(
+            &dispatcher,
+            Some(CanvasTarget::Slide(sid.clone())),
+            eid,
+            "brand new text".into(),
+        );
         let cmd = out.expect("changed text should produce a command");
         assert_eq!(cmd.label(), "Edit Text");
     }
@@ -5968,13 +6443,24 @@ mod tests {
     #[test]
     fn build_set_text_command_none_when_text_unchanged() {
         let (dispatcher, _sel, sid, eid) = fixture();
-        let current: String =
-            match &dispatcher.deck().slides[&sid].find_element(&eid).unwrap().content {
-                ElementContent::Text(rt) => rt.plain.clone(),
-                other => panic!("expected text, got {other:?}"),
-            };
+        let current: String = match &dispatcher.deck().slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .content
+        {
+            ElementContent::Text(rt) => rt.plain.clone(),
+            other => panic!("expected text, got {other:?}"),
+        };
         // Re-committing the identical text must not create a history entry.
-        assert!(build_set_text_command(&dispatcher, Some(CanvasTarget::Slide(sid.clone())), eid, current).is_none());
+        assert!(
+            build_set_text_command(
+                &dispatcher,
+                Some(CanvasTarget::Slide(sid.clone())),
+                eid,
+                current
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -5988,7 +6474,15 @@ mod tests {
         // The slide root is a Group, not a Text element.
         let (dispatcher, _sel, sid, _eid) = fixture();
         let root_id: ElementId = dispatcher.deck().slides[&sid].root.id.clone();
-        assert!(build_set_text_command(&dispatcher, Some(CanvasTarget::Slide(sid.clone())), root_id, "x".into()).is_none());
+        assert!(
+            build_set_text_command(
+                &dispatcher,
+                Some(CanvasTarget::Slide(sid.clone())),
+                root_id,
+                "x".into()
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -6030,14 +6524,18 @@ mod tests {
         let (mut dispatcher, _sel, _sid, _eid) = fixture();
         // Deck::sample's theme seeds the "blank" layout.
         let active: Option<LayoutId> = Some("blank".into());
-        let (cmd, new_id) =
-            build_insert_layout_after_active(&dispatcher, active.as_ref()).unwrap();
+        let (cmd, new_id) = build_insert_layout_after_active(&dispatcher, active.as_ref()).unwrap();
         assert_ne!(new_id, "blank");
         assert!(!dispatcher.deck().theme.layouts.contains_key(&new_id));
         cmd.apply(dispatcher.deck_mut()).unwrap();
         assert!(dispatcher.deck().theme.layouts.contains_key(&new_id));
         // Inserted directly after the active layout.
-        let pos = dispatcher.deck().theme.layout_order.iter().position(|l| l == &new_id);
+        let pos = dispatcher
+            .deck()
+            .theme
+            .layout_order
+            .iter()
+            .position(|l| l == &new_id);
         assert_eq!(pos, Some(1));
     }
 
@@ -6046,7 +6544,10 @@ mod tests {
         let (mut dispatcher, _sel, _sid, _eid) = fixture();
         dispatcher.deck_mut().theme.globals_css = ":root{--g:1}".into();
         let data = build_layout_list_data(dispatcher.deck(), Some(&"blank".to_string()));
-        assert_eq!(data.layouts.len(), dispatcher.deck().theme.layout_order.len());
+        assert_eq!(
+            data.layouts.len(),
+            dispatcher.deck().theme.layout_order.len()
+        );
         assert_eq!(data.layouts[0].layout_id, "blank");
         assert_eq!(data.layouts[0].name, "Blank");
         assert!(!data.layouts[0].html.is_empty());
@@ -6081,7 +6582,11 @@ mod tests {
         cmd.apply(dispatcher.deck_mut()).unwrap();
         // The layout element changed; no slide was touched.
         assert_eq!(
-            dispatcher.deck().theme.layouts["blank"].find_element("el_lt").unwrap().geometry.width,
+            dispatcher.deck().theme.layouts["blank"]
+                .find_element("el_lt")
+                .unwrap()
+                .geometry
+                .width,
             321.0
         );
         let slide_root_children = dispatcher.deck().slides[&sid].root.children.len();
@@ -6094,7 +6599,13 @@ mod tests {
     fn set_element_animation_enable_builds_insert() {
         let (mut dispatcher, _sel, sid, eid) = fixture();
         let result = interpret_set_element_animation(
-            dispatcher.deck(), EditorMode::Slide, Some(&sid), eid.clone(), "entrance", true);
+            dispatcher.deck(),
+            EditorMode::Slide,
+            Some(&sid),
+            eid.clone(),
+            "entrance",
+            true,
+        );
         let cmd = match result {
             InterpretResult::Command(c) => c,
             other => panic!("expected Command, got {other:?}"),
@@ -6111,7 +6622,13 @@ mod tests {
     fn add_animation_appends_catalog_effect() {
         let (mut dispatcher, _sel, sid, eid) = fixture();
         let result = interpret_add_animation(
-            dispatcher.deck(), EditorMode::Slide, Some(&sid), eid.clone(), "fly-in", Some("left"));
+            dispatcher.deck(),
+            EditorMode::Slide,
+            Some(&sid),
+            eid.clone(),
+            "fly-in",
+            Some("left"),
+        );
         let cmd = match result {
             InterpretResult::Command(c) => c,
             other => panic!("expected Command, got {other:?}"),
@@ -6126,15 +6643,29 @@ mod tests {
     fn update_animation_overlays_timing() {
         let (mut dispatcher, _sel, sid, eid) = fixture();
         let add = match interpret_set_element_animation(
-            dispatcher.deck(), EditorMode::Slide, Some(&sid), eid, "entrance", true) {
+            dispatcher.deck(),
+            EditorMode::Slide,
+            Some(&sid),
+            eid,
+            "entrance",
+            true,
+        ) {
             InterpretResult::Command(c) => c,
             other => panic!("expected Command, got {other:?}"),
         };
         add.apply(dispatcher.deck_mut()).unwrap();
         let anim_id = dispatcher.deck().slides[&sid].animations[0].id.clone();
         let upd = match interpret_update_animation(
-            dispatcher.deck(), Some(&sid), &anim_id, Some("after_previous"),
-            Some(700), None, None, None, None) {
+            dispatcher.deck(),
+            Some(&sid),
+            &anim_id,
+            Some("after_previous"),
+            Some(700),
+            None,
+            None,
+            None,
+            None,
+        ) {
             InterpretResult::Command(c) => c,
             other => panic!("expected Command, got {other:?}"),
         };
@@ -6150,15 +6681,29 @@ mod tests {
         // Two entrance animations on the element → two timeline entries.
         for kind in ["entrance", "exit"] {
             if let InterpretResult::Command(c) = interpret_add_animation(
-                dispatcher.deck(), EditorMode::Slide, Some(&sid), eid.clone(),
-                if kind == "entrance" { "fade-in" } else { "fade-out" }, None) {
+                dispatcher.deck(),
+                EditorMode::Slide,
+                Some(&sid),
+                eid.clone(),
+                if kind == "entrance" {
+                    "fade-in"
+                } else {
+                    "fade-out"
+                },
+                None,
+            ) {
                 c.apply(dispatcher.deck_mut()).unwrap();
             }
         }
         let second = dispatcher.deck().slides[&sid].animations[1].id.clone();
         // Move the 2nd entry to index 0 and make it play with previous.
         let cmd = match interpret_move_animation(
-            dispatcher.deck(), Some(&sid), &second, 0, "with_previous") {
+            dispatcher.deck(),
+            Some(&sid),
+            &second,
+            0,
+            "with_previous",
+        ) {
             InterpretResult::Command(c) => c,
             other => panic!("expected Command, got {other:?}"),
         };
@@ -6172,14 +6717,28 @@ mod tests {
     fn set_element_animation_disable_removes_existing() {
         let (mut dispatcher, _sel, sid, eid) = fixture();
         if let InterpretResult::Command(c) = interpret_set_element_animation(
-            dispatcher.deck(), EditorMode::Slide, Some(&sid), eid.clone(), "exit", true) {
+            dispatcher.deck(),
+            EditorMode::Slide,
+            Some(&sid),
+            eid.clone(),
+            "exit",
+            true,
+        ) {
             c.apply(dispatcher.deck_mut()).unwrap();
         }
         assert_eq!(dispatcher.deck().slides[&sid].animations.len(), 1);
         let result = interpret_set_element_animation(
-            dispatcher.deck(), EditorMode::Slide, Some(&sid), eid, "exit", false);
+            dispatcher.deck(),
+            EditorMode::Slide,
+            Some(&sid),
+            eid,
+            "exit",
+            false,
+        );
         match result {
-            InterpretResult::Command(c) => { c.apply(dispatcher.deck_mut()).unwrap(); }
+            InterpretResult::Command(c) => {
+                c.apply(dispatcher.deck_mut()).unwrap();
+            }
             other => panic!("expected Command, got {other:?}"),
         }
         assert!(dispatcher.deck().slides[&sid].animations.is_empty());
@@ -6189,7 +6748,13 @@ mod tests {
     fn set_element_animation_noop_in_layout_mode() {
         let (dispatcher, _sel, sid, eid) = fixture();
         let result = interpret_set_element_animation(
-            dispatcher.deck(), EditorMode::Layout, Some(&sid), eid, "entrance", true);
+            dispatcher.deck(),
+            EditorMode::Layout,
+            Some(&sid),
+            eid,
+            "entrance",
+            true,
+        );
         assert!(matches!(result, InterpretResult::Nothing));
     }
 
@@ -6212,8 +6777,12 @@ mod tests {
         let mut deck = Deck::sample();
         let sid = deck.slide_order[0].clone();
         deck.slides.get_mut(&sid).unwrap().metadata.background = Some("#222".into());
-        deck.manifest.slides.iter_mut().find(|e| e.id == sid).unwrap().notes =
-            Some("speak up".into());
+        deck.manifest
+            .slides
+            .iter_mut()
+            .find(|e| e.id == sid)
+            .unwrap()
+            .notes = Some("speak up".into());
 
         let data = build_slide_inspector_data(&deck, Some(&sid)).expect("active slide");
         assert_eq!(data.slide_id, sid);
@@ -6252,7 +6821,10 @@ mod tests {
     fn present_start_index_falls_back_to_zero_then_none() {
         let deck = Deck::sample();
         // Unknown active id → first slide.
-        assert_eq!(present_start_index(&deck, Some(&"ghost".to_string())), Some(0));
+        assert_eq!(
+            present_start_index(&deck, Some(&"ghost".to_string())),
+            Some(0)
+        );
         // Empty deck → no presentation possible.
         let empty = Deck::default();
         assert_eq!(present_start_index(&empty, None), None);

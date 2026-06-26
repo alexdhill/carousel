@@ -69,8 +69,13 @@ mod tests {
     fn inbound_variants_roundtrip() {
         for v in [
             LandingInbound::Ready,
-            LandingInbound::OpenTemplate { theme_id: "dark".into(), layout_id: "hero".into() },
-            LandingInbound::OpenRecent { path: "/x.slidedeck".into() },
+            LandingInbound::OpenTemplate {
+                theme_id: "dark".into(),
+                layout_id: "hero".into(),
+            },
+            LandingInbound::OpenRecent {
+                path: "/x.slidedeck".into(),
+            },
             LandingInbound::OpenDefault,
             LandingInbound::Cancel,
         ] {

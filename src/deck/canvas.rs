@@ -83,7 +83,9 @@ pub fn find_element<'a>(root: &'a ElementNode, id: &str) -> Option<&'a ElementNo
     let mut stack: Vec<&'a ElementNode> = Vec::new();
     stack.push(root);
     for _ in 0..MAX_TREE_NODES {
-        let Some(node) = stack.pop() else { return None; };
+        let Some(node) = stack.pop() else {
+            return None;
+        };
         if node.id == id {
             return Some(node);
         }
@@ -104,7 +106,9 @@ pub fn find_element_mut<'a>(root: &'a mut ElementNode, id: &str) -> Option<&'a m
     let mut stack: Vec<&'a mut ElementNode> = Vec::new();
     stack.push(root);
     for _ in 0..MAX_TREE_NODES {
-        let Some(node) = stack.pop() else { return None; };
+        let Some(node) = stack.pop() else {
+            return None;
+        };
         if node.id == id {
             return Some(node);
         }
@@ -122,7 +126,10 @@ pub fn find_element_mut<'a>(root: &'a mut ElementNode, id: &str) -> Option<&'a m
 // Dataflow: immutable DFS records the index-path to the target's parent,
 // then a bounded mutable walk lands on the parent and removes the child.
 pub fn remove_non_root_element(root: &mut ElementNode, id: &str) -> Option<RemovedElement> {
-    assert!(!id.is_empty(), "remove_non_root_element called with empty id");
+    assert!(
+        !id.is_empty(),
+        "remove_non_root_element called with empty id"
+    );
     let (path, position): (Vec<usize>, usize) = find_parent_path(root, id)?;
     let mut current: &mut ElementNode = root;
     let mut step: usize = 0;
@@ -133,7 +140,11 @@ pub fn remove_non_root_element(root: &mut ElementNode, id: &str) -> Option<Remov
     }
     let parent_id: ElementId = current.id.clone();
     let removed: ElementNode = current.children.remove(position);
-    Some(RemovedElement { node: removed, parent_id, position })
+    Some(RemovedElement {
+        node: removed,
+        parent_id,
+        position,
+    })
 }
 
 // insert_child
@@ -147,12 +158,18 @@ pub fn insert_child(
     position: usize,
     node: ElementNode,
 ) -> Result<(), InsertError> {
-    assert!(!parent_id.is_empty(), "insert_child called with empty parent_id");
+    assert!(
+        !parent_id.is_empty(),
+        "insert_child called with empty parent_id"
+    );
     let parent: &mut ElementNode =
         find_element_mut(root, parent_id).ok_or(InsertError::ParentNotFound)?;
     let len: usize = parent.children.len();
     if position > len {
-        return Err(InsertError::PositionOutOfRange { len, requested: position });
+        return Err(InsertError::PositionOutOfRange {
+            len,
+            requested: position,
+        });
     }
     parent.children.insert(position, node);
     Ok(())
@@ -164,11 +181,16 @@ pub fn insert_child(
 // Dataflow: iterative DFS with an explicit (path, node) stack; each entry
 // records the indices needed to descend back to that node from the root.
 fn find_parent_path(root: &ElementNode, target: &str) -> Option<(Vec<usize>, usize)> {
-    assert!(!target.is_empty(), "find_parent_path called with empty target");
+    assert!(
+        !target.is_empty(),
+        "find_parent_path called with empty target"
+    );
     let mut stack: Vec<(Vec<usize>, &ElementNode)> = Vec::new();
     stack.push((Vec::new(), root));
     for _ in 0..MAX_TREE_NODES {
-        let Some((path, node)) = stack.pop() else { return None; };
+        let Some((path, node)) = stack.pop() else {
+            return None;
+        };
         for (i, child) in node.children.iter().enumerate() {
             if child.id == target {
                 return Some((path, i));

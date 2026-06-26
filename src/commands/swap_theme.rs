@@ -112,7 +112,10 @@ mod tests {
             globals_css: "@keyframes z { to { opacity: 1 } }".into(),
             ..ThemeData::default()
         };
-        theme.layouts.insert("custom".into(), LayoutNode::new("custom".into(), "Custom".into(), root));
+        theme.layouts.insert(
+            "custom".into(),
+            LayoutNode::new("custom".into(), "Custom".into(), root),
+        );
         theme.layout_order.push("custom".into());
         theme
     }
@@ -121,7 +124,12 @@ mod tests {
     // is content-derived like production.
     fn one_asset() -> (AssetEntry, Vec<u8>) {
         let mut reg = AssetRegistry::new_empty();
-        let entry = reg.insert_blob(vec![7, 7, 7, 7], "logo.png".into(), "image/png".into(), None);
+        let entry = reg.insert_blob(
+            vec![7, 7, 7, 7],
+            "logo.png".into(),
+            "image/png".into(),
+            None,
+        );
         let bytes = reg.files.get(&entry.path).unwrap().clone();
         (entry, bytes)
     }

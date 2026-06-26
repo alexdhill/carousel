@@ -31,16 +31,16 @@ pub mod rename_element;
 pub mod reparent_element;
 pub mod resize_element;
 pub mod scale_elements;
-pub mod set_geometry;
-pub mod set_inline_style;
 pub mod set_element_id;
 pub mod set_embed;
+pub mod set_geometry;
+pub mod set_inline_style;
 pub mod set_text;
-pub mod table_commands;
 pub mod slide_lifecycle;
 pub mod slide_metadata;
 pub mod slide_style;
 pub mod swap_theme;
+pub mod table_commands;
 pub mod theme_globals;
 pub mod transactions;
 
@@ -72,17 +72,16 @@ pub use remove_element::RemoveElementCommand;
 pub use set_element_id::SetElementId;
 pub use set_embed::SetEmbedHtml;
 pub use set_text::SetTextContent;
+pub use slide_lifecycle::{InsertSlide, RemoveSlide};
+pub use slide_metadata::{SetDeckTitle, SetSlideTitle};
+pub use slide_style::{
+    SetSlideBackground, SetSlideBackgroundImage, SetSlideLayout, SetSlideNotes, SetSlideTransition,
+};
+pub use swap_theme::SwapTheme;
 pub use table_commands::{
     DeleteTableColumn, DeleteTableRow, InsertTableColumn, InsertTableRow, SetCellStyles,
     SetCellText, SetTableData, SetTableHeaderColumns, SetTableHeaderRows,
 };
-pub use slide_lifecycle::{InsertSlide, RemoveSlide};
-pub use slide_metadata::{SetDeckTitle, SetSlideTitle};
-pub use slide_style::{
-    SetSlideBackground, SetSlideBackgroundImage, SetSlideLayout, SetSlideNotes,
-    SetSlideTransition,
-};
-pub use swap_theme::SwapTheme;
 pub use theme_globals::SetGlobalsCss;
 pub use transactions::{Transaction, TransactionSnapshot};
 
@@ -203,7 +202,8 @@ pub fn resolve_canvas_mut<'a>(
     deck: &'a mut Deck,
     target: &CanvasTarget,
 ) -> Result<&'a mut dyn Canvas, CommandError> {
-    deck.canvas_mut(target).ok_or_else(|| canvas_not_found(target))
+    deck.canvas_mut(target)
+        .ok_or_else(|| canvas_not_found(target))
 }
 
 // canvas_not_found
@@ -471,7 +471,11 @@ impl CommandDispatcher {
     // empty (no element was actually touched), skip the push.
     pub fn commit_transaction(&mut self) -> Option<Transaction> {
         let txn: Transaction = self.transaction.take()?;
-        debug!(label = txn.label, patches = txn.patches.len(), "transaction commit");
+        debug!(
+            label = txn.label,
+            patches = txn.patches.len(),
+            "transaction commit"
+        );
         if let Some(inverse) = build_composite_inverse(&txn) {
             self.active_history_mut().push(inverse, txn.label);
         }
@@ -528,7 +532,8 @@ impl CommandDispatcher {
         );
         if let Some(txn) = self.transaction.as_mut() {
             txn.patches.extend(output.patches.iter().cloned());
-            txn.dirty_targets.extend(output.dirty_targets.iter().cloned());
+            txn.dirty_targets
+                .extend(output.dirty_targets.iter().cloned());
         } else if undoable {
             self.active_history_mut().push(output.inverse, label);
         }
@@ -649,7 +654,10 @@ impl CommandDispatcher {
 fn build_composite_inverse(txn: &Transaction) -> Option<Box<dyn Command>> {
     let mut subs: Vec<Box<dyn Command>> = Vec::new();
     for ((target, eid), geom) in &txn.start_snapshot.geometry {
-        assert!(!target.id().is_empty() && !eid.is_empty(), "snapshot has empty key");
+        assert!(
+            !target.id().is_empty() && !eid.is_empty(),
+            "snapshot has empty key"
+        );
         subs.push(Box::new(ResizeElement {
             target: target.clone(),
             element_id: eid.clone(),
@@ -800,11 +808,12 @@ mod tests {
         // Two patches buffered (left + top) AND two patches in transaction.
         assert_eq!(d.patch_buffer_len(), 2);
         assert_eq!(d.transaction().unwrap().patches.len(), 2);
-        assert!(d
-            .transaction()
-            .unwrap()
-            .dirty_targets
-            .contains(&CanvasTarget::Slide(sid.clone())));
+        assert!(
+            d.transaction()
+                .unwrap()
+                .dirty_targets
+                .contains(&CanvasTarget::Slide(sid.clone()))
+        );
     }
 
     #[test]
@@ -861,10 +870,18 @@ mod tests {
     fn commit_transaction_with_snapshot_pushes_one_history_entry() {
         let mut d = CommandDispatcher::new(Deck::sample());
         let (sid, eid) = first_child_id(d.deck());
-        let start_geo = d.deck().slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let start_geo = d.deck().slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
 
         let mut snap = TransactionSnapshot::empty();
-        snap.record_geometry(CanvasTarget::Slide(sid.clone()), eid.clone(), start_geo.clone());
+        snap.record_geometry(
+            CanvasTarget::Slide(sid.clone()),
+            eid.clone(),
+            start_geo.clone(),
+        );
         d.begin_transaction("Move Element", snap);
 
         // 50 mid-drag dispatches should collapse to ONE history entry on commit.
@@ -891,14 +908,22 @@ mod tests {
     fn undo_restores_geometry_and_populates_redo() {
         let mut d = CommandDispatcher::new(Deck::sample());
         let (sid, eid) = first_child_id(d.deck());
-        let original = d.deck().slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let original = d.deck().slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
 
         d.dispatch(move_to(&sid, &eid, 999.0, -7.0)).unwrap();
         let _ = d.take_patches();
 
         let outcome = d.undo().unwrap().expect("undo should not be no-op");
         assert!(outcome.needs_flush);
-        let geo = d.deck().slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let geo = d.deck().slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
         assert_eq!(geo.x, original.x);
         assert_eq!(geo.y, original.y);
         assert!(d.can_redo());
@@ -916,7 +941,11 @@ mod tests {
         let _ = d.take_patches();
         d.redo().unwrap().expect("redo should not be no-op");
 
-        let geo = d.deck().slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let geo = d.deck().slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
         assert_eq!(geo.x, 17.0);
         assert_eq!(geo.y, 19.0);
         assert!(d.can_undo());
@@ -955,10 +984,18 @@ mod tests {
     fn drag_transaction_undo_restores_start_position() {
         let mut d = CommandDispatcher::new(Deck::sample());
         let (sid, eid) = first_child_id(d.deck());
-        let start_geo = d.deck().slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let start_geo = d.deck().slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
 
         let mut snap = TransactionSnapshot::empty();
-        snap.record_geometry(CanvasTarget::Slide(sid.clone()), eid.clone(), start_geo.clone());
+        snap.record_geometry(
+            CanvasTarget::Slide(sid.clone()),
+            eid.clone(),
+            start_geo.clone(),
+        );
         d.begin_transaction("Move Element", snap);
         d.dispatch(move_to(&sid, &eid, start_geo.x + 200.0, start_geo.y + 80.0))
             .unwrap();
@@ -966,7 +1003,11 @@ mod tests {
         let _ = d.take_patches();
 
         d.undo().unwrap();
-        let after = d.deck().slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let after = d.deck().slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
         assert_eq!(after.x, start_geo.x);
         assert_eq!(after.y, start_geo.y);
     }
@@ -988,7 +1029,11 @@ mod tests {
     fn undo_redo_round_trip_is_idempotent() {
         let mut d = CommandDispatcher::new(Deck::sample());
         let (sid, eid) = first_child_id(d.deck());
-        let original = d.deck().slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let original = d.deck().slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
 
         d.dispatch(move_to(&sid, &eid, 333.0, 444.0)).unwrap();
         let _ = d.take_patches();
@@ -996,12 +1041,20 @@ mod tests {
         let mut iter: usize = 0;
         while iter < 6 {
             d.undo().unwrap();
-            let g = d.deck().slides[&sid].find_element(&eid).unwrap().geometry.clone();
+            let g = d.deck().slides[&sid]
+                .find_element(&eid)
+                .unwrap()
+                .geometry
+                .clone();
             assert_eq!(g.x, original.x);
             assert_eq!(g.y, original.y);
 
             d.redo().unwrap();
-            let g = d.deck().slides[&sid].find_element(&eid).unwrap().geometry.clone();
+            let g = d.deck().slides[&sid]
+                .find_element(&eid)
+                .unwrap()
+                .geometry
+                .clone();
             assert_eq!(g.x, 333.0);
             assert_eq!(g.y, 444.0);
             iter += 1;
@@ -1077,10 +1130,17 @@ mod tests {
         // Undo in Layout mode restores only the layout; the slide is intact.
         d.undo().unwrap().expect("layout undo applies");
         assert_eq!(
-            d.deck().theme.layouts["blank"].find_element("el_lt").unwrap().geometry.x,
+            d.deck().theme.layouts["blank"]
+                .find_element("el_lt")
+                .unwrap()
+                .geometry
+                .x,
             0.0
         );
-        assert_eq!(d.deck().slides[&sid].find_element(&eid).unwrap().geometry.x, 111.0);
+        assert_eq!(
+            d.deck().slides[&sid].find_element(&eid).unwrap().geometry.x,
+            111.0
+        );
 
         // Undo in Slide mode restores only the slide; the layout is intact.
         d.set_mode(EditorMode::Slide);
@@ -1090,7 +1150,11 @@ mod tests {
             slide_start
         );
         assert_eq!(
-            d.deck().theme.layouts["blank"].find_element("el_lt").unwrap().geometry.x,
+            d.deck().theme.layouts["blank"]
+                .find_element("el_lt")
+                .unwrap()
+                .geometry
+                .x,
             0.0
         );
     }

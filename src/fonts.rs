@@ -72,11 +72,26 @@ pub fn enumerate_families() -> Vec<String> {
 // case-insensitive and ignores surrounding quotes/whitespace.
 pub fn is_generic_family(name: &str) -> bool {
     const GENERIC: [&str; 14] = [
-        "sans-serif", "serif", "monospace", "system-ui", "ui-sans-serif",
-        "ui-serif", "ui-monospace", "cursive", "fantasy", "emoji", "math",
-        "-apple-system", "inherit", "initial",
+        "sans-serif",
+        "serif",
+        "monospace",
+        "system-ui",
+        "ui-sans-serif",
+        "ui-serif",
+        "ui-monospace",
+        "cursive",
+        "fantasy",
+        "emoji",
+        "math",
+        "-apple-system",
+        "inherit",
+        "initial",
     ];
-    let n: String = name.trim().trim_matches('"').trim_matches('\'').to_ascii_lowercase();
+    let n: String = name
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .to_ascii_lowercase();
     GENERIC.contains(&n.as_str())
 }
 
@@ -145,7 +160,10 @@ mod tests {
         assert_eq!(sniff_format(b"wOFF...."), Some(FontFormat::Woff));
         assert_eq!(sniff_format(b"OTTO...."), Some(FontFormat::Otf));
         assert_eq!(sniff_format(b"true...."), Some(FontFormat::Ttf));
-        assert_eq!(sniff_format(&[0x00, 0x01, 0x00, 0x00, 0x00]), Some(FontFormat::Ttf));
+        assert_eq!(
+            sniff_format(&[0x00, 0x01, 0x00, 0x00, 0x00]),
+            Some(FontFormat::Ttf)
+        );
         assert_eq!(sniff_format(b"junk"), None);
         assert_eq!(sniff_format(b"ab"), None);
     }

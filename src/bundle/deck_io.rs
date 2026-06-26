@@ -12,7 +12,7 @@
 #![allow(dead_code)]
 
 use crate::bundle::{
-    AssetRegistry, BundleError, BundleResult, BundleReader, BundleWriter, ManifestData,
+    AssetRegistry, BundleError, BundleReader, BundleResult, BundleWriter, ManifestData,
     manifest::{slide_path_for, validate_format_version},
 };
 use crate::deck::{Deck, LayoutNode, SlideId, SlideNode, ThemeData};
@@ -121,7 +121,10 @@ pub fn serialize_deck(deck: &Deck) -> BundleResult<SerializedDeck> {
         });
         // Serialize the layout root through a transient SlideNode (carrying the
         // layout's own background) so it reuses the slide serializer.
-        layout_files.insert(layout_path_for(lid), serialize_slide(&layout.preview_slide()));
+        layout_files.insert(
+            layout_path_for(lid),
+            serialize_slide(&layout.preview_slide()),
+        );
     }
     // Sync each slide's animation timeline (the in-memory source of truth on
     // SlideNode) into a manifest clone before serializing the manifest JSON.
@@ -430,7 +433,10 @@ mod tests {
         let back = deserialize_deck(s).unwrap();
         assert_eq!(back.slide_order, original.slide_order);
         assert_eq!(back.slides.len(), original.slides.len());
-        assert_eq!(back.manifest.format_version, original.manifest.format_version);
+        assert_eq!(
+            back.manifest.format_version,
+            original.manifest.format_version
+        );
         // bundle_path is reset on load (caller assigns it).
         assert!(back.bundle_path.is_none());
     }
@@ -538,7 +544,11 @@ mod tests {
         let mut reader = BundleReader::open(&path).unwrap();
         let serialized_in = read_serialized(&mut reader).unwrap();
         let loaded = deserialize_deck(serialized_in).unwrap();
-        let geo = loaded.slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let geo = loaded.slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
         assert_eq!(geo.x, 777.0);
         assert_eq!(geo.y, 333.0);
         assert_eq!(loaded.slide_order, vec![sid]);
@@ -602,10 +612,10 @@ mod tests {
         original.theme.globals_css = "@keyframes spin { to { rotate: 360deg; } }".into();
         // Add a second layout after the seeded "blank".
         let title_root = group_element("el_layout_root", vec![text_element("el_t", "Title")]);
-        original
-            .theme
-            .layouts
-            .insert("title".into(), LayoutNode::new("title".into(), "Title".into(), title_root));
+        original.theme.layouts.insert(
+            "title".into(),
+            LayoutNode::new("title".into(), "Title".into(), title_root),
+        );
         original.theme.layout_order.push("title".into());
 
         let dir = TempDir::new().unwrap();
@@ -618,7 +628,10 @@ mod tests {
         let back = deserialize_deck(read_serialized(&mut r).unwrap()).unwrap();
 
         assert_eq!(back.theme.globals_css, original.theme.globals_css);
-        assert_eq!(back.theme.layout_order, vec!["blank".to_string(), "title".to_string()]);
+        assert_eq!(
+            back.theme.layout_order,
+            vec!["blank".to_string(), "title".to_string()]
+        );
         assert_eq!(back.theme.layouts.len(), 2);
         assert_eq!(back.theme.layouts["title"].name, "Title");
         // Element tree survived the HTML round-trip.
@@ -643,7 +656,10 @@ mod tests {
 
         let back = deserialize_deck(serialize_deck(&original).unwrap()).unwrap();
         // Background is SlideNode-authoritative (renders), synced via manifest.
-        assert_eq!(back.slides[&sid].metadata.background, Some("#101820".to_string()));
+        assert_eq!(
+            back.slides[&sid].metadata.background,
+            Some("#101820".to_string())
+        );
         // Notes are manifest-authoritative chrome.
         let entry = back.manifest.slides.iter().find(|e| e.id == sid).unwrap();
         assert_eq!(entry.notes, Some("speak slowly".to_string()));
@@ -657,12 +673,22 @@ mod tests {
         let mut original = Deck::sample();
         let sid = original.slide_order[0].clone();
         let el = original.slides[&sid].root.children[0].id.clone();
-        original.slides.get_mut(&sid).unwrap().animations.push(AnimationEntry::new(
-            "anim_1".into(), el.clone(),
-            crate::deck::animation::AnimationEffect::Named("appear".into()),
-            AnimationCategory::Entrance, AnimationTrigger::OnClick,
-            AnimationTiming { duration_ms: 700, ..AnimationTiming::default() },
-        ));
+        original
+            .slides
+            .get_mut(&sid)
+            .unwrap()
+            .animations
+            .push(AnimationEntry::new(
+                "anim_1".into(),
+                el.clone(),
+                crate::deck::animation::AnimationEffect::Named("appear".into()),
+                AnimationCategory::Entrance,
+                AnimationTrigger::OnClick,
+                AnimationTiming {
+                    duration_ms: 700,
+                    ..AnimationTiming::default()
+                },
+            ));
 
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("anim.slidedeck");
@@ -718,7 +744,8 @@ mod tests {
         let path = dir.path().join("legacy.slidedeck");
         let mut w = BundleWriter::create(&path).unwrap();
         w.write_string(PATH_MANIFEST, &s.manifest_json).unwrap();
-        w.write_string(PATH_THEME_JSON, r#"{"theme_id":"legacy","name":"legacy"}"#).unwrap();
+        w.write_string(PATH_THEME_JSON, r#"{"theme_id":"legacy","name":"legacy"}"#)
+            .unwrap();
         w.write_string(PATH_THEME_CSS, &s.theme_css).unwrap();
         for (p, h) in &s.slide_files {
             w.write_string(p, h).unwrap();

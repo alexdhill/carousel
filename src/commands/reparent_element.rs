@@ -55,9 +55,18 @@ impl Command for ReparentElement {
     //   5. Insert it into the target parent at new_position.
     //   6. Build the inverse command.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
-        assert!(!self.target.id().is_empty(), "ReparentElement: target id is empty");
-        assert!(!self.element_id.is_empty(), "ReparentElement: element_id is empty");
-        assert!(!self.new_parent_id.is_empty(), "ReparentElement: new_parent_id is empty");
+        assert!(
+            !self.target.id().is_empty(),
+            "ReparentElement: target id is empty"
+        );
+        assert!(
+            !self.element_id.is_empty(),
+            "ReparentElement: element_id is empty"
+        );
+        assert!(
+            !self.new_parent_id.is_empty(),
+            "ReparentElement: new_parent_id is empty"
+        );
 
         let canvas = resolve_canvas_mut(deck, &self.target)?;
 
@@ -115,7 +124,8 @@ impl Command for ReparentElement {
             })?;
         // Convert the moved element into its new parent's coordinate space and
         // re-fit the affected groups. No patches: the command remounts.
-        if let (Some((mx, my, ms_anc, _)), Some((px, py, ps_anc, ps_own))) = (move_frame, np_frame) {
+        if let (Some((mx, my, ms_anc, _)), Some((px, py, ps_anc, ps_own))) = (move_frame, np_frame)
+        {
             let content_scale: f64 = {
                 let c = ps_anc * ps_own;
                 if c.abs() < f64::EPSILON { 1.0 } else { c }
@@ -180,7 +190,10 @@ fn subtree_contains(node: &ElementNode, candidate: &str) -> bool {
     }
     let mut iter: usize = 0;
     while let Some(n) = stack.pop() {
-        assert!(iter < MAX_DEPTH_FRAMES, "subtree_contains: depth bound exceeded");
+        assert!(
+            iter < MAX_DEPTH_FRAMES,
+            "subtree_contains: depth bound exceeded"
+        );
         iter += 1;
         if n.id == candidate {
             return true;
@@ -267,11 +280,16 @@ mod tests {
     fn reparent_into_group_shrinkwraps_and_preserves_position() {
         // root -> [ a(200,100,20,10), g(@50,50) -> [ b(0,0,30,30) ] ]
         let mut a = text_element("el_a", "a");
-        a.geometry.x = 200.0; a.geometry.y = 100.0; a.geometry.width = 20.0; a.geometry.height = 10.0;
+        a.geometry.x = 200.0;
+        a.geometry.y = 100.0;
+        a.geometry.width = 20.0;
+        a.geometry.height = 10.0;
         let mut b = text_element("el_b", "b");
-        b.geometry.width = 30.0; b.geometry.height = 30.0;
+        b.geometry.width = 30.0;
+        b.geometry.height = 30.0;
         let mut g = group_element("el_group", vec![b]);
-        g.geometry.x = 50.0; g.geometry.y = 50.0;
+        g.geometry.x = 50.0;
+        g.geometry.y = 50.0;
         let root = group_element("el_root", vec![a, g]);
         let slide = SlideNode::new("s".into(), "t".into(), root);
         let mut slides: BTreeMap<SlideId, SlideNode> = BTreeMap::new();
@@ -297,7 +315,7 @@ mod tests {
         assert_eq!(g.geometry.x, 50.0); // origin unchanged (min was 0,0)
         let a = g.children.iter().find(|c| c.id == "el_a").unwrap();
         assert_eq!(a.geometry.x, 150.0); // 200 - 50 group origin
-        assert_eq!(a.geometry.y, 50.0);  // 100 - 50
+        assert_eq!(a.geometry.y, 50.0); // 100 - 50
     }
 
     #[test]

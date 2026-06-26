@@ -30,13 +30,13 @@ pub mod writer;
 
 pub use assets::AssetRegistry;
 pub use deck_io::{SerializedDeck, deserialize_deck, serialize_deck};
-pub use theme_io::{SerializedTheme, deserialize_theme, serialize_theme};
 pub use io_thread::{IoRequest, IoResponse, IoThread};
 pub use manifest::{
     Dimensions, ManifestData, Metadata, SUPPORTED_FORMAT_MAJOR, SlideEntry, ThemeRef,
     validate_format_version,
 };
 pub use reader::BundleReader;
+pub use theme_io::{SerializedTheme, deserialize_theme, serialize_theme};
 pub use writer::BundleWriter;
 
 use std::path::PathBuf;

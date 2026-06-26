@@ -20,7 +20,9 @@ pub fn app_data_dir() -> PathBuf {
 #[cfg(target_os = "macos")]
 fn base_data_dir() -> PathBuf {
     let home: String = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join("Library").join("Application Support")
+    PathBuf::from(home)
+        .join("Library")
+        .join("Application Support")
 }
 
 #[cfg(target_os = "windows")]
@@ -73,8 +75,7 @@ pub fn load() -> Config {
 pub fn save(cfg: &Config) -> std::io::Result<()> {
     let dir: PathBuf = app_data_dir();
     std::fs::create_dir_all(&dir)?;
-    let json: String =
-        serde_json::to_string_pretty(cfg).unwrap_or_else(|_| "{}".to_string());
+    let json: String = serde_json::to_string_pretty(cfg).unwrap_or_else(|_| "{}".to_string());
     std::fs::write(config_path(), json)
 }
 

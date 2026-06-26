@@ -29,7 +29,10 @@ impl Command for SetSlideBackground {
     // the inverse carrying the prior value.
     // Errors: SlideNotFound when no slide matches slide_id.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
-        assert!(!self.slide_id.is_empty(), "SetSlideBackground: empty slide_id");
+        assert!(
+            !self.slide_id.is_empty(),
+            "SetSlideBackground: empty slide_id"
+        );
         let slide = deck
             .slides
             .get_mut(&self.slide_id)
@@ -73,7 +76,10 @@ pub struct SetSlideBackgroundImage {
 
 impl Command for SetSlideBackgroundImage {
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
-        assert!(!self.slide_id.is_empty(), "SetSlideBackgroundImage: empty slide_id");
+        assert!(
+            !self.slide_id.is_empty(),
+            "SetSlideBackgroundImage: empty slide_id"
+        );
         let slide = deck
             .slides
             .get_mut(&self.slide_id)
@@ -123,7 +129,10 @@ impl Command for SetSlideTransition {
     // No patches/remount — transitions affect presentation playback only.
     // Errors: SlideNotFound when no slide matches slide_id.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
-        assert!(!self.slide_id.is_empty(), "SetSlideTransition: empty slide_id");
+        assert!(
+            !self.slide_id.is_empty(),
+            "SetSlideTransition: empty slide_id"
+        );
         let slide = deck
             .slides
             .get_mut(&self.slide_id)
@@ -254,7 +263,12 @@ impl Command for SetSlideLayout {
         } else {
             slide.root.children.extend(template);
         }
-        if let Some(entry) = deck.manifest.slides.iter_mut().find(|e| e.id == self.slide_id) {
+        if let Some(entry) = deck
+            .manifest
+            .slides
+            .iter_mut()
+            .find(|e| e.id == self.slide_id)
+        {
             entry.layout_id = self.new_layout_id.clone();
         }
         deck.manifest_dirty = true;
@@ -299,9 +313,15 @@ mod tests {
     #[test]
     fn background_sets_and_inverts() {
         let (mut deck, sid) = sample();
-        let cmd = SetSlideBackground { slide_id: sid.clone(), background: Some("#222".into()) };
+        let cmd = SetSlideBackground {
+            slide_id: sid.clone(),
+            background: Some("#222".into()),
+        };
         let out = cmd.apply(&mut deck).unwrap();
-        assert_eq!(deck.slides[&sid].metadata.background, Some("#222".to_string()));
+        assert_eq!(
+            deck.slides[&sid].metadata.background,
+            Some("#222".to_string())
+        );
         assert!(cmd.requires_remount());
         assert!(cmd.affects_slide_meta());
         out.inverse.apply(&mut deck).unwrap();
@@ -334,7 +354,10 @@ mod tests {
             duration_ms: 600,
             easing: "ease-in-out".into(),
         };
-        let cmd = SetSlideTransition { slide_id: sid.clone(), transition: Some(t.clone()) };
+        let cmd = SetSlideTransition {
+            slide_id: sid.clone(),
+            transition: Some(t.clone()),
+        };
         let out = cmd.apply(&mut deck).unwrap();
         assert_eq!(deck.slides[&sid].metadata.transition, Some(t));
         assert!(deck.manifest_dirty);
@@ -347,10 +370,21 @@ mod tests {
     #[test]
     fn notes_set_and_invert_on_manifest() {
         let (mut deck, sid) = sample();
-        let out = SetSlideNotes { slide_id: sid.clone(), notes: Some("hi".into()) }
-            .apply(&mut deck)
-            .unwrap();
-        let notes = |d: &Deck| d.manifest.slides.iter().find(|e| e.id == sid).unwrap().notes.clone();
+        let out = SetSlideNotes {
+            slide_id: sid.clone(),
+            notes: Some("hi".into()),
+        }
+        .apply(&mut deck)
+        .unwrap();
+        let notes = |d: &Deck| {
+            d.manifest
+                .slides
+                .iter()
+                .find(|e| e.id == sid)
+                .unwrap()
+                .notes
+                .clone()
+        };
         assert_eq!(notes(&deck), Some("hi".to_string()));
         out.inverse.apply(&mut deck).unwrap();
         assert_eq!(notes(&deck), None);
@@ -369,7 +403,12 @@ mod tests {
         .unwrap();
         assert_eq!(deck.slides[&sid].layout_id, "blank");
         assert_eq!(
-            deck.manifest.slides.iter().find(|e| e.id == sid).unwrap().layout_id,
+            deck.manifest
+                .slides
+                .iter()
+                .find(|e| e.id == sid)
+                .unwrap()
+                .layout_id,
             "blank"
         );
         out.inverse.apply(&mut deck).unwrap();
@@ -395,8 +434,12 @@ mod tests {
         assert_eq!(deck.slides[&sid].layout_id, "hero");
         assert_eq!(deck.slides[&sid].root.children.len(), before + 3);
         // Fresh ids: no duplicates after stamping on top.
-        let ids: std::collections::HashSet<&String> =
-            deck.slides[&sid].root.children.iter().map(|c| &c.id).collect();
+        let ids: std::collections::HashSet<&String> = deck.slides[&sid]
+            .root
+            .children
+            .iter()
+            .map(|c| &c.id)
+            .collect();
         assert_eq!(ids.len(), before + 3);
         out.inverse.apply(&mut deck).unwrap();
         assert_eq!(deck.slides[&sid].layout_id, "title");
@@ -406,9 +449,12 @@ mod tests {
     #[test]
     fn missing_slide_errors() {
         let (mut deck, _sid) = sample();
-        let err = SetSlideBackground { slide_id: "ghost".into(), background: None }
-            .apply(&mut deck)
-            .unwrap_err();
+        let err = SetSlideBackground {
+            slide_id: "ghost".into(),
+            background: None,
+        }
+        .apply(&mut deck)
+        .unwrap_err();
         assert!(matches!(err, CommandError::SlideNotFound(_)));
     }
 }

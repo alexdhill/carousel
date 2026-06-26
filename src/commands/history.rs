@@ -156,8 +156,13 @@ impl CommandHistory {
         let affects_animations: bool = entry.inverse.affects_animations();
         let affects_assets: bool = entry.inverse.affects_assets();
         let affects_slide_meta: bool = entry.inverse.affects_slide_meta();
-        let CommandOutput { patches, inverse, dirty_targets, warnings, .. } =
-            entry.inverse.apply(deck)?;
+        let CommandOutput {
+            patches,
+            inverse,
+            dirty_targets,
+            warnings,
+            ..
+        } = entry.inverse.apply(deck)?;
         self.redo_stack.push_back(HistoryEntry {
             inverse,
             label,
@@ -203,8 +208,13 @@ impl CommandHistory {
         let affects_animations: bool = entry.inverse.affects_animations();
         let affects_assets: bool = entry.inverse.affects_assets();
         let affects_slide_meta: bool = entry.inverse.affects_slide_meta();
-        let CommandOutput { patches, inverse, dirty_targets, warnings, .. } =
-            entry.inverse.apply(deck)?;
+        let CommandOutput {
+            patches,
+            inverse,
+            dirty_targets,
+            warnings,
+            ..
+        } = entry.inverse.apply(deck)?;
         self.undo_stack.push_back(HistoryEntry {
             inverse,
             label,
@@ -386,14 +396,22 @@ mod tests {
     fn undo_restores_prior_state_and_populates_redo() {
         let mut h = CommandHistory::new(4);
         let (mut deck, sid, eid) = fresh_deck_first_child();
-        let original = deck.slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let original = deck.slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
 
         let cmd = move_cmd(&sid, &eid, 500.0, 300.0);
         let out = cmd.apply(&mut deck).unwrap();
         h.push(out.inverse, "Move Element");
 
         let undone = h.undo(&mut deck).unwrap().unwrap();
-        let after = deck.slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let after = deck.slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
         assert_eq!(after.x, original.x);
         assert_eq!(after.y, original.y);
         assert_eq!(undone.label, "Move Element");
@@ -415,7 +433,11 @@ mod tests {
         h.undo(&mut deck).unwrap();
         let redone = h.redo(&mut deck).unwrap().unwrap();
         assert_eq!(redone.label, "Move Element");
-        let after = deck.slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let after = deck.slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
         assert_eq!(after.x, 50.0);
         assert_eq!(after.y, 60.0);
         assert!(h.can_undo());
@@ -426,7 +448,11 @@ mod tests {
     fn undo_redo_loop_is_stable_over_many_iterations() {
         let mut h = CommandHistory::new(4);
         let (mut deck, sid, eid) = fresh_deck_first_child();
-        let original = deck.slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let original = deck.slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
 
         let cmd = move_cmd(&sid, &eid, 11.0, 22.0);
         let out = cmd.apply(&mut deck).unwrap();
@@ -435,12 +461,20 @@ mod tests {
         let mut iter: usize = 0;
         while iter < 8 {
             h.undo(&mut deck).unwrap();
-            let geo = deck.slides[&sid].find_element(&eid).unwrap().geometry.clone();
+            let geo = deck.slides[&sid]
+                .find_element(&eid)
+                .unwrap()
+                .geometry
+                .clone();
             assert_eq!(geo.x, original.x);
             assert_eq!(geo.y, original.y);
 
             h.redo(&mut deck).unwrap();
-            let geo = deck.slides[&sid].find_element(&eid).unwrap().geometry.clone();
+            let geo = deck.slides[&sid]
+                .find_element(&eid)
+                .unwrap()
+                .geometry
+                .clone();
             assert_eq!(geo.x, 11.0);
             assert_eq!(geo.y, 22.0);
             iter += 1;

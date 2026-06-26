@@ -39,8 +39,14 @@ impl Command for ResizeElement {
     // clamp width/height to MIN_DIMENSION_PX -> overwrite -> invalidate
     // index -> build the four CSS patches + inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
-        assert!(!self.target.id().is_empty(), "ResizeElement: target id is empty");
-        assert!(!self.element_id.is_empty(), "ResizeElement: element_id is empty");
+        assert!(
+            !self.target.id().is_empty(),
+            "ResizeElement: target id is empty"
+        );
+        assert!(
+            !self.element_id.is_empty(),
+            "ResizeElement: element_id is empty"
+        );
         let canvas = resolve_canvas_mut(deck, &self.target)?;
         let element = canvas
             .find_element_mut(&self.element_id)
@@ -83,7 +89,10 @@ impl Command for ResizeElement {
                 value: format!("{}px", clamped_h),
             },
         ];
-        patches.extend(crate::commands::relayout_patches(canvas.root_mut(), &self.element_id));
+        patches.extend(crate::commands::relayout_patches(
+            canvas.root_mut(),
+            &self.element_id,
+        ));
 
         let inverse: ResizeElement = ResizeElement {
             target: self.target.clone(),
@@ -133,7 +142,11 @@ mod tests {
             new_height: 250.0,
         };
         cmd.apply(&mut deck).unwrap();
-        let g = deck.slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let g = deck.slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
         assert_eq!(g.x, 100.0);
         assert_eq!(g.y, 200.0);
         assert_eq!(g.width, 400.0);
@@ -156,7 +169,11 @@ mod tests {
         let mut props: Vec<&str> = Vec::new();
         for p in &out.patches {
             match p {
-                Patch::SetStyle { element_id, property, .. } => {
+                Patch::SetStyle {
+                    element_id,
+                    property,
+                    ..
+                } => {
                     assert_eq!(element_id, &eid);
                     props.push(property.as_str());
                 }
@@ -176,15 +193,26 @@ mod tests {
         use crate::deck::style::{GroupAlignment, GroupStyle};
         let mut deck = Deck::sample();
         let sid: SlideId = deck.slide_order[0].clone();
-        let mut a = text_element("ca", "t"); a.geometry.width = 20.0; a.geometry.height = 10.0;
-        let mut b = text_element("cb", "t"); b.geometry.x = 30.0; b.geometry.width = 20.0; b.geometry.height = 10.0;
+        let mut a = text_element("ca", "t");
+        a.geometry.width = 20.0;
+        a.geometry.height = 10.0;
+        let mut b = text_element("cb", "t");
+        b.geometry.x = 30.0;
+        b.geometry.width = 20.0;
+        b.geometry.height = 10.0;
         let mut g = group_element("cg", vec![a, b]);
-        g.style = ElementStyle::Group(GroupStyle { alignment: GroupAlignment::Start, ..Default::default() });
+        g.style = ElementStyle::Group(GroupStyle {
+            alignment: GroupAlignment::Start,
+            ..Default::default()
+        });
         deck.slides.get_mut(&sid).unwrap().root.children.push(g);
         let cmd = ResizeElement {
             target: CanvasTarget::Slide(sid.clone()),
             element_id: "cb".into(),
-            new_x: 30.0, new_y: 0.0, new_width: 20.0, new_height: 90.0,
+            new_x: 30.0,
+            new_y: 0.0,
+            new_width: 20.0,
+            new_height: 90.0,
         };
         let out = cmd.apply(&mut deck).unwrap();
         let g = deck.slides[&sid].find_element("cg").unwrap();
@@ -196,7 +224,11 @@ mod tests {
     #[test]
     fn inverse_round_trip_restores_prior_rect() {
         let (mut deck, sid, eid) = fixture();
-        let before = deck.slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let before = deck.slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
         let cmd = ResizeElement {
             target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
@@ -207,7 +239,11 @@ mod tests {
         };
         let out = cmd.apply(&mut deck).unwrap();
         out.inverse.apply(&mut deck).unwrap();
-        let after = deck.slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let after = deck.slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
         assert_eq!(after.x, before.x);
         assert_eq!(after.y, before.y);
         assert_eq!(after.width, before.width);
@@ -226,7 +262,11 @@ mod tests {
             new_height: 0.0,
         };
         cmd.apply(&mut deck).unwrap();
-        let g = deck.slides[&sid].find_element(&eid).unwrap().geometry.clone();
+        let g = deck.slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
         assert_eq!(g.width, MIN_DIMENSION_PX);
         assert_eq!(g.height, MIN_DIMENSION_PX);
     }

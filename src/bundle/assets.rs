@@ -131,7 +131,10 @@ impl AssetRegistry {
         dimensions: Option<AssetDimensions>,
     ) -> AssetEntry {
         assert!(!bytes.is_empty(), "AssetRegistry::insert_blob: empty bytes");
-        assert!(!media_type.is_empty(), "AssetRegistry::insert_blob: empty media_type");
+        assert!(
+            !media_type.is_empty(),
+            "AssetRegistry::insert_blob: empty media_type"
+        );
 
         let hash_hex: String = sha256_hex(&bytes);
         let content_hash: String = format!("sha256:{hash_hex}");
@@ -252,7 +255,10 @@ mod tests {
             original_filename: "logo.svg".into(),
             media_type: "image/svg+xml".into(),
             size_bytes: 42,
-            dimensions: Some(AssetDimensions { width: 200, height: 200 }),
+            dimensions: Some(AssetDimensions {
+                width: 200,
+                height: 200,
+            }),
         });
         let json = r.index_json().unwrap();
         let back = AssetRegistry::from_index_json(&json).unwrap();
@@ -278,7 +284,10 @@ mod tests {
             bytes.clone(),
             "photo.png".into(),
             "image/png".into(),
-            Some(AssetDimensions { width: 200, height: 100 }),
+            Some(AssetDimensions {
+                width: 200,
+                height: 100,
+            }),
         );
         assert!(entry.id.starts_with("asset_"));
         assert_eq!(entry.id.len(), 6 + ASSET_ID_HASH_LEN);
@@ -295,18 +304,8 @@ mod tests {
     fn insert_blob_dedupes_identical_content() {
         let mut r = AssetRegistry::new_empty();
         let bytes = b"hello world bytes".to_vec();
-        let a = r.insert_blob(
-            bytes.clone(),
-            "first.jpg".into(),
-            "image/jpeg".into(),
-            None,
-        );
-        let b = r.insert_blob(
-            bytes,
-            "second_name.jpg".into(),
-            "image/jpeg".into(),
-            None,
-        );
+        let a = r.insert_blob(bytes.clone(), "first.jpg".into(), "image/jpeg".into(), None);
+        let b = r.insert_blob(bytes, "second_name.jpg".into(), "image/jpeg".into(), None);
         assert_eq!(a, b);
         assert_eq!(r.entry_count(), 1);
     }

@@ -86,8 +86,11 @@ mod tests {
         let css = crate::html::serialize::ANIMATION_KEYFRAMES_CSS;
         for item in animation_catalog() {
             if let Some(kf) = &item.keyframe {
-                assert!(css.contains(&format!("@keyframes {}", kf)),
-                    "missing @keyframes {}", kf);
+                assert!(
+                    css.contains(&format!("@keyframes {}", kf)),
+                    "missing @keyframes {}",
+                    kf
+                );
             }
         }
     }

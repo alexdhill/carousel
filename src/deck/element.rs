@@ -168,13 +168,35 @@ impl ElementNode {
     pub fn is_consistent(&self) -> bool {
         matches!(
             (&self.element_type, &self.style, &self.content),
-            (ElementType::Text, ElementStyle::Text(_), ElementContent::Text(_))
-                | (ElementType::Image, ElementStyle::Image(_), ElementContent::Image(_))
-                | (ElementType::Shape, ElementStyle::Shape(_), ElementContent::Shape(_))
-                | (ElementType::Media, ElementStyle::Media(_), ElementContent::Media(_))
-                | (ElementType::Table, ElementStyle::Table(_), ElementContent::Table(_))
-                | (ElementType::Group, ElementStyle::Group(_), ElementContent::Group)
-                | (ElementType::Embed, ElementStyle::Embed, ElementContent::Embed(_))
+            (
+                ElementType::Text,
+                ElementStyle::Text(_),
+                ElementContent::Text(_)
+            ) | (
+                ElementType::Image,
+                ElementStyle::Image(_),
+                ElementContent::Image(_)
+            ) | (
+                ElementType::Shape,
+                ElementStyle::Shape(_),
+                ElementContent::Shape(_)
+            ) | (
+                ElementType::Media,
+                ElementStyle::Media(_),
+                ElementContent::Media(_)
+            ) | (
+                ElementType::Table,
+                ElementStyle::Table(_),
+                ElementContent::Table(_)
+            ) | (
+                ElementType::Group,
+                ElementStyle::Group(_),
+                ElementContent::Group
+            ) | (
+                ElementType::Embed,
+                ElementStyle::Embed,
+                ElementContent::Embed(_)
+            )
         )
     }
 }
@@ -215,9 +237,10 @@ mod tests {
         use std::collections::HashSet;
         let mut root = group_element(
             "el_root".to_string(),
-            vec![group_element("el_a".to_string(), vec![
-                group_element("el_b".to_string(), vec![]),
-            ])],
+            vec![group_element(
+                "el_a".to_string(),
+                vec![group_element("el_b".to_string(), vec![])],
+            )],
         );
         let map = regenerate_ids(&mut root);
         assert_eq!(map.len(), 3);
@@ -231,7 +254,10 @@ mod tests {
         assert_eq!(ids.len(), 3);
         assert!(root.id.starts_with("el_"));
         assert_ne!(root.id, "el_root");
-        assert_eq!(map.get("el_root").map(String::as_str), Some(root.id.as_str()));
+        assert_eq!(
+            map.get("el_root").map(String::as_str),
+            Some(root.id.as_str())
+        );
         assert_eq!(root.children.len(), 1);
         assert_eq!(root.children[0].children.len(), 1);
     }
@@ -239,8 +265,12 @@ mod tests {
     #[test]
     fn type_html_roundtrips() {
         for t in [
-            ElementType::Text, ElementType::Image, ElementType::Shape,
-            ElementType::Media, ElementType::Table, ElementType::Group,
+            ElementType::Text,
+            ElementType::Image,
+            ElementType::Shape,
+            ElementType::Media,
+            ElementType::Table,
+            ElementType::Group,
             ElementType::Embed,
         ] {
             assert_eq!(ElementType::from_html(t.as_html()), Some(t));

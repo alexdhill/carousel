@@ -33,8 +33,14 @@ impl Command for RemoveElementCommand {
     // Dataflow: locate slide -> reject root removal -> call
     // remove_non_root_element -> wrap captured subtree as InsertElement.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
-        assert!(!self.target.id().is_empty(), "RemoveElement: target id is empty");
-        assert!(!self.element_id.is_empty(), "RemoveElement: element_id is empty");
+        assert!(
+            !self.target.id().is_empty(),
+            "RemoveElement: target id is empty"
+        );
+        assert!(
+            !self.element_id.is_empty(),
+            "RemoveElement: element_id is empty"
+        );
         let canvas = resolve_canvas_mut(deck, &self.target)?;
         if canvas.is_root_id(&self.element_id) {
             return Err(CommandError::InvalidOperation(format!(
@@ -137,8 +143,16 @@ mod tests {
     #[test]
     fn remove_inverse_preserves_subtree_geometry_and_content() {
         let (mut deck, sid, eid) = deck_first_child();
-        let geometry_before = deck.slides[&sid].find_element(&eid).unwrap().geometry.clone();
-        let content_before = deck.slides[&sid].find_element(&eid).unwrap().content.clone();
+        let geometry_before = deck.slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
+        let content_before = deck.slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .content
+            .clone();
 
         let cmd = RemoveElementCommand {
             target: CanvasTarget::Slide(sid.clone()),
@@ -147,8 +161,16 @@ mod tests {
         let out = cmd.apply(&mut deck).unwrap();
         out.inverse.apply(&mut deck).unwrap();
 
-        let geometry_after = deck.slides[&sid].find_element(&eid).unwrap().geometry.clone();
-        let content_after = deck.slides[&sid].find_element(&eid).unwrap().content.clone();
+        let geometry_after = deck.slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .geometry
+            .clone();
+        let content_after = deck.slides[&sid]
+            .find_element(&eid)
+            .unwrap()
+            .content
+            .clone();
         assert_eq!(geometry_after, geometry_before);
         assert_eq!(content_after, content_before);
     }

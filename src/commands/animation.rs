@@ -14,7 +14,7 @@
 // (non-empty ids, effect/category pairing) can abort.
 
 use crate::commands::{Command, CommandError, CommandOutput};
-use crate::deck::animation::{accommodating_index, AnimationEntry};
+use crate::deck::animation::{AnimationEntry, accommodating_index};
 use crate::deck::{AnimationCategory, CanvasTarget, SlideId, SlideNode};
 
 // slide_mut
@@ -203,12 +203,18 @@ impl Command for SetAnimationProperty {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
-    use crate::deck::animation::{AnimationEffect, AnimationTiming, AnimationTrigger};
     use crate::deck::Deck;
+    use crate::deck::animation::{AnimationEffect, AnimationTiming, AnimationTrigger};
 
     fn entry(id: &str, el: &str, cat: AnimationCategory, kf: &str) -> AnimationEntry {
-        AnimationEntry::new(id.into(), el.into(), AnimationEffect::Named(kf.into()), cat,
-            AnimationTrigger::OnClick, AnimationTiming::default())
+        AnimationEntry::new(
+            id.into(),
+            el.into(),
+            AnimationEffect::Named(kf.into()),
+            cat,
+            AnimationTrigger::OnClick,
+            AnimationTiming::default(),
+        )
     }
 
     fn deck_and_el() -> (Deck, SlideId, String) {
@@ -221,8 +227,11 @@ mod tests {
     #[test]
     fn insert_then_inverse_removes() {
         let (mut deck, sid, el) = deck_and_el();
-        let cmd = InsertAnimation { slide_id: sid.clone(), position: 0,
-            entry: entry("e", &el, AnimationCategory::Entrance, "appear") };
+        let cmd = InsertAnimation {
+            slide_id: sid.clone(),
+            position: 0,
+            entry: entry("e", &el, AnimationCategory::Entrance, "appear"),
+        };
         assert!(cmd.affects_animations());
         let out = cmd.apply(&mut deck).unwrap();
         assert_eq!(deck.slides[&sid].animations.len(), 1);
@@ -233,14 +242,26 @@ mod tests {
     #[test]
     fn remove_then_inverse_reinserts_at_index() {
         let (mut deck, sid, el) = deck_and_el();
-        InsertAnimation { slide_id: sid.clone(), position: 0,
-            entry: entry("a", &el, AnimationCategory::Emphasis, "pulse") }
-            .apply(&mut deck).unwrap();
-        InsertAnimation { slide_id: sid.clone(), position: 1,
-            entry: entry("b", &el, AnimationCategory::Emphasis, "pulse") }
-            .apply(&mut deck).unwrap();
-        let out = RemoveAnimation { slide_id: sid.clone(), animation_id: "a".into() }
-            .apply(&mut deck).unwrap();
+        InsertAnimation {
+            slide_id: sid.clone(),
+            position: 0,
+            entry: entry("a", &el, AnimationCategory::Emphasis, "pulse"),
+        }
+        .apply(&mut deck)
+        .unwrap();
+        InsertAnimation {
+            slide_id: sid.clone(),
+            position: 1,
+            entry: entry("b", &el, AnimationCategory::Emphasis, "pulse"),
+        }
+        .apply(&mut deck)
+        .unwrap();
+        let out = RemoveAnimation {
+            slide_id: sid.clone(),
+            animation_id: "a".into(),
+        }
+        .apply(&mut deck)
+        .unwrap();
         assert_eq!(deck.slides[&sid].animations[0].id, "b");
         out.inverse.apply(&mut deck).unwrap();
         assert_eq!(deck.slides[&sid].animations[0].id, "a");
@@ -250,12 +271,20 @@ mod tests {
     #[test]
     fn two_entrances_on_one_element_are_allowed() {
         let (mut deck, sid, el) = deck_and_el();
-        InsertAnimation { slide_id: sid.clone(), position: 0,
-            entry: entry("e1", &el, AnimationCategory::Entrance, "appear") }
-            .apply(&mut deck).unwrap();
-        InsertAnimation { slide_id: sid.clone(), position: 1,
-            entry: entry("e2", &el, AnimationCategory::Entrance, "fade-in") }
-            .apply(&mut deck).unwrap();
+        InsertAnimation {
+            slide_id: sid.clone(),
+            position: 0,
+            entry: entry("e1", &el, AnimationCategory::Entrance, "appear"),
+        }
+        .apply(&mut deck)
+        .unwrap();
+        InsertAnimation {
+            slide_id: sid.clone(),
+            position: 1,
+            entry: entry("e2", &el, AnimationCategory::Entrance, "fade-in"),
+        }
+        .apply(&mut deck)
+        .unwrap();
         assert_eq!(deck.slides[&sid].animations.len(), 2);
     }
 }

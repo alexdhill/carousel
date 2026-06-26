@@ -112,7 +112,10 @@ pub struct Length {
 
 impl Length {
     pub fn px(v: f64) -> Self {
-        Self { value: v, unit: LengthUnit::Px }
+        Self {
+            value: v,
+            unit: LengthUnit::Px,
+        }
     }
 }
 
@@ -351,8 +354,13 @@ mod tests {
     #[test]
     fn geometry_serde_roundtrips() {
         assert_json_roundtrip(&Geometry {
-            x: 10.0, y: -5.0, width: 100.0, height: 50.0,
-            rotation: 1.5, opacity: 0.75, z_order: 3,
+            x: 10.0,
+            y: -5.0,
+            width: 100.0,
+            height: 50.0,
+            rotation: 1.5,
+            opacity: 0.75,
+            z_order: 3,
         });
     }
 

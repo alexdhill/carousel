@@ -182,10 +182,7 @@ fn pdf_print_options() -> PrintToPdfOptions {
 // Screenshot one .print-page by its data-raster-page index, then replace that
 // page's inner HTML with a full-bleed <img> of the capture so the final print
 // pass embeds the composited pixels instead of dropping the effect.
-fn splice_raster_page(
-    tab: &headless_chrome::Tab,
-    page: &PageRect,
-) -> Result<(), RenderError> {
+fn splice_raster_page(tab: &headless_chrome::Tab, page: &PageRect) -> Result<(), RenderError> {
     let selector: String = format!("[data-raster-page=\"{}\"]", page.index);
     let element = tab
         .find_element(&selector)
@@ -200,7 +197,8 @@ if(n){{n.innerHTML='<img style=\"width:100%;height:100%;display:block\" \
 src=\"data:image/png;base64,{}\">';}}}})()",
         selector, b64
     );
-    tab.evaluate(&js, false).map_err(|e| RenderError::Screenshot(e.to_string()))?;
+    tab.evaluate(&js, false)
+        .map_err(|e| RenderError::Screenshot(e.to_string()))?;
     Ok(())
 }
 
@@ -223,14 +221,18 @@ pub fn render_pdf(
         .build()
         .map_err(|e| RenderError::Launch(e.to_string()))?;
     let browser = Browser::new(opts).map_err(|e| RenderError::Launch(e.to_string()))?;
-    let tab = browser.new_tab().map_err(|e| RenderError::Launch(e.to_string()))?;
+    let tab = browser
+        .new_tab()
+        .map_err(|e| RenderError::Launch(e.to_string()))?;
 
     let data_url: String = format!(
         "data:text/html;charset=utf-8;base64,{}",
         base64::engine::general_purpose::STANDARD.encode(print_html.as_bytes())
     );
-    tab.navigate_to(&data_url).map_err(|e| RenderError::Navigate(e.to_string()))?;
-    tab.wait_until_navigated().map_err(|e| RenderError::Navigate(e.to_string()))?;
+    tab.navigate_to(&data_url)
+        .map_err(|e| RenderError::Navigate(e.to_string()))?;
+    tab.wait_until_navigated()
+        .map_err(|e| RenderError::Navigate(e.to_string()))?;
 
     for page in raster_pages {
         splice_raster_page(&tab, page)?;
@@ -289,7 +291,10 @@ fn chromium_archive_name() -> &'static str {
 fn chromium_binary_subpath() -> PathBuf {
     #[cfg(target_os = "macos")]
     {
-        PathBuf::from("Chromium.app").join("Contents").join("MacOS").join("Chromium")
+        PathBuf::from("Chromium.app")
+            .join("Contents")
+            .join("MacOS")
+            .join("Chromium")
     }
     #[cfg(target_os = "windows")]
     {
@@ -312,7 +317,9 @@ pub fn download_chromium(
     progress: &dyn Fn(u64, Option<u64>),
 ) -> Result<(PathBuf, String), RenderError> {
     use std::io::Read;
-    let rev_dir: PathBuf = config::app_data_dir().join("chromium").join(CHROMIUM_REVISION);
+    let rev_dir: PathBuf = config::app_data_dir()
+        .join("chromium")
+        .join(CHROMIUM_REVISION);
     std::fs::create_dir_all(&rev_dir).map_err(|e| RenderError::Launch(e.to_string()))?;
 
     let url: String = format!(
@@ -323,13 +330,17 @@ pub fn download_chromium(
         chromium_archive_name()
     );
     progress(0, None);
-    let mut resp = ureq::get(&url).call().map_err(|e| RenderError::Launch(e.to_string()))?;
+    let mut resp = ureq::get(&url)
+        .call()
+        .map_err(|e| RenderError::Launch(e.to_string()))?;
     let total: Option<u64> = resp.body().content_length();
     let mut reader = resp.body_mut().as_reader();
     let mut bytes: Vec<u8> = Vec::new();
     let mut chunk: [u8; 65536] = [0u8; 65536];
     loop {
-        let n: usize = reader.read(&mut chunk).map_err(|e| RenderError::Launch(e.to_string()))?;
+        let n: usize = reader
+            .read(&mut chunk)
+            .map_err(|e| RenderError::Launch(e.to_string()))?;
         if n == 0 {
             break;
         }
@@ -339,10 +350,14 @@ pub fn download_chromium(
     drop(reader);
 
     extract_zip(&bytes, &rev_dir)?;
-    let binary: PathBuf = rev_dir.join(chromium_archive_name()).join(chromium_binary_subpath());
+    let binary: PathBuf = rev_dir
+        .join(chromium_archive_name())
+        .join(chromium_binary_subpath());
     ensure_executable(&binary);
     if !binary.exists() {
-        return Err(RenderError::Launch(format!("chromium binary missing after extract: {binary:?}")));
+        return Err(RenderError::Launch(format!(
+            "chromium binary missing after extract: {binary:?}"
+        )));
     }
     Ok((binary, CHROMIUM_REVISION.to_string()))
 }
@@ -354,7 +369,9 @@ fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), RenderError> {
     let cursor = std::io::Cursor::new(bytes);
     let mut archive =
         zip::ZipArchive::new(cursor).map_err(|e| RenderError::Launch(e.to_string()))?;
-    archive.extract(dest).map_err(|e| RenderError::Launch(e.to_string()))
+    archive
+        .extract(dest)
+        .map_err(|e| RenderError::Launch(e.to_string()))
 }
 
 // ensure_executable — set the +x bit on unix (a belt-and-suspenders backstop in
@@ -387,7 +404,9 @@ mod tests {
 
     #[test]
     fn invalid_path_is_rejected() {
-        assert!(!is_valid_chrome(std::path::Path::new("/no/such/chrome-xyz")));
+        assert!(!is_valid_chrome(std::path::Path::new(
+            "/no/such/chrome-xyz"
+        )));
     }
 
     #[cfg(target_os = "macos")]

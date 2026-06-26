@@ -7,9 +7,9 @@ mod error;
 mod export;
 mod fonts;
 mod html;
-mod recents;
 mod ipc;
 mod present;
+mod recents;
 
 use app::ApplicationCore;
 use bundle::{IoResponse, IoThread};
@@ -156,8 +156,8 @@ fn spawn_chrome_worker(
 // or unparseable.
 fn init_tracing() {
     use tracing_subscriber::{EnvFilter, fmt};
-    let filter: EnvFilter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("carousel=info"));
+    let filter: EnvFilter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("carousel=info"));
     fmt().with_env_filter(filter).with_target(false).init();
 }
 
@@ -215,7 +215,10 @@ fn install_main_menu() {
     use objc::{class, msg_send, sel, sel_impl};
     unsafe {
         let app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
-        assert!(!app.is_null(), "NSApplication sharedApplication returned nil");
+        assert!(
+            !app.is_null(),
+            "NSApplication sharedApplication returned nil"
+        );
         let main_menu: *mut Object = msg_send![class!(NSMenu), new];
         assert!(!main_menu.is_null(), "NSMenu new returned nil");
 
@@ -258,14 +261,39 @@ fn install_main_menu() {
 // style-props-engine js (injected before host js).
 // Output: assembled HTML string ready for the webview.
 // Errors: asserts all five placeholders are present.
-fn assemble_host_html(template: &str, css: &str, js: &str, snap: &str, crop: &str,
-        style_props: &str, preset_css: &str) -> String {
-    assert!(template.contains("__HOST_CSS__"), "template missing CSS marker");
-    assert!(template.contains("__HOST_JS__"), "template missing JS marker");
-    assert!(template.contains("__SNAP_JS__"), "template missing snap JS marker");
-    assert!(template.contains("__CROP_JS__"), "template missing crop JS marker");
-    assert!(template.contains("__STYLE_PROPS_JS__"), "template missing style-props JS marker");
-    assert!(template.contains("__PRESET_CSS_JS__"), "template missing preset-css JS marker");
+fn assemble_host_html(
+    template: &str,
+    css: &str,
+    js: &str,
+    snap: &str,
+    crop: &str,
+    style_props: &str,
+    preset_css: &str,
+) -> String {
+    assert!(
+        template.contains("__HOST_CSS__"),
+        "template missing CSS marker"
+    );
+    assert!(
+        template.contains("__HOST_JS__"),
+        "template missing JS marker"
+    );
+    assert!(
+        template.contains("__SNAP_JS__"),
+        "template missing snap JS marker"
+    );
+    assert!(
+        template.contains("__CROP_JS__"),
+        "template missing crop JS marker"
+    );
+    assert!(
+        template.contains("__STYLE_PROPS_JS__"),
+        "template missing style-props JS marker"
+    );
+    assert!(
+        template.contains("__PRESET_CSS_JS__"),
+        "template missing preset-css JS marker"
+    );
     template
         .replace("__HOST_CSS__", css)
         .replace("__CROP_JS__", crop)
@@ -281,8 +309,14 @@ fn assemble_host_html(template: &str, css: &str, js: &str, snap: &str, crop: &st
 // Output: assembled HTML for the presentation webview.
 // Errors: asserts both placeholders are present.
 fn assemble_present_html(template: &str, css: &str, js: &str) -> String {
-    assert!(template.contains("__PRESENT_CSS__"), "present template missing CSS marker");
-    assert!(template.contains("__PRESENT_JS__"), "present template missing JS marker");
+    assert!(
+        template.contains("__PRESENT_CSS__"),
+        "present template missing CSS marker"
+    );
+    assert!(
+        template.contains("__PRESENT_JS__"),
+        "present template missing JS marker"
+    );
     template
         .replace("__PRESENT_CSS__", css)
         .replace("__PRESENT_JS__", js)
@@ -330,7 +364,6 @@ fn build_presentation(
     Ok((window, webview))
 }
 
-
 // main
 // Inputs: none.
 // Output: process exit Result.
@@ -349,9 +382,17 @@ fn build_presentation(
 // Inputs: the landing template (CSS + JS placeholders) and the two bodies.
 // Output: the assembled landing HTML. Errors: asserts both placeholders.
 fn assemble_landing_html(template: &str, css: &str, js: &str) -> String {
-    assert!(template.contains("__LANDING_CSS__"), "landing template missing CSS marker");
-    assert!(template.contains("__LANDING_JS__"), "landing template missing JS marker");
-    template.replace("__LANDING_CSS__", css).replace("__LANDING_JS__", js)
+    assert!(
+        template.contains("__LANDING_CSS__"),
+        "landing template missing CSS marker"
+    );
+    assert!(
+        template.contains("__LANDING_JS__"),
+        "landing template missing JS marker"
+    );
+    template
+        .replace("__LANDING_CSS__", css)
+        .replace("__LANDING_JS__", js)
 }
 
 // build_landing
@@ -413,8 +454,15 @@ fn build_editor(
         .with_title("carousel")
         .with_inner_size(tao::dpi::LogicalSize::new(1400.0, 900.0))
         .build(target)?;
-    let html: String = assemble_host_html(HOST_HTML_TEMPLATE, HOST_CSS, HOST_JS, SNAP_JS, CROP_JS,
-        STYLE_PROPS_JS, PRESET_CSS_JS);
+    let html: String = assemble_host_html(
+        HOST_HTML_TEMPLATE,
+        HOST_CSS,
+        HOST_JS,
+        SNAP_JS,
+        CROP_JS,
+        STYLE_PROPS_JS,
+        PRESET_CSS_JS,
+    );
     assert!(!html.is_empty(), "assembled host html is empty");
     let webview = WebViewBuilder::new(&window)
         .with_html(html)
@@ -472,7 +520,11 @@ fn send_landing(webview: &WebView, data: &LandingData) {
 fn landing_data() -> LandingData {
     let recents: Vec<LandingRecent> = recents::load()
         .into_iter()
-        .map(|r| LandingRecent { path: r.path, title: r.title, modified: r.modified })
+        .map(|r| LandingRecent {
+            path: r.path,
+            title: r.title,
+            modified: r.modified,
+        })
         .collect();
     let templates: Vec<LandingTemplate> = deck::templates::catalog()
         .into_iter()
@@ -609,7 +661,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut request_present_open_opt: Option<Box<dyn Fn()>> = Some(request_present_open);
     let mut request_present_close_opt: Option<Box<dyn Fn()>> = Some(request_present_close);
     let mut dispatch_pdf_job_opt: Option<Box<dyn Fn(app::PdfJob)>> = Some(dispatch_pdf_job);
-    let mut dispatch_chromium_download_opt: Option<Box<dyn Fn()>> = Some(dispatch_chromium_download);
+    let mut dispatch_chromium_download_opt: Option<Box<dyn Fn()>> =
+        Some(dispatch_chromium_download);
     let mut app: Option<ApplicationCore> = None;
     let mut editor_window: Option<Window> = None;
 
@@ -659,7 +712,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if present_window.is_some() {
                         warn!("OpenPresentation ignored; already presenting");
                     } else {
-                        match build_presentation(target, proxy_present.clone(), present_tx.clone()) {
+                        match build_presentation(target, proxy_present.clone(), present_tx.clone())
+                        {
                             Ok((win, wv)) => {
                                 app.begin_presentation(WebviewSender::new(wv));
                                 present_window = Some(win);
@@ -737,7 +791,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 // New-from-layout has no load path; that is the
                                 // case we focus the title field for.
                                 let focus_title: bool = load.is_none();
-                                if let (Some(sf), Some(io), Some(rpo), Some(rpc), Some(dpj), Some(dcd)) = (
+                                if let (
+                                    Some(sf),
+                                    Some(io),
+                                    Some(rpo),
+                                    Some(rpc),
+                                    Some(dpj),
+                                    Some(dcd),
+                                ) = (
                                     schedule_flush_opt.take(),
                                     io_thread_opt.take(),
                                     request_present_open_opt.take(),
@@ -746,7 +807,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     dispatch_chromium_download_opt.take(),
                                 ) {
                                     match build_editor(
-                                        target, proxy.clone(), ipc_tx.clone(), deck, sf, io, rpo, rpc, dpj, dcd,
+                                        target,
+                                        proxy.clone(),
+                                        ipc_tx.clone(),
+                                        deck,
+                                        sf,
+                                        io,
+                                        rpo,
+                                        rpc,
+                                        dpj,
+                                        dcd,
                                         focus_title,
                                     ) {
                                         Ok((win, mut a)) => {
