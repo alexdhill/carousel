@@ -289,10 +289,8 @@ fn collect_node_assets(root: &ElementNode, out: &mut BTreeSet<String>) {
         );
         iter += 1;
         match &node.content {
-            ElementContent::Image(a) | ElementContent::Media(a) => {
-                if !a.asset_id.is_empty() {
-                    out.insert(a.asset_id.clone());
-                }
+            ElementContent::Image(a) | ElementContent::Media(a) if !a.asset_id.is_empty() => {
+                out.insert(a.asset_id.clone());
             }
             _ => {}
         }

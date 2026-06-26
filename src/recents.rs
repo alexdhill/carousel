@@ -47,7 +47,7 @@ pub fn recents_file() -> Option<PathBuf> {
 pub fn upsert(mut list: Vec<RecentEntry>, entry: RecentEntry, cap: usize) -> Vec<RecentEntry> {
     list.retain(|e| e.path != entry.path);
     list.insert(0, entry);
-    list.sort_by(|a, b| b.modified.cmp(&a.modified));
+    list.sort_by_key(|a| std::cmp::Reverse(a.modified));
     list.truncate(cap);
     list
 }

@@ -33,10 +33,10 @@ fn base_data_dir() -> PathBuf {
 
 #[cfg(all(unix, not(target_os = "macos")))]
 fn base_data_dir() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
-        if !xdg.is_empty() {
-            return PathBuf::from(xdg);
-        }
+    if let Ok(xdg) = std::env::var("XDG_DATA_HOME")
+        && !xdg.is_empty()
+    {
+        return PathBuf::from(xdg);
     }
     let home: String = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     PathBuf::from(home).join(".local").join("share")
