@@ -259,9 +259,11 @@ mod tests {
         let slide = SlideNode::new("s".into(), "title".into(), root);
         let mut slides: BTreeMap<SlideId, SlideNode> = BTreeMap::new();
         slides.insert("s".into(), slide);
-        let mut deck: Deck = Deck::default();
-        deck.slides = slides;
-        deck.slide_order = vec!["s".into()];
+        let mut deck = Deck {
+            slides,
+            slide_order: vec!["s".into()],
+            ..Default::default()
+        };
 
         let cmd = ReparentElement {
             target: CanvasTarget::Slide("s".into()),
@@ -294,9 +296,11 @@ mod tests {
         let slide = SlideNode::new("s".into(), "t".into(), root);
         let mut slides: BTreeMap<SlideId, SlideNode> = BTreeMap::new();
         slides.insert("s".into(), slide);
-        let mut deck: Deck = Deck::default();
-        deck.slides = slides;
-        deck.slide_order = vec!["s".into()];
+        let mut deck = Deck {
+            slides,
+            slide_order: vec!["s".into()],
+            ..Deck::default()
+        };
 
         ReparentElement {
             target: CanvasTarget::Slide("s".into()),
@@ -359,9 +363,11 @@ mod tests {
         let slide = SlideNode::new("s".into(), "title".into(), root);
         let mut slides: BTreeMap<SlideId, SlideNode> = BTreeMap::new();
         slides.insert("s".into(), slide);
-        let mut deck: Deck = Deck::default();
-        deck.slides = slides;
-        deck.slide_order = vec!["s".into()];
+        let mut deck = Deck {
+            slides,
+            slide_order: vec!["s".into()],
+            ..Deck::default()
+        };
 
         let cmd = ReparentElement {
             target: CanvasTarget::Slide("s".into()),

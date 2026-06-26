@@ -684,26 +684,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         match event {
             Event::UserEvent(UserEvent::IpcReceived) => {
                 while let Ok(msg) = ipc_rx.try_recv() {
-                    if let Some(app) = app.as_mut() {
-                        if let Err(e) = app.handle_ipc(msg) {
-                            error!("handle_ipc failed: {}", e);
-                        }
+                    if let Some(app) = app.as_mut()
+                        && let Err(e) = app.handle_ipc(msg)
+                    {
+                        error!("handle_ipc failed: {}", e);
                     }
                 }
             }
             Event::UserEvent(UserEvent::FlushPatches) => {
-                if let Some(app) = app.as_mut() {
-                    if let Err(e) = app.flush_patches() {
-                        error!("flush_patches failed: {}", e);
-                    }
+                if let Some(app) = app.as_mut()
+                    && let Err(e) = app.flush_patches()
+                {
+                    error!("flush_patches failed: {}", e);
                 }
             }
             Event::UserEvent(UserEvent::IoResponse) => {
                 while let Ok(resp) = io_rx.try_recv() {
-                    if let Some(app) = app.as_mut() {
-                        if let Err(e) = app.handle_io_response(resp) {
-                            error!("handle_io_response failed: {}", e);
-                        }
+                    if let Some(app) = app.as_mut()
+                        && let Err(e) = app.handle_io_response(resp)
+                    {
+                        error!("handle_io_response failed: {}", e);
                     }
                 }
             }
@@ -725,10 +725,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Event::UserEvent(UserEvent::PresentIpcReceived) => {
                 while let Ok(ctrl) = present_rx.try_recv() {
-                    if let Some(app) = app.as_mut() {
-                        if let Err(e) = app.handle_present_control(ctrl) {
-                            error!("handle_present_control failed: {}", e);
-                        }
+                    if let Some(app) = app.as_mut()
+                        && let Err(e) = app.handle_present_control(ctrl)
+                    {
+                        error!("handle_present_control failed: {}", e);
                     }
                 }
             }

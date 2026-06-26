@@ -374,17 +374,17 @@ fn write_table(td: &crate::deck::element::TableData, out: &mut String) {
 fn build_style(node: &ElementNode, sibling_index: Option<i32>) -> String {
     let mut s: String = String::new();
     write_geom(&node.geometry, &mut s);
-    if let ElementStyle::Group(gs) = &node.style {
-        if gs.scale != 1.0 {
-            // Compose with rotation if present; scale grows from the top-left.
-            let rot: String = if node.geometry.rotation != 0.0 {
-                format!("rotate({}rad) ", node.geometry.rotation)
-            } else {
-                String::new()
-            };
-            decl(&mut s, "transform", &format!("{}scale({})", rot, gs.scale));
-            decl(&mut s, "transform-origin", "0 0");
-        }
+    if let ElementStyle::Group(gs) = &node.style
+        && gs.scale != 1.0
+    {
+        // Compose with rotation if present; scale grows from the top-left.
+        let rot: String = if node.geometry.rotation != 0.0 {
+            format!("rotate({}rad) ", node.geometry.rotation)
+        } else {
+            String::new()
+        };
+        decl(&mut s, "transform", &format!("{}scale({})", rot, gs.scale));
+        decl(&mut s, "transform-origin", "0 0");
     }
     if let ElementStyle::Text(ts) = &node.style {
         write_text_style(ts, &mut s);

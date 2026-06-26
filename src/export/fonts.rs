@@ -145,10 +145,10 @@ fn effective_family(node: &ElementNode) -> Option<String> {
 }
 
 fn effective_weight(node: &ElementNode) -> u16 {
-    if let Some(v) = node.inline_styles.get("font-weight") {
-        if let Ok(n) = v.trim().parse::<u16>() {
-            return n;
-        }
+    if let Some(v) = node.inline_styles.get("font-weight")
+        && let Ok(n) = v.trim().parse::<u16>()
+    {
+        return n;
     }
     if let ElementStyle::Text(ts) = &node.style {
         return ts.font_weight;
@@ -229,7 +229,7 @@ mod tests {
             out.get("theme-title-family").map(String::as_str),
             Some("Inter, sans-serif")
         );
-        assert!(out.get("theme-accent").is_none());
+        assert!(!out.contains_key("theme-accent"));
     }
 
     #[test]

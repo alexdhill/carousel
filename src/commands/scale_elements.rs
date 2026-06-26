@@ -69,18 +69,18 @@ impl Command for SetElementsTransform {
             el.geometry.y = it.y;
             el.geometry.width = it.width.max(MIN_PX);
             el.geometry.height = it.height.max(MIN_PX);
-            if let Some(fs) = it.font_size_px {
-                if let ElementStyle::Text(ts) = &mut el.style {
-                    p.font_size_px = Some(ts.font_size.value);
-                    ts.font_size = Length::px(fs.max(MIN_PX));
-                }
+            if let Some(fs) = it.font_size_px
+                && let ElementStyle::Text(ts) = &mut el.style
+            {
+                p.font_size_px = Some(ts.font_size.value);
+                ts.font_size = Length::px(fs.max(MIN_PX));
             }
-            if let Some(gsf) = it.group_scale {
-                if let ElementStyle::Group(gs) = &mut el.style {
-                    p.group_scale = Some(gs.scale);
-                    if gsf > 0.0 {
-                        gs.scale = gsf;
-                    }
+            if let Some(gsf) = it.group_scale
+                && let ElementStyle::Group(gs) = &mut el.style
+            {
+                p.group_scale = Some(gs.scale);
+                if gsf > 0.0 {
+                    gs.scale = gsf;
                 }
             }
             prior.push(p);
@@ -171,10 +171,8 @@ mod tests {
         let el = deck.slides[&sid].find_element(&eid).unwrap();
         assert_eq!(el.geometry.x, 100.0);
         assert_eq!(el.geometry.width, 200.0);
-        if is_text {
-            if let ElementStyle::Text(ts) = &el.style {
-                assert_eq!(ts.font_size.value, 20.0);
-            }
+        if is_text && let ElementStyle::Text(ts) = &el.style {
+            assert_eq!(ts.font_size.value, 20.0);
         }
     }
 

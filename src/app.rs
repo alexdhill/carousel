@@ -1514,10 +1514,10 @@ impl ApplicationCore {
                 // remount lands — otherwise JS would render the new
                 // image element with an unresolvable CSS variable for
                 // one frame.
-                if let Some(asset_id) = self.pending_asset_broadcast.take() {
-                    if let Err(e) = self.send_asset_added(&asset_id) {
-                        warn!(asset_id = %asset_id, "AssetAdded broadcast failed: {}", e);
-                    }
+                if let Some(asset_id) = self.pending_asset_broadcast.take()
+                    && let Err(e) = self.send_asset_added(&asset_id)
+                {
+                    warn!(asset_id = %asset_id, "AssetAdded broadcast failed: {}", e);
                 }
                 self.dispatch_and_maybe_flush(cmd);
                 Ok(())
@@ -1905,10 +1905,10 @@ impl ApplicationCore {
             if let Err(e) = self.send_active_slide() {
                 warn!("remount after dispatch failed: {}", e);
             }
-        } else if outcome.affects_object_tree {
-            if let Err(e) = self.send_object_tree() {
-                warn!("object tree broadcast after dispatch failed: {}", e);
-            }
+        } else if outcome.affects_object_tree
+            && let Err(e) = self.send_object_tree()
+        {
+            warn!("object tree broadcast after dispatch failed: {}", e);
         }
         // Paste selects the freshly-inserted elements once the insert applied.
         if let Some(ids) = self.pending_paste_selection.take() {
@@ -1937,10 +1937,10 @@ impl ApplicationCore {
     //   4. Broadcast SlideListUpdate + SetSelection(empty), then mount
     //      the active slide (which also re-sends its object tree).
     fn resync_after_slide_list_change(&mut self) {
-        if let Some(pending) = self.pending_new_active_slide.take() {
-            if self.dispatcher.deck().slides.contains_key(&pending) {
-                self.active_slide = Some(pending);
-            }
+        if let Some(pending) = self.pending_new_active_slide.take()
+            && self.dispatcher.deck().slides.contains_key(&pending)
+        {
+            self.active_slide = Some(pending);
         }
         let active_valid: bool = self
             .active_slide
@@ -4015,8 +4015,9 @@ fn interpret_scale_elements(
         Some(t) => t,
         None => return InterpretResult::Nothing,
     };
-    if !(factor > 0.0) || ids.is_empty() {
-        return InterpretResult::Nothing;
+    match factor.partial_cmp(&0.0) {
+        Some(std::cmp::Ordering::Greater) => {}
+        _ => return InterpretResult::Nothing,
     }
     let canvas = match deck.canvas(&target) {
         Some(c) => c,
@@ -4491,16 +4492,11 @@ mod tests {
             }
             InteractionEvent::ElementDragStarted { element_id, .. } => {
                 let mut snap = TransactionSnapshot::empty();
-                if let Some(sid) = active_slide.clone() {
-                    if let Some(slide) = dispatcher.deck().slides.get(&sid) {
-                        if let Some(el) = slide.find_element(&element_id) {
-                            snap.record_geometry(
-                                CanvasTarget::Slide(sid),
-                                element_id,
-                                el.geometry.clone(),
-                            );
-                        }
-                    }
+                if let Some(sid) = active_slide.clone()
+                    && let Some(slide) = dispatcher.deck().slides.get(&sid)
+                    && let Some(el) = slide.find_element(&element_id)
+                {
+                    snap.record_geometry(CanvasTarget::Slide(sid), element_id, el.geometry.clone());
                 }
                 InterpretResult::TransactionBegin {
                     label: DRAG_TRANSACTION_LABEL,
@@ -4532,16 +4528,11 @@ mod tests {
             }
             InteractionEvent::ElementResizeStarted { element_id, .. } => {
                 let mut snap = TransactionSnapshot::empty();
-                if let Some(sid) = active_slide.clone() {
-                    if let Some(slide) = dispatcher.deck().slides.get(&sid) {
-                        if let Some(el) = slide.find_element(&element_id) {
-                            snap.record_geometry(
-                                CanvasTarget::Slide(sid),
-                                element_id,
-                                el.geometry.clone(),
-                            );
-                        }
-                    }
+                if let Some(sid) = active_slide.clone()
+                    && let Some(slide) = dispatcher.deck().slides.get(&sid)
+                    && let Some(el) = slide.find_element(&element_id)
+                {
+                    snap.record_geometry(CanvasTarget::Slide(sid), element_id, el.geometry.clone());
                 }
                 InterpretResult::TransactionBegin {
                     label: RESIZE_TRANSACTION_LABEL,
@@ -5809,9 +5800,11 @@ mod tests {
         let slide = SlideNode::new("s".into(), "title".into(), root);
         let mut slides: BTreeMap<SlideId, SlideNode> = BTreeMap::new();
         slides.insert("s".into(), slide);
-        let mut deck: Deck = Deck::default();
-        deck.slides = slides;
-        deck.slide_order = vec!["s".into()];
+        let deck: Deck = Deck {
+            slides,
+            slide_order: vec!["s".into()],
+            ..Default::default()
+        };
 
         let dispatcher = crate::commands::CommandDispatcher::new(deck);
         let mut sel = SelectionState::empty();
@@ -5849,9 +5842,11 @@ mod tests {
         let mut slides: BTreeMap<SlideId, SlideNode> = BTreeMap::new();
         slides.insert("s_a".into(), slide_a);
         slides.insert("s_b".into(), slide_b);
-        let mut deck: Deck = Deck::default();
-        deck.slides = slides;
-        deck.slide_order = vec!["s_a".into(), "s_b".into()];
+        let deck: Deck = Deck {
+            slides,
+            slide_order: vec!["s_a".into(), "s_b".into()],
+            ..Default::default()
+        };
         (deck, "s_a".into(), "s_b".into())
     }
 

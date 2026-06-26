@@ -83,9 +83,7 @@ pub fn find_element<'a>(root: &'a ElementNode, id: &str) -> Option<&'a ElementNo
     let mut stack: Vec<&'a ElementNode> = Vec::new();
     stack.push(root);
     for _ in 0..MAX_TREE_NODES {
-        let Some(node) = stack.pop() else {
-            return None;
-        };
+        let node = stack.pop()?;
         if node.id == id {
             return Some(node);
         }
@@ -106,9 +104,7 @@ pub fn find_element_mut<'a>(root: &'a mut ElementNode, id: &str) -> Option<&'a m
     let mut stack: Vec<&'a mut ElementNode> = Vec::new();
     stack.push(root);
     for _ in 0..MAX_TREE_NODES {
-        let Some(node) = stack.pop() else {
-            return None;
-        };
+        let node = stack.pop()?;
         if node.id == id {
             return Some(node);
         }
@@ -132,11 +128,9 @@ pub fn remove_non_root_element(root: &mut ElementNode, id: &str) -> Option<Remov
     );
     let (path, position): (Vec<usize>, usize) = find_parent_path(root, id)?;
     let mut current: &mut ElementNode = root;
-    let mut step: usize = 0;
-    for &idx in &path {
+    for (step, &idx) in path.iter().enumerate() {
         assert!(step < MAX_TREE_DEPTH, "tree depth exceeded MAX_TREE_DEPTH");
         current = &mut current.children[idx];
-        step += 1;
     }
     let parent_id: ElementId = current.id.clone();
     let removed: ElementNode = current.children.remove(position);
@@ -188,9 +182,7 @@ fn find_parent_path(root: &ElementNode, target: &str) -> Option<(Vec<usize>, usi
     let mut stack: Vec<(Vec<usize>, &ElementNode)> = Vec::new();
     stack.push((Vec::new(), root));
     for _ in 0..MAX_TREE_NODES {
-        let Some((path, node)) = stack.pop() else {
-            return None;
-        };
+        let (path, node) = stack.pop()?;
         for (i, child) in node.children.iter().enumerate() {
             if child.id == target {
                 return Some((path, i));

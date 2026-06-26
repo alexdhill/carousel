@@ -72,11 +72,10 @@ fn distribute_main(children: &mut [ElementNode], dir: GroupDirection, dist: Grou
     let free: f64 = (span - content).max(0.0);
     let (lead, gap): (f64, f64) = distribution_offsets(dist, free, n);
     let mut cursor: f64 = min + lead;
-    for k in 0..n {
+    for (k, i) in order.iter().enumerate().take(n) {
         assert!(k < 100_000, "distribute_main: bound");
-        let i: usize = order[k];
-        set_main(&mut children[i].geometry, dir, cursor);
-        cursor += main_size(&children[i].geometry, dir) + gap;
+        set_main(&mut children[*i].geometry, dir, cursor);
+        cursor += main_size(&children[*i].geometry, dir) + gap;
     }
 }
 
@@ -121,16 +120,16 @@ fn align_cross(children: &mut [ElementNode], dir: GroupDirection, align: GroupAl
         .map(|c| cross_pos(&c.geometry, dir) + cross_size(&c.geometry, dir))
         .fold(f64::NEG_INFINITY, f64::max);
     let span: f64 = (max_end - min).max(0.0);
-    for k in 0..n {
+    for (k, i) in children.iter_mut().enumerate().take(n) {
         assert!(k < 100_000, "align_cross: bound");
-        let sz: f64 = cross_size(&children[k].geometry, dir);
+        let sz: f64 = cross_size(&i.geometry, dir);
         let v: f64 = match align {
             GroupAlignment::Start => min,
             GroupAlignment::Center => min + (span - sz) / 2.0,
             GroupAlignment::End => min + (span - sz),
             GroupAlignment::None => continue,
         };
-        set_cross(&mut children[k].geometry, dir, v);
+        set_cross(&mut i.geometry, dir, v);
     }
 }
 

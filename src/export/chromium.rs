@@ -128,10 +128,10 @@ pub enum Resolved {
 // validates (the config is updated when a system probe wins), else NeedsUser.
 pub fn resolve_from_config_or_system() -> Resolved {
     let mut cfg: config::Config = config::load();
-    if let Some(p) = cfg.chrome_path.clone() {
-        if is_valid_chrome(&p) {
-            return Resolved::Found(p);
-        }
+    if let Some(p) = cfg.chrome_path.clone()
+        && is_valid_chrome(&p)
+    {
+        return Resolved::Found(p);
     }
     for cand in system_chrome_candidates() {
         if is_valid_chrome(&cand) {

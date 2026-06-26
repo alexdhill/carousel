@@ -77,18 +77,17 @@ pub struct AssetRef {
     pub asset_id: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum ShapeGeometry {
+    #[default]
     Rectangle,
     Ellipse,
-    RoundedRect { radius_px: u32 },
-    Path { d: String },
-}
-
-impl Default for ShapeGeometry {
-    fn default() -> Self {
-        ShapeGeometry::Rectangle
-    }
+    RoundedRect {
+        radius_px: u32,
+    },
+    Path {
+        d: String,
+    },
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]

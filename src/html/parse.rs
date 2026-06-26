@@ -576,7 +576,7 @@ fn extract_inline_styles(
     let known: &[&str] = known_style_keys(element_type);
     let mut out: BTreeMap<String, String> = BTreeMap::new();
     for (k, v) in style_decls {
-        if !known.iter().any(|kk| *kk == k.as_str()) {
+        if !known.contains(&k.as_str()) {
             out.insert(k.clone(), v.clone());
         }
     }
@@ -664,15 +664,15 @@ fn parse_text_style(map: &BTreeMap<String, String>) -> TextStyle {
     if let Some(s) = map.get("font-family") {
         t.font_family = parse_font_ref(s);
     }
-    if let Some(s) = map.get("font-size") {
-        if let Some(l) = parse_length(s) {
-            t.font_size = l;
-        }
+    if let Some(s) = map.get("font-size")
+        && let Some(l) = parse_length(s)
+    {
+        t.font_size = l;
     }
-    if let Some(s) = map.get("font-weight") {
-        if let Ok(v) = s.parse::<u16>() {
-            t.font_weight = v;
-        }
+    if let Some(s) = map.get("font-weight")
+        && let Ok(v) = s.parse::<u16>()
+    {
+        t.font_weight = v;
     }
     t.font_style = match map.get("font-style").map(String::as_str) {
         Some("italic") => FontStyle::Italic,
@@ -687,15 +687,15 @@ fn parse_text_style(map: &BTreeMap<String, String>) -> TextStyle {
         Some("justify") => TextAlign::Justify,
         _ => TextAlign::Left,
     };
-    if let Some(s) = map.get("line-height") {
-        if let Ok(v) = s.parse::<f64>() {
-            t.line_height = v;
-        }
+    if let Some(s) = map.get("line-height")
+        && let Ok(v) = s.parse::<f64>()
+    {
+        t.line_height = v;
     }
-    if let Some(s) = map.get("letter-spacing") {
-        if let Some(l) = parse_length(s) {
-            t.letter_spacing = l;
-        }
+    if let Some(s) = map.get("letter-spacing")
+        && let Some(l) = parse_length(s)
+    {
+        t.letter_spacing = l;
     }
     t
 }

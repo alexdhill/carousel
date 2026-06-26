@@ -394,7 +394,7 @@ mod tests {
             AnimationTrigger::OnClick,
             AnimationTiming::default(),
         );
-        let (idx, warn) = accommodating_index(&[e1.clone()], 9, &e1);
+        let (idx, warn) = accommodating_index(std::slice::from_ref(&e1), 9, &e1);
         assert_eq!(idx, 1);
         assert!(warn.is_none());
     }

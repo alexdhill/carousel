@@ -201,10 +201,11 @@ mod tests {
         let slide = SlideNode::new("s".into(), "t".into(), root);
         let mut slides: BTreeMap<SlideId, SlideNode> = BTreeMap::new();
         slides.insert("s".into(), slide);
-        let mut deck = Deck::default();
-        deck.slides = slides;
-        deck.slide_order = vec!["s".into()];
-        deck
+        Deck {
+            slides,
+            slide_order: vec!["s".into()],
+            ..Default::default()
+        }
     }
     fn kid(id: &str, x: f64, y: f64, w: f64, h: f64) -> ElementNode {
         let mut n = text_element(id, "t");
