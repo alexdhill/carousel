@@ -51,6 +51,19 @@ pub const ANIMATION_KEYFRAMES_CSS: &str = r#"
 [data-element-type="table"] > table { width: 100%; height: 100%; border-collapse: collapse; table-layout: fixed; }
 [data-element-type="table"] th, [data-element-type="table"] td { border: 1px solid var(--theme-muted, #bbb); padding: 6px 10px; text-align: left; vertical-align: top; color: inherit; font: inherit; overflow: hidden; }
 [data-element-type="table"] th { font-weight: 600; background: color-mix(in srgb, var(--theme-foreground, #000) 8%, transparent); }
+/* Scope compositing (mix-blend-mode, backdrop-filter, isolation) to the slide
+   so it blends against the slide's own backdrop, not whatever page the slide is
+   mounted on. Without this an element's blend reaches the page background, which
+   differs between the light canvas and the black presentation body — the same
+   element then renders differently in each. Isolating here (the inert base
+   injected into every shadow root: canvas, present, thumbnails, export) makes
+   all surfaces render identically. */
+.slide { isolation: isolate; }
+/* Slides are never transparent: a white floor under any theme/inline fill.
+   :where() keeps this at zero specificity so a theme's `.slide { background }`
+   rule and a per-slide inline fill both still override it; it only shows
+   through when nothing else sets a slide background. */
+:where(.slide) { background: #fff; }
 "#;
 
 // AnimMap: element id → its animation entry ids (in timeline order). Built
@@ -693,6 +706,20 @@ mod tests {
         let n = embed_element("em", "<b>raw &amp; held</b>");
         let html = serialize_element(&n);
         assert!(html.contains("<b>raw &amp; held</b>"));
+    }
+
+    #[test]
+    fn base_css_isolates_slide_for_consistent_blend_modes() {
+        // Compositing props must blend against the slide, not the host page,
+        // so canvas / present / export render identically. See the rule comment.
+        assert!(ANIMATION_KEYFRAMES_CSS.contains(".slide { isolation: isolate; }"));
+    }
+
+    #[test]
+    fn base_css_gives_slides_a_white_floor_overridable_by_theme() {
+        // Zero-specificity so theme `.slide` rules / inline fills win; only the
+        // floor when nothing else sets a background — slides are never transparent.
+        assert!(ANIMATION_KEYFRAMES_CSS.contains(":where(.slide) { background: #fff; }"));
     }
 
     #[test]
