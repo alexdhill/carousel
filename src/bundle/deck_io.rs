@@ -39,7 +39,8 @@ fn layout_path_for(id: &str) -> String {
 // On-disk record for one layout in theme.json's `layouts` array: the stable
 // id and display name, listed in canonical display order. The element tree
 // lives in the per-layout HTML file (theme/layouts/<id>.html).
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+// Not `Eq`: the guide list carries an f64 position.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub(crate) struct LayoutMeta {
     pub(crate) id: String,
     pub(crate) name: String,
@@ -50,6 +51,10 @@ pub(crate) struct LayoutMeta {
     pub(crate) background: Option<String>,
     #[serde(default)]
     pub(crate) background_image: Option<String>,
+    // The layout's saveable guides (LayoutNode-authoritative). Slides built on
+    // the layout inherit these read-only. Absent in older bundles → empty.
+    #[serde(default)]
+    pub(crate) guides: Vec<crate::deck::guide::Guide>,
 }
 
 // ThemeJson
@@ -57,7 +62,8 @@ pub(crate) struct LayoutMeta {
 // list (Stage 11) in display order; `layouts` defaults to empty so older
 // bundles (which predate the layout editor) still parse and fall back to
 // the Default seed on load.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+// Not `Eq`: LayoutMeta carries f64 guide positions.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 struct ThemeJson {
     theme_id: String,
     #[serde(default)]
@@ -118,6 +124,7 @@ pub fn serialize_deck(deck: &Deck) -> BundleResult<SerializedDeck> {
             name: layout.name.clone(),
             background: layout.background.clone(),
             background_image: layout.background_image.clone(),
+            guides: layout.guides.clone(),
         });
         // Serialize the layout root through a transient SlideNode (carrying the
         // layout's own background) so it reuses the slide serializer.
@@ -132,6 +139,9 @@ pub fn serialize_deck(deck: &Deck) -> BundleResult<SerializedDeck> {
     for entry in &mut manifest.slides {
         if let Some(slide) = deck.slides.get(&entry.id) {
             entry.animations = slide.animations.clone();
+            // Guides are SlideNode-authoritative; sync into the manifest for
+            // persistence, like the animation timeline.
+            entry.guides = slide.guides.clone();
             // Background is SlideNode-authoritative (it renders); sync it into
             // the manifest for persistence, like the animation timeline.
             entry.background = slide.metadata.background.clone();
@@ -338,6 +348,7 @@ pub fn deserialize_deck(serialized: SerializedDeck) -> BundleResult<Deck> {
                 LayoutNode::new(meta.id.clone(), meta.name.clone(), parsed.root);
             node.background = meta.background.clone();
             node.background_image = meta.background_image.clone();
+            node.guides = meta.guides.clone();
             layouts.insert(meta.id.clone(), node);
             layout_order.push(meta.id.clone());
         }
@@ -368,6 +379,8 @@ pub fn deserialize_deck(serialized: SerializedDeck) -> BundleResult<Deck> {
         // The manifest is authoritative for the animation timeline (the HTML
         // carries only a derived, dropped-on-read targeting tag).
         slide.animations = entry.animations.clone();
+        // Guides ride the manifest too (never in the slide HTML).
+        slide.guides = entry.guides.clone();
         // Hydrate the per-slide background from the manifest (the serializer
         // re-derives the section inline style from it on the next save).
         slide.metadata.background = entry.background.clone();
@@ -705,6 +718,61 @@ mod tests {
         assert_eq!(t[0].element_id, el);
         assert_eq!(t[0].category, AnimationCategory::Entrance);
         assert_eq!(t[0].timing.duration_ms, 700);
+    }
+
+    #[test]
+    fn round_trip_preserves_slide_and_layout_guides() {
+        use crate::deck::guide::{Guide, GuideAxis};
+        let mut original = Deck::sample();
+        let sid = original.slide_order[0].clone();
+        original
+            .slides
+            .get_mut(&sid)
+            .unwrap()
+            .guides
+            .push(Guide::new(GuideAxis::Vertical, 123.5));
+        let lid = original.theme.layout_order[0].clone();
+        original
+            .theme
+            .layouts
+            .get_mut(&lid)
+            .unwrap()
+            .guides
+            .push(Guide::new(GuideAxis::Horizontal, 40.0));
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("guides.slidedeck");
+        let mut w = BundleWriter::create(&path).unwrap();
+        write_serialized(&mut w, &serialize_deck(&original).unwrap()).unwrap();
+        w.finish().unwrap();
+
+        let mut r = BundleReader::open(&path).unwrap();
+        let back = deserialize_deck(read_serialized(&mut r).unwrap()).unwrap();
+
+        let sg = &back.slides[&sid].guides;
+        assert_eq!(sg.len(), 1);
+        assert_eq!(sg[0].axis, GuideAxis::Vertical);
+        assert_eq!(sg[0].pos, 123.5);
+        let lg = &back.theme.layouts[&lid].guides;
+        assert_eq!(lg.len(), 1);
+        assert_eq!(lg[0].axis, GuideAxis::Horizontal);
+        assert_eq!(lg[0].pos, 40.0);
+    }
+
+    #[test]
+    fn older_bundle_without_guides_loads_empty() {
+        // A manifest whose SlideEntry JSON predates the guides field must still
+        // load (serde default → empty), like the animations back-compat case.
+        let deck = Deck::sample();
+        let mut s = serialize_deck(&deck).unwrap();
+        let mut manifest: serde_json::Value = serde_json::from_str(&s.manifest_json).unwrap();
+        for slide in manifest["slides"].as_array_mut().unwrap() {
+            slide.as_object_mut().unwrap().remove("guides");
+        }
+        s.manifest_json = serde_json::to_string(&manifest).unwrap();
+        let back = deserialize_deck(s).unwrap();
+        let sid = deck.slide_order[0].clone();
+        assert!(back.slides[&sid].guides.is_empty());
     }
 
     #[test]

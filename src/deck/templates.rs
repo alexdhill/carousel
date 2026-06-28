@@ -312,6 +312,7 @@ pub fn new_deck_all_layouts(theme: ThemeData) -> Deck {
             duration_hint: None,
             notes_ref: None,
             animations: Vec::new(),
+            guides: Vec::new(),
             background: None,
             background_image: None,
             notes: None,

@@ -47,10 +47,10 @@ use crate::html::serialize::{ANIMATION_KEYFRAMES_CSS, serialize_slide, serialize
 use crate::ipc::bridge::WebviewSender;
 use crate::ipc::present::{PresentInbound, PresentInitPayload};
 use crate::ipc::{
-    AssetPayload, AssetsBundle, EditorConfig, InteractionEvent, IpcMessage, LayoutListData,
-    LayoutListEntry, MessageKind, MountSlideArgs, ObjectTreeData, ObjectTreeNode, Patch, Point,
-    SelectionState, Size, SlideAnimationEntry, SlideAnimationsData, SlideInspectorData,
-    SlideInspectorLayout, SlideListData, SlideListEntry,
+    AssetPayload, AssetsBundle, EditorConfig, GuideDto, GuidesData, InteractionEvent, IpcMessage,
+    LayoutListData, LayoutListEntry, MessageKind, MountSlideArgs, ObjectTreeData, ObjectTreeNode,
+    Patch, Point, SelectionState, Size, SlideAnimationEntry, SlideAnimationsData,
+    SlideInspectorData, SlideInspectorLayout, SlideListData, SlideListEntry,
 };
 use crate::present::session::{PresentStep, PresentationSession};
 use base64::Engine;
@@ -340,7 +340,8 @@ impl ApplicationCore {
                 self.send_assets_bundle()?;
                 self.send_font_list()?;
                 self.send_active_slide()?;
-                self.send_slide_animations()
+                self.send_slide_animations()?;
+                self.send_guides()
             }
             MessageKind::Interaction(event) => self.handle_interaction(event),
             other => {
@@ -660,6 +661,36 @@ impl ApplicationCore {
             }))
     }
 
+    // send_guides
+    // Inputs: none.
+    // Output: Ok(()) after sending one GuidesUpdate carrying the active
+    // canvas's own guides plus the guides it inherits from its layout (empty
+    // when editing a layout). The editor redraws the ruler overlay from this.
+    // No-op when there is no active canvas.
+    fn send_guides(&self) -> AppResult<()> {
+        let target: CanvasTarget = match self.active_canvas() {
+            Some(t) => t,
+            None => return Ok(()),
+        };
+        let deck = self.dispatcher.deck();
+        let own: Vec<GuideDto> = match deck.canvas(&target) {
+            Some(c) => c.guides().iter().map(guide_to_dto).collect(),
+            None => return Ok(()),
+        };
+        let inherited: Vec<GuideDto> = match &target {
+            CanvasTarget::Slide(id) => match deck.slides.get(id) {
+                Some(s) => deck.inherited_guides(s).iter().map(guide_to_dto).collect(),
+                None => Vec::new(),
+            },
+            CanvasTarget::Layout(_) => Vec::new(),
+        };
+        self.sender.send(MessageKind::GuidesUpdate(GuidesData {
+            canvas_id: target.id().to_string(),
+            own,
+            inherited,
+        }))
+    }
+
     // set_active_slide
     // Inputs: the target slide id.
     // Output: Ok(()) on success; Ok(()) (no-op) when the id is empty,
@@ -702,7 +733,8 @@ impl ApplicationCore {
         // the object tree, so the panel resyncs in one shot.
         self.sender
             .send(MessageKind::SetSelection(SelectionState::empty()))?;
-        self.send_active_slide()
+        self.send_active_slide()?;
+        self.send_guides()
     }
 
     // set_editor_mode
@@ -737,7 +769,8 @@ impl ApplicationCore {
             EditorMode::Slide => self.send_slide_list()?,
             EditorMode::Layout => self.send_layout_list()?,
         }
-        self.send_active_slide()
+        self.send_active_slide()?;
+        self.send_guides()
     }
 
     // set_active_layout
@@ -768,7 +801,8 @@ impl ApplicationCore {
         self.selection = SelectionState::empty();
         self.sender
             .send(MessageKind::SetSelection(SelectionState::empty()))?;
-        self.send_active_slide()
+        self.send_active_slide()?;
+        self.send_guides()
     }
 
     // send_layout_list
@@ -1137,6 +1171,25 @@ impl ApplicationCore {
                 property,
                 value,
             } => interpret_property_changed(self.active_canvas(), element_id, property, value),
+            InteractionEvent::GuideAdded { axis, pos } => {
+                interpret_guide_added(self.active_canvas(), &axis, pos)
+            }
+            InteractionEvent::GuideMoved { index, pos } => match self.active_canvas() {
+                Some(target) => InterpretResult::Command(Box::new(
+                    crate::commands::guide_commands::MoveGuide {
+                        target,
+                        index,
+                        new_pos: pos,
+                    },
+                )),
+                None => InterpretResult::Nothing,
+            },
+            InteractionEvent::GuideRemoved { index } => match self.active_canvas() {
+                Some(target) => InterpretResult::Command(Box::new(
+                    crate::commands::guide_commands::RemoveGuide { target, index },
+                )),
+                None => InterpretResult::Nothing,
+            },
             InteractionEvent::SetSelectionFromPanel { element_ids } => {
                 let mut sel: SelectionState = SelectionState::empty();
                 sel.slide_id = self.active_canvas_id();
@@ -1913,6 +1966,14 @@ impl ApplicationCore {
             }
             return;
         }
+        if outcome.affects_guides {
+            // Guides changed; rebroadcast the active canvas's set so the ruler
+            // overlay redraws. No remount (guides are editor overlay only).
+            if let Err(e) = self.send_guides() {
+                warn!("guides broadcast after dispatch failed: {}", e);
+            }
+            return;
+        }
         if outcome.requires_remount {
             if let Err(e) = self.send_active_slide() {
                 warn!("remount after dispatch failed: {}", e);
@@ -2225,7 +2286,8 @@ impl ApplicationCore {
             .send(MessageKind::SetSelection(SelectionState::empty()))?;
         self.send_slide_list()?;
         self.send_assets_bundle()?;
-        self.send_active_slide()
+        self.send_active_slide()?;
+        self.send_guides()
     }
 
     // file_save
@@ -3055,6 +3117,7 @@ fn build_paste_command(
                 duration_hint: None,
                 notes_ref: None,
                 animations: copy.animations.clone(),
+                guides: copy.guides.clone(),
                 background: copy.metadata.background.clone(),
                 background_image: copy.metadata.background_image.clone(),
                 notes: None,
@@ -3163,6 +3226,45 @@ fn interpret_property_changed(
         property,
         new_value: value,
     }))
+}
+
+// interpret_guide_added
+// Inputs: the active canvas target, the wire axis token ("h"|"v"), the new
+// guide's slide-px position.
+// Output: an AddGuide command (appended) for the active canvas, or Nothing when
+// there is no active canvas or the axis token is unrecognised.
+fn interpret_guide_added(active: Option<CanvasTarget>, axis: &str, pos: f64) -> InterpretResult {
+    let target: CanvasTarget = match active {
+        Some(t) => t,
+        None => return InterpretResult::Nothing,
+    };
+    let ax: crate::deck::guide::GuideAxis = match axis {
+        "h" => crate::deck::guide::GuideAxis::Horizontal,
+        "v" => crate::deck::guide::GuideAxis::Vertical,
+        other => {
+            warn!(axis = other, "guide: unrecognised axis token");
+            return InterpretResult::Nothing;
+        }
+    };
+    InterpretResult::Command(Box::new(crate::commands::guide_commands::AddGuide {
+        target,
+        axis: ax,
+        pos,
+        index: None,
+    }))
+}
+
+// guide_to_dto
+// Inputs: a model Guide. Output: its wire form (axis "h"/"v" + slide-px pos).
+fn guide_to_dto(g: &crate::deck::guide::Guide) -> GuideDto {
+    GuideDto {
+        axis: match g.axis {
+            crate::deck::guide::GuideAxis::Horizontal => "h",
+            crate::deck::guide::GuideAxis::Vertical => "v",
+        }
+        .to_string(),
+        pos: g.pos,
+    }
 }
 
 // interpret_delete_selection
@@ -4145,6 +4247,7 @@ fn build_insert_slide_after_active(
         duration_hint: None,
         notes_ref: None,
         animations: Vec::new(),
+        guides: Vec::new(),
         background: None,
         background_image: None,
         notes: None,
@@ -6361,6 +6464,7 @@ mod tests {
                 duration_hint: None,
                 notes_ref: None,
                 animations: Vec::new(),
+                guides: Vec::new(),
                 background: None,
                 background_image: None,
                 notes: None,

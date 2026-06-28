@@ -26,6 +26,11 @@ pub struct LayoutNode {
     pub background: Option<String>,
     #[serde(default)]
     pub background_image: Option<String>,
+    // Editor alignment guides owned by this layout. Slides built on the layout
+    // display these read-only (inherited) in addition to their own; see
+    // Deck::inherited_guides. Persisted via theme_io like the layout background.
+    #[serde(default)]
+    pub guides: Vec<crate::deck::guide::Guide>,
     pub dirty: bool,
 }
 
@@ -52,6 +57,7 @@ impl LayoutNode {
             root,
             background: None,
             background_image: None,
+            guides: Vec::new(),
             dirty: false,
         }
     }
@@ -79,6 +85,12 @@ impl Canvas for LayoutNode {
     }
     fn mark_dirty(&mut self) {
         self.dirty = true;
+    }
+    fn guides(&self) -> &Vec<crate::deck::guide::Guide> {
+        &self.guides
+    }
+    fn guides_mut(&mut self) -> &mut Vec<crate::deck::guide::Guide> {
+        &mut self.guides
     }
 }
 

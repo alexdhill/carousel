@@ -2476,6 +2476,21 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     width: 2px;
 }
 
+/* Inherited (layout) guides: read-only, muted + dashed so they read as
+   reference lines distinct from the slide's own editable guides. */
+.guide--inherited {
+    background: transparent;
+    pointer-events: none;
+}
+.guide--inherited.guide--h {
+    background: repeating-linear-gradient(to right,
+        var(--acc-line) 0 6px, transparent 6px 12px);
+}
+.guide--inherited.guide--v {
+    background: repeating-linear-gradient(to bottom,
+        var(--acc-line) 0 6px, transparent 6px 12px);
+}
+
 .snap-guide--line {
     background: var(--guide);
 }

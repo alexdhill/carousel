@@ -46,6 +46,12 @@ pub trait Canvas {
     fn root_mut(&mut self) -> &mut ElementNode;
     fn mark_dirty(&mut self);
 
+    // Editor alignment guides owned by this canvas. Guides live outside the
+    // element tree, so the slide serializer never emits them; they persist via
+    // the bundle and render only in the editor overlay.
+    fn guides(&self) -> &Vec<crate::deck::guide::Guide>;
+    fn guides_mut(&mut self) -> &mut Vec<crate::deck::guide::Guide>;
+
     fn is_root_id(&self, id: &str) -> bool {
         self.root().id == id
     }

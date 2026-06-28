@@ -64,14 +64,20 @@
     // Active canvas tool: "select" (default) or "hand" (drag pans, no select).
     let activeTool = "select";
     let panSession = null;
-    // Rulers & guides (editor-only overlay; never serialized / presented /
-    // exported). Guides are session-ephemeral, keyed by slide id. A guide is
-    // { id, orient: "h"|"v", pos } where pos is in slide pixels (0 at the
-    // slide's top-left corner). Horizontal guides come from the top ruler and
-    // move in Y; vertical guides from the left ruler, move in X.
+    // Rulers & guides. Guides are saveable (persisted per slide/layout on the
+    // Rust side) and editor-only — they live outside the element tree, so they
+    // never appear in presentation/export. The active canvas's guides arrive via
+    // GuidesUpdate: `guideOwn` are this canvas's editable guides, `guideInherited`
+    // are its layout's guides (read-only on a slide; empty when editing a layout).
+    // A guide is { id, index, orient: "h"|"v", pos } where pos is in slide pixels
+    // (0 at the slide's top-left). `id` is "g"+index (own) / "gi"+index
+    // (inherited): stable across the post-commit re-hydration so a selection
+    // survives a move. Horizontal guides come from the top ruler (move in Y),
+    // vertical from the left ruler (move in X).
     let rulersOn = false;
     const RULER = 18;
-    let guidesBySlide = Object.create(null);
+    let guideOwn = [];
+    let guideInherited = [];
     let selectedGuideId = null;
     let guideDragSession = null;
     let guideSeq = 0;
@@ -1249,19 +1255,21 @@
         return layer;
     }
 
+    // currentGuides — the active canvas's own (editable) guides.
     function currentGuides() {
-        const sid = activeSlideId;
-        if (!sid) {
-            return [];
-        }
-        if (!guidesBySlide[sid]) {
-            guidesBySlide[sid] = [];
-        }
-        return guidesBySlide[sid];
+        return guideOwn;
     }
 
-    // renderRulerGuides — redraw all ruler-pulled guides for the active slide
-    // at the current zoom. (Distinct from the snap engine's renderGuides.)
+    // sendGuideEvent — dispatch one guide interaction to Rust (which owns the
+    // saveable guide state and echoes a GuidesUpdate that re-hydrates the
+    // overlay). `kind` is GuideAdded / GuideMoved / GuideRemoved.
+    function sendGuideEvent(payload) {
+        window.__deck.send("Interaction", payload);
+    }
+
+    // renderRulerGuides — redraw the active canvas's guides at the current
+    // zoom: inherited (layout) guides first, read-only and beneath the editable
+    // own guides. (Distinct from the snap engine's renderGuides.)
     function renderRulerGuides() {
         const layer = ensureGuideOverlay();
         if (!layer) {
@@ -1272,16 +1280,20 @@
         if (!m) {
             return;
         }
-        const guides = currentGuides();
-        for (let i = 0; i < guides.length && i < 512; i++) {
-            layer.appendChild(buildGuideLine(guides[i], m));
+        for (let i = 0; i < guideInherited.length && i < 512; i++) {
+            layer.appendChild(buildGuideLine(guideInherited[i], m, true));
+        }
+        for (let i = 0; i < guideOwn.length && i < 512; i++) {
+            layer.appendChild(buildGuideLine(guideOwn[i], m, false));
         }
     }
 
-    function buildGuideLine(g, m) {
+    function buildGuideLine(g, m, readOnly) {
         const line = document.createElement("div");
         line.className = "guide";
-        if (g.id === selectedGuideId) {
+        if (readOnly) {
+            line.classList.add("guide--inherited");
+        } else if (g.id === selectedGuideId) {
             line.classList.add("guide--selected");
         }
         line.dataset.guideId = g.id;
@@ -1296,7 +1308,11 @@
             line.style.top = m.oy + "px";
             line.style.height = (m.slideH * m.scale) + "px";
         }
-        line.addEventListener("mousedown", function (e) { startGuideDrag(e, g); });
+        // Inherited guides are read-only (edit them on the layout); only own
+        // guides take the drag/select gesture.
+        if (!readOnly) {
+            line.addEventListener("mousedown", function (e) { startGuideDrag(e, g); });
+        }
         return line;
     }
 
@@ -1336,8 +1352,11 @@
         }
         e.preventDefault();
         e.stopPropagation();
-        const g = { id: "g" + (++guideSeq), orient: orient, pos: clampGuidePos(orient, pointerToSlide(e, orient, m), m) };
-        currentGuides().push(g);
+        // A local, server-less temp guide rendered live during the drag; on
+        // drop GuideAdded is dispatched and the GuidesUpdate echo replaces it
+        // with the authoritative guide. Released back on the ruler: discarded.
+        const g = { id: "gtmp", index: -1, orient: orient, pos: clampGuidePos(orient, pointerToSlide(e, orient, m), m) };
+        guideOwn.push(g);
         selectedGuideId = g.id;
         renderRulerGuides();
         showGuideInspector();
@@ -1356,7 +1375,10 @@
     }
 
     // beginGuideSession — shared move loop for create + drag, with its own
-    // listeners so it never tangles with element dragging.
+    // listeners so it never tangles with element dragging. Positions update
+    // locally for a smooth drag; the authoritative change is dispatched to Rust
+    // once on drop (GuideAdded / GuideMoved), or the guide is removed
+    // (GuideRemoved / discarded) when dropped back over its ruler.
     function beginGuideSession(g, orient, isCreate) {
         guideDragSession = { g: g, orient: orient, isCreate: isCreate };
         const move = function (ev) {
@@ -1372,8 +1394,23 @@
             window.removeEventListener("mousemove", move);
             window.removeEventListener("mouseup", up);
             guideDragSession = null;
-            if (overRuler(ev, orient)) {
-                deleteGuide(g.id);
+            const onRuler = overRuler(ev, orient);
+            if (isCreate) {
+                // Temp guide: commit it as a new guide, or drop it silently.
+                guideOwn = guideOwn.filter(function (x) { return x !== g; });
+                if (selectedGuideId === g.id) {
+                    selectedGuideId = null;
+                }
+                if (!onRuler) {
+                    sendGuideEvent({ kind: "GuideAdded", axis: orient, pos: g.pos });
+                } else {
+                    renderRulerGuides();
+                    hideGuideInspector();
+                }
+            } else if (onRuler) {
+                sendGuideEvent({ kind: "GuideRemoved", index: g.index });
+            } else {
+                sendGuideEvent({ kind: "GuideMoved", index: g.index, pos: g.pos });
             }
         };
         window.addEventListener("mousemove", move);
@@ -1401,17 +1438,19 @@
         hideGuideInspector();
     }
 
+    // deleteGuide — dispatch a removal for the own guide with this id. Rust
+    // applies it and echoes GuidesUpdate, which re-hydrates the overlay (so the
+    // local splice and re-render happen there, not here).
     function deleteGuide(id) {
-        const guides = currentGuides();
-        const idx = guides.findIndex(function (x) { return x.id === id; });
-        if (idx >= 0) {
-            guides.splice(idx, 1);
+        const g = guideOwn.find(function (x) { return x.id === id; });
+        if (!g || g.index < 0) {
+            return;
         }
         if (selectedGuideId === id) {
             selectedGuideId = null;
             hideGuideInspector();
         }
-        renderRulerGuides();
+        sendGuideEvent({ kind: "GuideRemoved", index: g.index });
     }
 
     // showGuideInspector / hideGuideInspector — the selected guide's only
@@ -1458,7 +1497,7 @@
         }
         input.addEventListener("change", function () {
             const g = currentGuides().find(function (x) { return x.id === selectedGuideId; });
-            if (!g) {
+            if (!g || g.index < 0) {
                 return;
             }
             const m = canvasMetrics();
@@ -1466,9 +1505,10 @@
             if (!isFinite(v)) {
                 v = g.pos;
             }
-            g.pos = m ? clampGuidePos(g.orient, v, m) : Math.max(0, v);
-            input.value = String(g.pos);
-            renderRulerGuides();
+            const pos = m ? clampGuidePos(g.orient, v, m) : Math.max(0, v);
+            input.value = String(pos);
+            // Commit via Rust; the GuidesUpdate echo re-renders the overlay.
+            sendGuideEvent({ kind: "GuideMoved", index: g.index, pos: pos });
         });
     }
 
@@ -1723,9 +1763,10 @@
             }
         }
         const targets = window.__snap.__build_targets(rects);
-        // Ruler guides are snap targets too: vertical guides add an x line,
-        // horizontal guides add a y line.
-        const guides = currentGuides();
+        // Ruler guides are snap targets too — both the canvas's own and the
+        // inherited layout guides: vertical guides add an x line, horizontal a
+        // y line.
+        const guides = guideOwn.concat(guideInherited);
         for (let g = 0; g < guides.length; g++) {
             if (guides[g].orient === "v") {
                 targets.xLines.push({ pos: guides[g].pos, source: "guide" });
@@ -3155,6 +3196,26 @@
             slideAnimations = (payload && payload.entries) || [];
             refreshAnimationsSection();
             renderSlideAnimations();
+        },
+        GuidesUpdate: function (payload) {
+            // Re-hydrate the active canvas's guides from authoritative state.
+            // ids are index-based so a selection survives the post-commit echo
+            // (a moved guide keeps its index). Inherited guides are read-only.
+            const own = (payload && payload.own) || [];
+            const inh = (payload && payload.inherited) || [];
+            guideOwn = own.map(function (g, i) {
+                return { id: "g" + i, index: i, orient: g.axis, pos: g.pos };
+            });
+            guideInherited = inh.map(function (g, i) {
+                return { id: "gi" + i, index: i, orient: g.axis, pos: g.pos };
+            });
+            if (selectedGuideId !== null
+                    && !guideOwn.some(function (x) { return x.id === selectedGuideId; })) {
+                selectedGuideId = null;
+                hideGuideInspector();
+            }
+            renderRulerGuides();
+            showGuideInspector();
         },
         SlideInspectorUpdate: function (payload) {
             slideInspectorData = payload || null;

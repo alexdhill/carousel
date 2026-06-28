@@ -143,6 +143,11 @@ pub enum MessageKind {
     // Stage: animations — the active slide's timeline (id/element/category
     // per entry) so the inspector's Appear/Disappear toggles reflect state.
     SlideAnimationsUpdate(SlideAnimationsData),
+    // GuidesUpdate
+    // Saveable guides — the active canvas's own (editable) guides plus the
+    // guides inherited from its layout (read-only on a slide; empty when
+    // editing a layout). The editor redraws the ruler-guide overlay from this.
+    GuidesUpdate(GuidesData),
     // FontList
     // The installed font families (sorted, de-duplicated) for the styles
     // pane font-family combobox. Sent once after the editor webview is Ready.
@@ -375,6 +380,23 @@ pub enum InteractionEvent {
         element_id: ElementId,
         property: String,
         value: String,
+    },
+    // Guide events (saveable guides). The editor drags a new guide off a
+    // ruler (GuideAdded), drags an existing one (GuideMoved, coalesced into a
+    // single undo step), or deletes one (GuideRemoved). `axis` is "h" (a
+    // horizontal line from the top ruler) or "v" (vertical, from the left
+    // ruler); `pos` is in slide px; `index` addresses the active canvas's own
+    // guides. They route to the AddGuide / MoveGuide / RemoveGuide commands.
+    GuideAdded {
+        axis: String,
+        pos: f64,
+    },
+    GuideMoved {
+        index: usize,
+        pos: f64,
+    },
+    GuideRemoved {
+        index: usize,
     },
     // SetSelectionFromPanel
     // Stage 9 — Object Panel. The user clicked an element in the panel.
@@ -888,6 +910,25 @@ pub struct LayoutListEntry {
 pub struct SlideAnimationsData {
     pub slide_id: SlideId,
     pub entries: Vec<SlideAnimationEntry>,
+}
+
+// GuideDto / GuidesData
+// Wire shape for saveable guides. `axis` is "h" or "v"; `pos` is slide px.
+// `own` are the active canvas's editable guides; `inherited` are its layout's
+// guides, drawn read-only on a slide (empty when editing a layout). Carries an
+// f64, so this is not Eq (unlike the Patch enum) — guides ride their own
+// message rather than the DOM patch stream.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct GuideDto {
+    pub axis: String,
+    pub pos: f64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct GuidesData {
+    pub canvas_id: String,
+    pub own: Vec<GuideDto>,
+    pub inherited: Vec<GuideDto>,
 }
 
 // SlideAnimationEntry
