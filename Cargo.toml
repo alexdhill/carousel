@@ -42,3 +42,10 @@ expect_used = "deny"
 # in our crate. We define no such feature, so declare it expected to keep
 # the build warning-free without blanket-allowing unexpected_cfgs.
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
+
+[profile.release]
+opt-level = 'z'
+lto = true
+codegen-units = 1
+panic = 'abort'
+strip = true
