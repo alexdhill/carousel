@@ -287,9 +287,97 @@
         return s === "" ? "0" : s;
     }
 
+    // hexToRgb
+    // Inputs: a "#rgb" / "#rrggbb" string. Output: { r, g, b } in 0..255;
+    // unparseable input yields black. Used to seed the HSL edit model.
+    function hexToRgb(hex) {
+        const h = normalize_hex(String(hex == null ? "" : hex).trim()) || "#000000";
+        return {
+            r: parseInt(h.slice(1, 3), 16),
+            g: parseInt(h.slice(3, 5), 16),
+            b: parseInt(h.slice(5, 7), 16),
+        };
+    }
+
+    // rgbToHex
+    // Inputs: r, g, b channels (0..255, clamped/rounded). Output: a
+    // "#rrggbb" lowercase string.
+    function rgbToHex(r, g, b) {
+        return "#" + to_hex2(r) + to_hex2(g) + to_hex2(b);
+    }
+
+    // rgbToHsl
+    // Inputs: r, g, b in 0..255. Output: { h, s, l } with h in 0..360 and
+    // s, l in 0..100. Achromatic inputs report h = 0, s = 0. Standard HSL
+    // conversion; no DOM, pure arithmetic.
+    function rgbToHsl(r, g, b) {
+        const rn = Math.max(0, Math.min(255, r)) / 255;
+        const gn = Math.max(0, Math.min(255, g)) / 255;
+        const bn = Math.max(0, Math.min(255, b)) / 255;
+        const max = Math.max(rn, gn, bn);
+        const min = Math.min(rn, gn, bn);
+        const l = (max + min) / 2;
+        const d = max - min;
+        let h = 0;
+        let s = 0;
+        if (d !== 0) {
+            s = d / (1 - Math.abs(2 * l - 1));
+            if (max === rn) {
+                h = ((gn - bn) / d) % 6;
+            } else if (max === gn) {
+                h = (bn - rn) / d + 2;
+            } else {
+                h = (rn - gn) / d + 4;
+            }
+            h = h * 60;
+            if (h < 0) {
+                h = h + 360;
+            }
+        }
+        return { h: h, s: s * 100, l: l * 100 };
+    }
+
+    // hslToRgb
+    // Inputs: h (0..360), s, l (0..100). Output: { r, g, b } in 0..255
+    // (rounded). Inverse of rgbToHsl. Inputs are wrapped/clamped so slider
+    // values never throw.
+    function hslToRgb(h, s, l) {
+        const hn = ((h % 360) + 360) % 360;
+        const sn = Math.max(0, Math.min(100, s)) / 100;
+        const ln = Math.max(0, Math.min(100, l)) / 100;
+        const c = (1 - Math.abs(2 * ln - 1)) * sn;
+        const x = c * (1 - Math.abs(((hn / 60) % 2) - 1));
+        const m = ln - c / 2;
+        let rp = 0;
+        let gp = 0;
+        let bp = 0;
+        if (hn < 60) {
+            rp = c; gp = x;
+        } else if (hn < 120) {
+            rp = x; gp = c;
+        } else if (hn < 180) {
+            gp = c; bp = x;
+        } else if (hn < 240) {
+            gp = x; bp = c;
+        } else if (hn < 300) {
+            rp = x; bp = c;
+        } else {
+            rp = c; bp = x;
+        }
+        return {
+            r: Math.round((rp + m) * 255),
+            g: Math.round((gp + m) * 255),
+            b: Math.round((bp + m) * 255),
+        };
+    }
+
     const style = {
         parseRgba: parseRgba,
         composeRgba: composeRgba,
+        hexToRgb: hexToRgb,
+        rgbToHex: rgbToHex,
+        rgbToHsl: rgbToHsl,
+        hslToRgb: hslToRgb,
         parseBoxShadow: parseBoxShadow,
         composeBoxShadow: composeBoxShadow,
         parseBorder: parseBorder,

@@ -3816,7 +3816,7 @@
             label: "Shadow",
             appliesTo: BOXY_TYPES,
             fields: [
-                { prop: "box-shadow", label: "Shadow", kind: "shadow", full: true, composite: true },
+                { prop: "box-shadow", label: "Shadow", kind: "shadow", full: true, composite: true, noLabel: true },
             ],
         },
         {
@@ -3825,10 +3825,10 @@
             appliesTo: TEXT_TYPES,
             fields: [
                 { prop: "font-family", label: "Font", kind: "font-combo", full: true, composite: true },
-                { prop: "font-size", label: "Size", kind: "number", suffix: "px" },
+                { prop: "font-size", label: "Size", kind: "number", suffix: "px", unit: "px" },
                 { prop: "font-weight", label: "Weight", kind: "number", suffix: "" },
                 { prop: "line-height", label: "Line Height", kind: "number", suffix: "" },
-                { prop: "letter-spacing", label: "Letter Spacing", kind: "number", suffix: "px" },
+                { prop: "letter-spacing", label: "Letter Spacing", kind: "number", suffix: "px", unit: "px" },
                 {
                     prop: "text-align", label: "Alignment", kind: "segment", full: true,
                     options: [
@@ -4051,6 +4051,21 @@
         const control = buildFieldControl(field);
         control.dataset.prop = field.prop;
         control.dataset.kind = field.kind;
+        // noLabel fields carry their own per-input labels (e.g. the shadow grid),
+        // so suppress the redundant row label.
+        if (field.noLabel) {
+            const id = "inspector-input-" + field.prop.replace(/[^a-z0-9]/gi, "-");
+            control.id = id;
+            inspectorInputs[field.prop] = control;
+            wrap.appendChild(control);
+            return wrap;
+        }
+        // CSS number fields carry a unit (e.g. "px") the bare value must be
+        // suffixed with on commit; geometry number fields (x/y/w/h) have no
+        // unit and stay bare floats for the Rust geometry path.
+        if (field.unit) {
+            control.dataset.unit = field.unit;
+        }
         // Composite controls (swatch/cluster/shadow/border-style/size-row) wire
         // their own commits internally, so skip the single-prop change handler
         // that would double-post.
@@ -4178,45 +4193,275 @@
         return box;
     }
 
+    // makeColorSlider
+    // Inputs: label text, max value, and onInput / onCommit callbacks.
+    // Output: { row, input, readout } — a labelled range slider row used for
+    // the H/S/L/A axes of the colour popover. `input` fires onInput live and
+    // onCommit on release (commit-on-change, preview-on-input).
+    function makeColorSlider(label, max, onInput, onCommit) {
+        const row = document.createElement("div");
+        row.className = "colorpop__slider";
+        const lab = document.createElement("span");
+        lab.className = "colorpop__slider-label";
+        lab.textContent = label;
+        const input = document.createElement("input");
+        input.type = "range";
+        input.min = "0";
+        input.max = String(max);
+        input.step = "1";
+        const readout = document.createElement("span");
+        readout.className = "colorpop__slider-val";
+        input.addEventListener("input", onInput);
+        input.addEventListener("change", onCommit);
+        row.appendChild(lab);
+        row.appendChild(input);
+        row.appendChild(readout);
+        return { row: row, input: input, readout: readout };
+    }
+
+    // positionColorPopover
+    // Inputs: the popover element and its anchor (the inline swatch). Output:
+    // side-effect; pins the popover (position:fixed) just below the anchor,
+    // clamped into the viewport so it never spills off-screen.
+    function positionColorPopover(pop, anchor) {
+        const r = anchor.getBoundingClientRect();
+        const pw = pop.offsetWidth || 240;
+        const ph = pop.offsetHeight || 300;
+        let left = r.left;
+        let top = r.bottom + 6;
+        left = Math.max(8, Math.min(left, window.innerWidth - pw - 8));
+        if (top + ph > window.innerHeight - 8) {
+            top = Math.max(8, r.top - ph - 6);
+        }
+        pop.style.left = left + "px";
+        pop.style.top = top + "px";
+    }
+
     // makeColorControl
-    // Output: a swatch + hex readout that behaves like a color input. A
-    // chromeless <input type=color> is the swatch; a span shows the hex.
-    // `.value` proxies the swatch; picking a color updates the hex and
-    // dispatches `change`. ponytail: non-hex incoming values (rgb/named)
-    // show as text — the native swatch can't render them.
+    // Output: an inline swatch trigger whose `.value` round-trips a full
+    // hex-or-rgba() colour string and which dispatches `change` on commit
+    // (unchanged public contract). Clicking the swatch opens a popover with an
+    // HS wheel and H/S/L/A sliders; HSL is the edit model, rgba() the stored
+    // value. See docs/superpowers/specs/2026-06-27-color-picker-design.md.
     function makeColorControl() {
         const box = document.createElement("div");
         box.className = "inspector__color";
-        const swatch = document.createElement("input");
-        swatch.type = "color";
+        const swatch = document.createElement("button");
+        swatch.type = "button";
         swatch.className = "inspector__color-swatch";
-        const hex = document.createElement("span");
-        hex.className = "inspector__color-hex";
-        hex.textContent = "—";
+        const fill = document.createElement("span");
+        fill.className = "inspector__color-fill";
+        swatch.appendChild(fill);
+        const hexLabel = document.createElement("span");
+        hexLabel.className = "inspector__color-hex";
+        hexLabel.textContent = "—";
         box.appendChild(swatch);
-        box.appendChild(hex);
-        box.addEventListener("click", function (e) {
-            if (e.target !== swatch) { swatch.click(); }
-        });
-        swatch.addEventListener("input", function () {
-            hex.textContent = swatch.value.toUpperCase();
-        });
-        swatch.addEventListener("change", function () {
+        box.appendChild(hexLabel);
+
+        const state = { h: 0, s: 0, l: 0, a: 100 };
+        const pop = buildColorPopover(state, render, commit);
+        document.body.appendChild(pop.el);
+
+        // render: repaint the inline swatch + every popover control from state.
+        // No commit (callers commit explicitly). Skips inputs the user is
+        // actively dragging so live edits aren't clobbered.
+        function render() {
+            const rgb = window.__style.hslToRgb(state.h, state.s, state.l);
+            const hex = window.__style.rgbToHex(rgb.r, rgb.g, rgb.b);
+            const css = window.__style.composeRgba(hex, state.a);
+            fill.style.background = css;
+            hexLabel.textContent = hex.toUpperCase();
+            pop.render(state, hex, css);
+        }
+        function commit() {
             box.dispatchEvent(new Event("change"));
+        }
+        function currentCss() {
+            const rgb = window.__style.hslToRgb(state.h, state.s, state.l);
+            const hex = window.__style.rgbToHex(rgb.r, rgb.g, rgb.b);
+            return window.__style.composeRgba(hex, state.a);
+        }
+
+        function openPop() {
+            positionColorPopover(pop.el, swatch);
+            pop.el.classList.add("colorpop--open");
+            render();
+            document.addEventListener("pointerdown", onOutside, true);
+            document.addEventListener("keydown", onEsc, true);
+        }
+        function closePop() {
+            pop.el.classList.remove("colorpop--open");
+            document.removeEventListener("pointerdown", onOutside, true);
+            document.removeEventListener("keydown", onEsc, true);
+        }
+        function onOutside(e) {
+            if (!pop.el.contains(e.target) && !box.contains(e.target)) {
+                closePop();
+            }
+        }
+        function onEsc(e) {
+            if (e.key === "Escape") { e.preventDefault(); closePop(); }
+        }
+        // Toggle on a click anywhere in the control row, not just the 17px
+        // swatch (matches the old whole-row hit target).
+        box.addEventListener("click", function () {
+            if (pop.el.classList.contains("colorpop--open")) { closePop(); } else { openPop(); }
         });
+
         Object.defineProperty(box, "value", {
-            get: function () { return swatch.value; },
+            get: currentCss,
             set: function (v) {
-                const s = (v === null || v === undefined) ? "" : String(v).trim();
-                if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(s)) {
-                    swatch.value = s;
-                    hex.textContent = s.toUpperCase();
-                } else {
-                    hex.textContent = (s === "") ? "—" : s;
+                // While the popover is open the user is editing — the popover
+                // is the source of truth. Ignore the echo from the committed
+                // round-trip so it can't reset the live selection.
+                if (pop.el.classList.contains("colorpop--open")) {
+                    return;
                 }
+                const parsed = window.__style.parseRgba(v == null ? "" : v);
+                const rgb = window.__style.hexToRgb(parsed.hex);
+                const hsl = window.__style.rgbToHsl(rgb.r, rgb.g, rgb.b);
+                // Achromatic colours (grey/black/white) carry no hue; rgbToHsl
+                // reports h=0. Keep the prior hue so the wheel doesn't snap to
+                // red when lightness/alpha drives the colour to grey.
+                if (hsl.s > 0) {
+                    state.h = hsl.h;
+                }
+                state.s = hsl.s;
+                state.l = hsl.l;
+                state.a = parsed.alpha;
+                render();
             },
         });
+        render();
         return box;
+    }
+
+    // buildColorPopover
+    // Inputs: shared `state` ({h,s,l,a}), a render() that repaints from state,
+    // and a commit() that fires the control's `change`. Output: { el, render }
+    // — the popover DOM (an HS wheel + H/S/L/A sliders + hex field) wired to
+    // mutate state then render/commit. `render(state, hex, css)` syncs the
+    // popover's own controls (called by the parent's render).
+    function buildColorPopover(state, render, commit) {
+        const el = document.createElement("div");
+        el.className = "colorpop";
+        const wheel = document.createElement("div");
+        wheel.className = "colorpop__wheel";
+        // Lightness wash over the hue/sat disc: white above L=50, black below,
+        // opacity tracking distance from 50 so the wheel reads at the actual
+        // lightness (WYSIWYG). Sits under the dot.
+        const lum = document.createElement("span");
+        lum.className = "colorpop__wheel-lum";
+        const dot = document.createElement("span");
+        dot.className = "colorpop__dot";
+        wheel.appendChild(lum);
+        wheel.appendChild(dot);
+        el.appendChild(wheel);
+        wireColorWheel(wheel, state, render, commit);
+
+        function onAxis(key, scale) {
+            return function (e) {
+                state[key] = Number(e.target.value) * scale;
+                render();
+            };
+        }
+        const h = makeColorSlider("H", 360, onAxis("h", 1), commit);
+        const s = makeColorSlider("S", 100, onAxis("s", 1), commit);
+        const l = makeColorSlider("L", 100, onAxis("l", 1), commit);
+        const a = makeColorSlider("A", 100, onAxis("a", 1), commit);
+        el.appendChild(h.row);
+        el.appendChild(s.row);
+        el.appendChild(l.row);
+        el.appendChild(a.row);
+
+        const hexRow = document.createElement("div");
+        hexRow.className = "colorpop__hexrow";
+        const hexInput = document.createElement("input");
+        hexInput.className = "colorpop__hex";
+        hexInput.spellcheck = false;
+        hexRow.appendChild(hexInput);
+        el.appendChild(hexRow);
+        hexInput.addEventListener("change", function () {
+            const parsed = window.__style.parseRgba(hexInput.value);
+            const rgb = window.__style.hexToRgb(parsed.hex);
+            const hsl = window.__style.rgbToHsl(rgb.r, rgb.g, rgb.b);
+            state.h = hsl.h;
+            state.s = hsl.s;
+            state.l = hsl.l;
+            render();
+            commit();
+        });
+        hexInput.addEventListener("keydown", function (e) {
+            if (e.key === "Enter") { e.preventDefault(); hexInput.blur(); }
+        });
+
+        function renderPopover(st, hex, css) {
+            setColorAxis(h, st.h, Math.round(st.h));
+            setColorAxis(s, st.s, Math.round(st.s));
+            setColorAxis(l, st.l, Math.round(st.l));
+            setColorAxis(a, st.a, Math.round(st.a));
+            h.input.style.background = "linear-gradient(to right,"
+                + " #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)";
+            s.input.style.background = "linear-gradient(to right, hsl("
+                + st.h + ", 0%, 50%), hsl(" + st.h + ", 100%, 50%))";
+            l.input.style.background = "linear-gradient(to right, #000, hsl("
+                + st.h + ", " + st.s + "%, 50%), #fff)";
+            a.input.style.background = "linear-gradient(to right,"
+                + " transparent, " + hex + ")";
+            lum.style.background = st.l >= 50 ? "#fff" : "#000";
+            lum.style.opacity = String(Math.abs(st.l - 50) / 50);
+            const R = wheel.offsetWidth / 2 || 100;
+            const rad = (st.s / 100) * R;
+            const theta = st.h * Math.PI / 180;
+            dot.style.left = (R + rad * Math.sin(theta)) + "px";
+            dot.style.top = (R - rad * Math.cos(theta)) + "px";
+            dot.style.background = css;
+            if (document.activeElement !== hexInput) {
+                hexInput.value = hex.toUpperCase();
+            }
+        }
+        return { el: el, render: renderPopover };
+    }
+
+    // setColorAxis: set a slider's value (unless the user is dragging it) and
+    // its numeric readout. Keeps live drags from being clobbered by render.
+    function setColorAxis(slider, value, shown) {
+        if (document.activeElement !== slider.input) {
+            slider.input.value = String(Math.round(value));
+        }
+        slider.readout.textContent = String(shown);
+    }
+
+    // wireColorWheel
+    // Inputs: the wheel element, shared state, render(), commit(). Output:
+    // side-effect; pointer drag on the wheel sets hue (angle) + saturation
+    // (radius), rendering live and committing on release. Angle is measured
+    // clockwise from top to match the conic hue gradient.
+    function wireColorWheel(wheel, state, render, commit) {
+        function fromPointer(e) {
+            const r = wheel.getBoundingClientRect();
+            const R = r.width / 2;
+            const dx = e.clientX - r.left - R;
+            const dy = e.clientY - r.top - R;
+            const dist = Math.min(Math.sqrt(dx * dx + dy * dy), R);
+            let deg = Math.atan2(dx, -dy) * 180 / Math.PI;
+            if (deg < 0) { deg += 360; }
+            state.h = deg;
+            state.s = R > 0 ? (dist / R) * 100 : 0;
+            render();
+        }
+        function onMove(e) { fromPointer(e); }
+        function onUp() {
+            document.removeEventListener("pointermove", onMove, true);
+            document.removeEventListener("pointerup", onUp, true);
+            commit();
+        }
+        wheel.addEventListener("pointerdown", function (e) {
+            e.preventDefault();
+            fromPointer(e);
+            document.addEventListener("pointermove", onMove, true);
+            document.addEventListener("pointerup", onUp, true);
+        });
     }
 
     // Chain glyph shared by the cluster link toggle and the ratio lock.
@@ -4226,18 +4471,10 @@
         + ' 0-5.6-5.6L11 7"/><path d="M14 11a4 4 0 0 0-5.6-.5L5.9 13a4 4 0 0 0 5.6'
         + ' 5.6L13 17"/></svg>';
 
-    // numOr0 / clampPct: coerce an inspector input string to a finite number
-    // (0 fallback) and to an integer percent in 0..100 (100 fallback).
+    // numOr0: coerce an inspector input string to a finite number (0 fallback).
     function numOr0(v) {
         const n = Number(String(v == null ? "" : v).replace(/px$/i, "").trim());
         return isFinite(n) ? n : 0;
-    }
-    function clampPct(v) {
-        const n = Math.round(Number(String(v == null ? "" : v).replace(/%$/, "").trim()));
-        if (!isFinite(n)) {
-            return 100;
-        }
-        return Math.max(0, Math.min(100, n));
     }
     function setIfIdle(input, value) {
         if (input && document.activeElement !== input) {
@@ -4247,37 +4484,22 @@
 
     // makeSwatchOpacityControl
     // Inputs: the CSS property the control owns (background-color / border-color).
-    // Output: a composite control — a colour swatch (native picker) plus an
-    // opacity % field — that commits `prop: rgba(...)` on either change and
-    // re-syncs from the declaration map via syncDecls. Registered in
-    // compositeControls. Errors: asserts a non-empty prop.
+    // Output: a composite control wrapping the colour picker — alpha now lives
+    // inside the picker, so the standalone opacity field is gone. Commits the
+    // picker's full hex/rgba() value on change and re-syncs via syncDecls.
+    // Registered in compositeControls. Errors: asserts a non-empty prop.
     function makeSwatchOpacityControl(prop) {
         console.assert(typeof prop === "string" && prop !== "", "swatch prop required");
         const box = document.createElement("div");
         box.className = "inspector__swatchrow";
         const color = makeColorControl();
         color.classList.add("inspector__swatchrow-color");
-        const op = document.createElement("input");
-        op.className = "inspector__swatchrow-opacity";
-        op.spellcheck = false;
-        const pct = document.createElement("span");
-        pct.className = "inspector__swatchrow-pct";
-        pct.textContent = "%";
         box.appendChild(color);
-        box.appendChild(op);
-        box.appendChild(pct);
-        function commit() {
-            sendPropertyChanged(prop, window.__style.composeRgba(color.value, clampPct(op.value)));
-        }
-        color.addEventListener("change", commit);
-        op.addEventListener("change", commit);
-        op.addEventListener("keydown", function (e) {
-            if (e.key === "Enter") { e.preventDefault(); op.blur(); }
+        color.addEventListener("change", function () {
+            sendPropertyChanged(prop, color.value);
         });
         box.syncDecls = function (decls) {
-            const c = window.__style.parseRgba(decls[prop] || "");
-            color.value = c.hex;
-            setIfIdle(op, String(c.alpha));
+            color.value = decls[prop] || "";
         };
         Object.defineProperty(box, "value", { get: function () { return ""; }, set: function () {} });
         compositeControls.push(box);
@@ -4312,6 +4534,24 @@
         const lab = document.createElement("span");
         lab.className = "inspector__cluster-cell-label";
         lab.textContent = cell.label;
+        const input = document.createElement("input");
+        input.className = "inspector__cluster-input";
+        input.spellcheck = false;
+        wrap.appendChild(lab);
+        wrap.appendChild(input);
+        return { wrap: wrap, input: input };
+    }
+
+    // makeShadowCell
+    // Inputs: a label string. Output: { wrap, input } — a number field with its
+    // label stacked ABOVE the input (vs. the cluster cell's inline single-char
+    // label), so multi-char names like "Blur"/"Spread" don't crowd the value.
+    function makeShadowCell(label) {
+        const wrap = document.createElement("div");
+        wrap.className = "inspector__shadow-cell";
+        const lab = document.createElement("span");
+        lab.className = "inspector__shadow-cell-label";
+        lab.textContent = label;
         const input = document.createElement("input");
         input.className = "inspector__cluster-input";
         input.spellcheck = false;
@@ -4417,7 +4657,7 @@
             }));
         }
         for (let i = 0; i < order.length; i++) {
-            const cell = makeClusterCell({ label: order[i].label, tip: order[i].label });
+            const cell = makeShadowCell(order[i].label);
             inputs[order[i].key] = cell.input;
             grid.appendChild(cell.wrap);
             cell.input.addEventListener("change", commit);
@@ -4436,7 +4676,7 @@
             setIfIdle(inputs.y, s.y);
             setIfIdle(inputs.blur, s.blur);
             setIfIdle(inputs.spread, s.spread);
-            color.value = window.__style.parseRgba(s.color).hex;
+            color.value = s.color;
         };
         Object.defineProperty(box, "value", { get: function () { return ""; }, set: function () {} });
         compositeControls.push(box);
@@ -5051,7 +5291,12 @@
         const prop = input.dataset.prop;
         const kind = input.dataset.kind || "css";
         const raw = input.value;
-        const wire = encodeForWire(kind, raw);
+        let wire = encodeForWire(kind, raw);
+        // Append the CSS unit so a typed "16" lands as "16px" inline; empty
+        // (clear) and null (invalid) pass through untouched.
+        if (kind === "number" && input.dataset.unit && wire !== null && wire !== "") {
+            wire = wire + input.dataset.unit;
+        }
         if (wire === null) {
             // Invalid input — restore the displayed value from DOM and bail.
             refreshInspector();
