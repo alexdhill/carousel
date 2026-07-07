@@ -1843,18 +1843,19 @@ impl ApplicationCore {
     // Inputs: the element's current id and the raw replacement text typed
     // in the object panel.
     // Output: Ok(()). Validates and sanitizes the new id, dispatches
-    // SetElementId (which remounts the slide and rebuilds the object
+    // SetElementId (which remounts the canvas and rebuilds the object
     // tree), then remaps the selection so the renamed element stays
     // selected. No-ops (empty/unchanged id, missing element, collision)
     // re-send the object tree so the panel's edit-in-place input reverts
-    // to the real id.
-    // Dataflow: sanitize -> resolve active slide -> guard empty/unchanged
+    // to the real id. Resolves against the active canvas so the rename
+    // works in both slide and layout modes.
+    // Dataflow: sanitize -> resolve active canvas -> guard empty/unchanged
     // -> guard missing element / id collision -> dispatch -> remap
     // selection -> SetSelection.
     fn handle_element_id_edit(&mut self, old_id: ElementId, raw_new_id: String) -> AppResult<()> {
         let new_id: ElementId = sanitize_element_id(&raw_new_id);
-        let slide_id: SlideId = match &self.active_slide {
-            Some(s) => s.clone(),
+        let target: CanvasTarget = match self.active_canvas() {
+            Some(t) => t,
             None => return Ok(()),
         };
         if new_id.is_empty() || new_id == old_id {
@@ -1862,20 +1863,20 @@ impl ApplicationCore {
             // reverts to the element's real id.
             return self.send_object_tree();
         }
-        let slide = match self.dispatcher.deck().slides.get(&slide_id) {
-            Some(s) => s,
+        let canvas = match self.dispatcher.deck().canvas(&target) {
+            Some(c) => c,
             None => return Ok(()),
         };
-        if slide.find_element(&old_id).is_none() {
+        if canvas.find_element(&old_id).is_none() {
             return Ok(());
         }
-        if slide.find_element(&new_id).is_some() {
-            warn!(new_id = %new_id, "element id already in use on slide; ignoring rename");
+        if canvas.find_element(&new_id).is_some() {
+            warn!(new_id = %new_id, "element id already in use on canvas; ignoring rename");
             return self.send_object_tree();
         }
 
         self.dispatch_and_maybe_flush(Box::new(SetElementId {
-            target: CanvasTarget::Slide(slide_id),
+            target: target.clone(),
             old_id: old_id.clone(),
             new_id: new_id.clone(),
         }));
