@@ -1145,6 +1145,7 @@
         rulersOn = !rulersOn;
         ensureRulers();
         refreshRulers();
+        renderRulerGuides();
     }
 
     // refreshRulers — show/draw or hide the rulers for the current zoom/slide.
@@ -1276,6 +1277,9 @@
             return;
         }
         layer.replaceChildren();
+        if (!rulersOn) {
+            return;
+        }
         const m = canvasMetrics();
         if (!m) {
             return;
