@@ -119,6 +119,36 @@
     function slide() { return DECK.slides[slideIdx]; }
     function lastStep() { return Math.max(0, (slide().snaps || []).length - 1); }
 
+    // mount_over: mount slide i layered over the current host, returning both roots.
+    // Returns {old_root, new_root} where old_root is the current shadow, and
+    // new_root is the newly-mounted shadow. Used for morph animations that need
+    // both the old and new slide content visible simultaneously.
+    function mount_over(i) {
+        var stage = document.getElementById("stage");
+        if (!stage || !DECK.slides[i]) { return null; }
+        var old_shadow = currentShadow;
+        var host = document.createElement("div");
+        host.className = "present-host";
+        var shadow = host.attachShadow({ mode: "open" });
+        shadow.innerHTML =
+            "<style>" + (DECK.theme_css || "") + "</style>"
+            + "<style>" + (DECK.globals_css || "") + "</style>"
+            + "<style>" + (DECK.keyframes_css || "") + "</style>"
+            + "<style>" + assetVarsCss() + "</style>"
+            + "<style>.slide { overflow: hidden; }</style>"
+            + (DECK.slides[i].html || "");
+        stage.appendChild(host);
+        currentShadow = shadow;
+        return { old_root: old_shadow, new_root: shadow };
+    }
+
+    // drop_old_root: remove the old host from the stage.
+    function drop_old_root(old_root) {
+        if (old_root && old_root.host && old_root.host.parentNode) {
+            old_root.host.parentNode.removeChild(old_root.host);
+        }
+    }
+
     // goToSlide: mount slide i parked at parkStep, snapped (no animation).
     function goToSlide(i, parkStep) {
         slideIdx = i;
@@ -132,7 +162,21 @@
             step += 1;
             applyReveal(slide().forwards[step]); // animation plays
         } else if (slideIdx < DECK.slides.length - 1) {
-            goToSlide(slideIdx + 1, 0);
+            var nextIdx = slideIdx + 1;
+            if (window.run_morph) {
+                var roots = mount_over(nextIdx);
+                if (roots) {
+                    slideIdx = nextIdx;
+                    step = 0;
+                    applyReveal(slide().snaps[step]);
+                    var old_root = roots.old_root;
+                    window.run_morph(old_root, roots.new_root, function () {
+                        drop_old_root(old_root);
+                    });
+                    return;
+                }
+            }
+            goToSlide(nextIdx, 0);
         }
     }
 

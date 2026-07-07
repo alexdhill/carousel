@@ -600,6 +600,17 @@ pub enum InteractionEvent {
     SetSlideTransitionRequested {
         transition: Option<crate::deck::SlideTransition>,
     },
+    // SetMorphTransitionRequested
+    // Enable or disable morphing transition for an element on forward slide
+    // advances. `enabled` toggles the morph on/off; `duration_ms` and `easing`
+    // are used when enabled. Dispatches a SetMorphTransition command. Warnings
+    // about missing next-slide elements come back via Notice.
+    SetMorphTransitionRequested {
+        element_id: ElementId,
+        enabled: bool,
+        duration_ms: u32,
+        easing: String,
+    },
     SetSlideLayoutRequested {
         layout_id: LayoutId,
     },

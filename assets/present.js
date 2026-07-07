@@ -183,25 +183,39 @@
     }
 
     // mountSlide
-    // Inputs: a PresentSlidePayload.
-    // Output: side-effect; mounts a fresh shadow-root slide. With no transition
-    // (cut), replaces the stage contents instantly. With a Fade/Push transition
-    // (forward cross-slide only), stacks the new host over the old and animates
-    // the swap, dropping the old host when the CSS transition ends.
+    // Inputs: a PresentSlidePayload. `transition` is Some on a forward
+    // cross-slide (a None-kind value is a cut that still permits morphs), and
+    // absent on back / initial / same-slide.
+    // Output: side-effect; mounts a fresh shadow-root slide. A real Fade/Push
+    // transition animates the host swap. A forward cut with morph-enabled
+    // elements stacks the new host over the old, morphs the matched elements,
+    // then drops the old host. Every other case is an instant replace.
     function mountSlide(payload) {
         const stage = document.getElementById("stage");
         if (!stage || !payload) {
             return;
         }
         finalizeSwap();
+        const oldShadow = currentShadow;
         const built = buildHost(payload);
         const kind = payload.transition && payload.transition.kind;
-        if (!kind || kind === "None") {
-            stage.replaceChildren(built.host);
-            adoptHost(built);
+        if (kind && kind !== "None") {
+            startSwap(stage, built, payload.transition);
             return;
         }
-        startSwap(stage, built, payload.transition);
+        const oldHost = oldShadow ? oldShadow.host : null;
+        if (payload.transition && oldHost && window.run_morph) {
+            stage.appendChild(built.host);
+            adoptHost(built);
+            window.run_morph(oldShadow, built.shadow, function () {
+                if (oldHost.parentNode) {
+                    oldHost.parentNode.removeChild(oldHost);
+                }
+            });
+            return;
+        }
+        stage.replaceChildren(built.host);
+        adoptHost(built);
     }
 
     // startSwap: animate the host swap per the transition (Fade | Push).
@@ -213,7 +227,8 @@
     //     black dip over transparent regions), and the old fully fades so no
     //     stray element on it lingers.
     // The host that actually animates (new for Push, old for Fade) drives the
-    // transitionend that finalizes the swap.
+    // transitionend that finalizes the swap. Element morphs are handled on the
+    // cut path in mountSlide, so they never run against a panel transition.
     function startSwap(stage, built, transition) {
         const oldHost = currentShadow ? currentShadow.host : null;
         if (!oldHost) {

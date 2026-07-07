@@ -9,6 +9,7 @@ use serde::Serialize;
 const INDEX_HTML: &str = include_str!("../../assets/export/index.html");
 const PLAYER_CSS: &str = include_str!("../../assets/export/player.css");
 const PLAYER_JS: &str = include_str!("../../assets/export/player.js");
+const MORPH_JS: &str = include_str!("../../assets/morph.js");
 
 // ExportBundle
 // An in-memory list of (relative path, bytes) to write into the export folder.
@@ -115,6 +116,7 @@ pub fn build_html_export(deck: &Deck) -> Result<ExportBundle, serde_json::Error>
     let mut files: Vec<(String, Vec<u8>)> = vec![
         ("index.html".to_string(), INDEX_HTML.as_bytes().to_vec()),
         ("player.css".to_string(), PLAYER_CSS.as_bytes().to_vec()),
+        ("morph.js".to_string(), MORPH_JS.as_bytes().to_vec()),
         ("player.js".to_string(), PLAYER_JS.as_bytes().to_vec()),
         ("deck.js".to_string(), deck_js.into_bytes()),
     ];
@@ -169,7 +171,7 @@ mod tests {
     fn export_contains_player_and_data_and_assets() {
         let deck = Deck::sample();
         let bundle = build_html_export(&deck).unwrap();
-        for name in ["index.html", "player.css", "player.js", "deck.js"] {
+        for name in ["index.html", "player.css", "morph.js", "player.js", "deck.js"] {
             assert!(file(&bundle, name).is_some(), "missing {name}");
         }
         let deck_js = std::str::from_utf8(file(&bundle, "deck.js").unwrap()).unwrap();

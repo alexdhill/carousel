@@ -7697,15 +7697,96 @@
         return animEffectLabel(entry) + (dir ? " (" + dir + ")" : "");
     }
 
+    // morphStateFromAttrs
+    // Inputs: element id.
+    // Output: {enabled, duration_ms, easing} read from the element's
+    // data-morph-* attributes. Returns defaults when attributes are absent.
+    function morphStateFromAttrs(elId) {
+        const el = currentShadow ? currentShadow.querySelector('[data-element-id="' + String(elId).replace(/"/g, '\\"') + '"]') : null;
+        if (!el) {
+            return { enabled: false, duration_ms: 300, easing: "ease-in-out" };
+        }
+        const enabled = el.hasAttribute("data-morph-next");
+        const duration_ms = parseInt(el.getAttribute("data-morph-dur") || "300", 10);
+        const easing = el.getAttribute("data-morph-ease") || "ease-in-out";
+        return { enabled, duration_ms, easing };
+    }
+
+    // renderMorphControl
+    // Inputs: element id.
+    // Output: a <div> with a checkbox, duration input, and easing select,
+    // showing the current morph transition state. Duration/easing are hidden
+    // unless the checkbox is checked.
+    function renderMorphControl(elId) {
+        const state = morphStateFromAttrs(elId);
+        const wrapper = document.createElement("div");
+        wrapper.className = "morph-control";
+        const checkboxLabel = document.createElement("label");
+        checkboxLabel.className = "morph-check-label";
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.className = "morph-enabled";
+        checkbox.checked = state.enabled;
+        checkbox.dataset.elementId = elId;
+        checkboxLabel.appendChild(checkbox);
+        checkboxLabel.appendChild(document.createTextNode("Transition to next slide"));
+        wrapper.appendChild(checkboxLabel);
+
+        const row1 = document.createElement("div");
+        row1.className = "morph-row";
+        if (!state.enabled) {
+            row1.hidden = true;
+        }
+        const durationLabel = document.createElement("label");
+        durationLabel.textContent = "Duration (ms):";
+        const durationInput = document.createElement("input");
+        durationInput.type = "number";
+        durationInput.className = "morph-duration";
+        durationInput.min = "1";
+        durationInput.value = state.duration_ms;
+        durationInput.dataset.elementId = elId;
+        row1.appendChild(durationLabel);
+        row1.appendChild(durationInput);
+        wrapper.appendChild(row1);
+
+        const row2 = document.createElement("div");
+        row2.className = "morph-row";
+        if (!state.enabled) {
+            row2.hidden = true;
+        }
+        const easingLabel = document.createElement("label");
+        easingLabel.textContent = "Easing:";
+        const easingSelect = document.createElement("select");
+        easingSelect.className = "morph-easing";
+        easingSelect.dataset.elementId = elId;
+        const easings = ["linear", "ease-in", "ease-out", "ease-in-out", "cubic-bezier(0.34, 1.56, 0.64, 1)"];
+        for (let i = 0; i < easings.length; i++) {
+            const opt = document.createElement("option");
+            opt.value = easings[i];
+            opt.textContent = easings[i];
+            if (easings[i] === state.easing) {
+                opt.selected = true;
+            }
+            easingSelect.appendChild(opt);
+        }
+        row2.appendChild(easingLabel);
+        row2.appendChild(easingSelect);
+        wrapper.appendChild(row2);
+
+        return wrapper;
+    }
+
     // refreshAnimationsSection
     // Inputs: none (reads currentSelectionIds + slideAnimations).
     // Output: side-effect; shows the panel only for a single selection and
     // rebuilds the bar stack (one bar per entry of the selected element, in
-    // timeline order) plus the count badge.
+    // timeline order) plus the count badge. Also renders the morph control
+    // for the selected element.
     function refreshAnimationsSection() {
         const single = currentSelectionIds.length === 1;
         document.body.classList.toggle("has-single-selection", single);
         const bars = document.getElementById("anim-bars");
+        const morphContainer = document.getElementById("morph-control-container");
         const count = document.getElementById("anim-count");
         if (!bars) {
             return;
@@ -7720,6 +7801,22 @@
         }
         if (count) {
             count.textContent = String(mine.length);
+        }
+        let container = morphContainer;
+        if (!container) {
+            const animSection = document.getElementById("animations-section");
+            if (animSection) {
+                container = document.createElement("div");
+                container.id = "morph-control-container";
+                animSection.appendChild(container);
+            }
+        }
+        if (container && el) {
+            container.replaceChildren();
+            container.appendChild(renderMorphControl(el));
+            wireMorphControl(el);
+        } else if (container) {
+            container.replaceChildren();
         }
     }
 
@@ -8229,6 +8326,72 @@
         });
         row.append(prop, val, rm);
         return row;
+    }
+
+    // wireMorphControl
+    // Inputs: element id.
+    // Output: side-effect; wires change handlers on the checkbox, duration,
+    // and easing inputs to dispatch SetMorphTransitionRequested and toggle
+    // row visibility.
+    function wireMorphControl(elId) {
+        const container = document.getElementById("morph-control-container");
+        if (!container) {
+            return;
+        }
+        const checkbox = container.querySelector(".morph-enabled");
+        const durationInput = container.querySelector(".morph-duration");
+        const easingSelect = container.querySelector(".morph-easing");
+        const row1 = container.querySelector(".morph-row:nth-of-type(1)");
+        const row2 = container.querySelector(".morph-row:nth-of-type(2)");
+
+        if (checkbox) {
+            checkbox.addEventListener("change", function (e) {
+                const enabled = this.checked;
+                if (row1) row1.hidden = !enabled;
+                if (row2) row2.hidden = !enabled;
+                const duration_ms = parseInt(durationInput ? durationInput.value : "300", 10);
+                const easing = easingSelect ? easingSelect.value : "ease-in-out";
+                window.__deck.send("Interaction", {
+                    kind: "SetMorphTransitionRequested",
+                    element_id: elId,
+                    enabled: enabled,
+                    duration_ms: duration_ms,
+                    easing: easing,
+                });
+            });
+        }
+        if (durationInput) {
+            durationInput.addEventListener("change", function (e) {
+                const enabled = checkbox ? checkbox.checked : false;
+                const duration_ms = parseInt(this.value || "300", 10);
+                const easing = easingSelect ? easingSelect.value : "ease-in-out";
+                if (enabled) {
+                    window.__deck.send("Interaction", {
+                        kind: "SetMorphTransitionRequested",
+                        element_id: elId,
+                        enabled: enabled,
+                        duration_ms: duration_ms,
+                        easing: easing,
+                    });
+                }
+            });
+        }
+        if (easingSelect) {
+            easingSelect.addEventListener("change", function (e) {
+                const enabled = checkbox ? checkbox.checked : false;
+                const duration_ms = parseInt(durationInput ? durationInput.value : "300", 10);
+                const easing = this.value;
+                if (enabled) {
+                    window.__deck.send("Interaction", {
+                        kind: "SetMorphTransitionRequested",
+                        element_id: elId,
+                        enabled: enabled,
+                        duration_ms: duration_ms,
+                        easing: easing,
+                    });
+                }
+            });
+        }
     }
 
     // wireAnimationsSection

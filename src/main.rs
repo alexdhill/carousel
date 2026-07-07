@@ -37,6 +37,7 @@ const PRESET_CSS_JS: &str = include_str!("../assets/preset_css.js");
 const PRESENT_HTML_TEMPLATE: &str = include_str!("../assets/present.html");
 const PRESENT_CSS: &str = include_str!("../assets/present.css");
 const PRESENT_JS: &str = include_str!("../assets/present.js");
+const MORPH_JS: &str = include_str!("../assets/morph.js");
 const LANDING_HTML_TEMPLATE: &str = include_str!("../assets/landing.html");
 const LANDING_CSS: &str = include_str!("../assets/landing.css");
 const LANDING_JS: &str = include_str!("../assets/landing.js");
@@ -304,14 +305,18 @@ fn assemble_host_html(
 }
 
 // assemble_present_html
-// Inputs: the presentation template (must contain the present CSS + JS
-// placeholders) plus the css and js bodies.
+// Inputs: the presentation template (must contain the present CSS, morph JS,
+// and present JS placeholders) plus the css, morph, and js bodies.
 // Output: assembled HTML for the presentation webview.
-// Errors: asserts both placeholders are present.
-fn assemble_present_html(template: &str, css: &str, js: &str) -> String {
+// Errors: asserts all three placeholders are present.
+fn assemble_present_html(template: &str, css: &str, morph: &str, js: &str) -> String {
     assert!(
         template.contains("__PRESENT_CSS__"),
         "present template missing CSS marker"
+    );
+    assert!(
+        template.contains("__MORPH_JS__"),
+        "present template missing morph JS marker"
     );
     assert!(
         template.contains("__PRESENT_JS__"),
@@ -319,6 +324,7 @@ fn assemble_present_html(template: &str, css: &str, js: &str) -> String {
     );
     template
         .replace("__PRESENT_CSS__", css)
+        .replace("__MORPH_JS__", morph)
         .replace("__PRESENT_JS__", js)
 }
 
@@ -340,7 +346,7 @@ fn build_presentation(
         .with_title("carousel — presenting")
         .with_fullscreen(Some(Fullscreen::Borderless(None)))
         .build(target)?;
-    let html: String = assemble_present_html(PRESENT_HTML_TEMPLATE, PRESENT_CSS, PRESENT_JS);
+    let html: String = assemble_present_html(PRESENT_HTML_TEMPLATE, PRESENT_CSS, MORPH_JS, PRESENT_JS);
     assert!(!html.is_empty(), "assembled present html is empty");
     let webview = WebViewBuilder::new(&window)
         .with_html(html)

@@ -26,9 +26,9 @@ use crate::commands::{
     ReparentElement, ResizeElement, SetAnimationProperty, SetCellStyles, SetCellText, SetDeckTitle,
     SetElementId, SetElementsTransform, SetEmbedHtml, SetGeometryProperty, SetGlobalsCss,
     SetGroupLayout, SetGroupScale, SetInlineStyle, SetLayoutBackground, SetLayoutBackgroundImage,
-    SetLayoutName, SetSlideBackground, SetSlideBackgroundImage, SetSlideLayout, SetSlideNotes,
-    SetSlideTitle, SetSlideTransition, SetTableHeaderColumns, SetTableHeaderRows, SetTextContent,
-    SwapTheme, TransactionSnapshot,
+    SetLayoutName, SetMorphTransition, SetSlideBackground, SetSlideBackgroundImage, SetSlideLayout,
+    SetSlideNotes, SetSlideTitle, SetSlideTransition, SetTableHeaderColumns, SetTableHeaderRows,
+    SetTextContent, SwapTheme, TransactionSnapshot,
 };
 use crate::deck::animation::{
     AnimationCategory, AnimationEffect, AnimationEntry, AnimationTiming, AnimationTrigger,
@@ -1456,6 +1456,21 @@ impl ApplicationCore {
                     None => InterpretResult::Nothing,
                 }
             }
+            InteractionEvent::SetMorphTransitionRequested {
+                element_id,
+                enabled,
+                duration_ms,
+                easing,
+            } => match self.active_slide.clone() {
+                Some(sid) => InterpretResult::Command(Box::new(SetMorphTransition {
+                    target: CanvasTarget::Slide(sid),
+                    element_id,
+                    enabled,
+                    duration_ms,
+                    easing,
+                })),
+                None => InterpretResult::Nothing,
+            },
             InteractionEvent::SetDeckTitleRequested { title } => {
                 InterpretResult::Command(Box::new(SetDeckTitle { new_title: title }))
             }
