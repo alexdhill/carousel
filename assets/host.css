@@ -2352,6 +2352,78 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     }
 }
 
+/* ===================== Quit confirmation dialog ===================== */
+
+.quit-dlg {
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(20, 16, 12, 0.4);
+}
+.quit-dlg__panel {
+    width: 400px;
+    padding: 22px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--r-card, 12px);
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.3);
+}
+.quit-dlg__title {
+    margin: 0 0 6px;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--ink);
+}
+.quit-dlg__sub {
+    margin: 0 0 18px;
+    font-size: 12px;
+    color: var(--label);
+}
+.quit-dlg__row {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+.quit-dlg__btn {
+    height: 32px;
+    padding: 0 14px;
+    border-radius: var(--r-btn);
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+}
+/* Cancel — light neutral pill. */
+.quit-dlg__btn--cancel {
+    border: 0;
+    background: var(--field);
+    color: var(--ink2);
+}
+.quit-dlg__btn--cancel:hover {
+    background: var(--hover);
+}
+/* Exit without saving — outlined, accent text. */
+.quit-dlg__btn--discard {
+    border: 1px solid var(--acc);
+    background: transparent;
+    color: var(--acc-ink);
+}
+.quit-dlg__btn--discard:hover {
+    background: var(--acc-soft);
+}
+/* Save and exit — filled accent (primary). */
+.quit-dlg__btn--save {
+    border: 0;
+    background: var(--acc);
+    color: #fff;
+    box-shadow: 0 1px 2px rgba(181, 86, 58, 0.35);
+}
+.quit-dlg__btn--save:hover {
+    background: var(--acc-hover);
+}
+
 /* ===================== Share / export dropdown ===================== */
 
 .share-menu {

@@ -196,6 +196,13 @@ pub struct ApplicationCore {
     // True only when launched as a new deck from a layout; consumed once by the
     // Ready handler to tell the client to focus the title field, then cleared.
     focus_title: bool,
+    // Set when the user chose "Save and exit" in the quit dialog; consumed by
+    // handle_io_response on IoResponse::Saved to arm quit_requested (the save is
+    // async). Cleared if a fall-through Save-As is cancelled.
+    pending_quit: bool,
+    // Raised when the app should exit after the current handler returns. main.rs
+    // drains it via take_quit_requested and sets ControlFlow::Exit.
+    quit_requested: bool,
 }
 
 impl ApplicationCore {
@@ -268,6 +275,8 @@ impl ApplicationCore {
             pending_export_after_chrome: false,
             font_families: None,
             focus_title,
+            pending_quit: false,
+            quit_requested: false,
         }
     }
 
@@ -557,6 +566,30 @@ impl ApplicationCore {
     fn send_save_state(&self) -> AppResult<()> {
         let dirty: bool = self.dispatcher.deck().has_unsaved_changes();
         self.sender.send(MessageKind::SaveStateUpdate(dirty))
+    }
+
+    // wants_quit_confirmation
+    // Inputs: none. Output: true when a close should raise the quit dialog
+    // (the deck has unsaved changes) rather than exiting immediately. Read by
+    // main.rs on WindowEvent::CloseRequested for the editor window.
+    pub fn wants_quit_confirmation(&self) -> bool {
+        self.dispatcher.deck().has_unsaved_changes()
+    }
+
+    // show_quit_dialog
+    // Inputs: none. Output: Ok(()) after asking the webview to raise the
+    // unsaved-changes confirmation. Errors: IPC send failure.
+    pub fn show_quit_dialog(&self) -> AppResult<()> {
+        self.sender.send(MessageKind::ShowQuitDialog)
+    }
+
+    // take_quit_requested
+    // Inputs: none. Output: the quit_requested flag, cleared to false. main.rs
+    // calls this after each ipc / io handler and exits when it returns true.
+    pub fn take_quit_requested(&mut self) -> bool {
+        let requested: bool = self.quit_requested;
+        self.quit_requested = false;
+        requested
     }
 
     // send_slide_list
@@ -1532,6 +1565,15 @@ impl ApplicationCore {
                         }))
                     }
                     None => InterpretResult::Nothing,
+                }
+            }
+            InteractionEvent::QuitConfirmed { save } => {
+                if save {
+                    self.pending_quit = true;
+                    InterpretResult::FileAction(FileAction::Save)
+                } else {
+                    self.quit_requested = true;
+                    InterpretResult::Nothing
                 }
             }
             InteractionEvent::KeyPressed { ref key, .. } if key == UNDO_KEY => {
@@ -2540,6 +2582,7 @@ private copy (~150 MB).",
             Some(p) => ensure_extension(p, BUNDLE_FILE_EXTENSION),
             None => {
                 debug!("file: save-as cancelled by user");
+                self.pending_quit = false;
                 return Ok(());
             }
         };
@@ -2675,6 +2718,10 @@ private copy (~150 MB).",
                     for layout in deck.theme.layouts.values_mut() {
                         layout.dirty = false;
                     }
+                }
+                if self.pending_quit {
+                    self.pending_quit = false;
+                    self.quit_requested = true;
                 }
                 self.send_save_state()
             }

@@ -193,6 +193,12 @@ pub enum MessageKind {
     // unsaved-changes dot beside the deck title. Sent after every mutation
     // and after save / load.
     SaveStateUpdate(bool),
+
+    // ShowQuitDialog
+    // Ask the editor webview to raise the unsaved-changes quit confirmation.
+    // Sent only when a close is requested while the deck has unsaved changes;
+    // the three buttons reply with QuitConfirmed or dismiss locally.
+    ShowQuitDialog,
 }
 
 // ---------- JS -> Rust payloads ----------
@@ -648,6 +654,12 @@ pub enum InteractionEvent {
     // a new group at the top member's z-slot. The Rust side mints the group id.
     GroupSelectionRequested {
         element_ids: Vec<ElementId>,
+    },
+    // QuitConfirmed — a button in the unsaved-changes quit dialog. `save=true`
+    // saves then exits; `save=false` exits without saving. Cancel dismisses the
+    // dialog client-side and sends nothing.
+    QuitConfirmed {
+        save: bool,
     },
 }
 

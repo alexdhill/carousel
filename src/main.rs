@@ -226,7 +226,9 @@ fn install_main_menu() {
         // Application menu — Quit.
         let app_item: *mut Object = msg_send![class!(NSMenuItem), new];
         let app_menu: *mut Object = msg_send![class!(NSMenu), new];
-        let quit: *mut Object = menu_item("Quit", sel!(terminate:), "q");
+        // performClose: (not terminate:) so Cmd+Q routes through the tao
+        // CloseRequested path, where the unsaved-changes quit dialog lives.
+        let quit: *mut Object = menu_item("Quit", sel!(performClose:), "q");
         let _: () = msg_send![app_menu, addItem: quit];
         let _: () = msg_send![quit, release];
         let _: () = msg_send![app_item, setSubmenu: app_menu];
@@ -696,6 +698,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         error!("handle_ipc failed: {}", e);
                     }
                 }
+                if app.as_mut().is_some_and(|a| a.take_quit_requested()) {
+                    info!("quit confirmed; exiting");
+                    *control_flow = ControlFlow::Exit;
+                }
             }
             Event::UserEvent(UserEvent::FlushPatches) => {
                 if let Some(app) = app.as_mut()
@@ -711,6 +717,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     {
                         error!("handle_io_response failed: {}", e);
                     }
+                }
+                if app.as_mut().is_some_and(|a| a.take_quit_requested()) {
+                    info!("save-and-exit committed; exiting");
+                    *control_flow = ControlFlow::Exit;
                 }
             }
             Event::UserEvent(UserEvent::OpenPresentation) => {
@@ -854,8 +864,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     present_window = None;
                 } else if Some(window_id) == editor_window.as_ref().map(|w| w.id()) {
-                    info!("editor closed; exiting");
-                    *control_flow = ControlFlow::Exit;
+                    match app.as_ref() {
+                        Some(a) if a.wants_quit_confirmation() => {
+                            info!("editor close requested with unsaved changes; confirming");
+                            if let Err(e) = a.show_quit_dialog() {
+                                error!("show_quit_dialog failed: {}", e);
+                            }
+                        }
+                        _ => {
+                            info!("editor closed; exiting");
+                            *control_flow = ControlFlow::Exit;
+                        }
+                    }
                 } else if Some(window_id) == landing_window.as_ref().map(|w| w.id()) {
                     info!("landing closed; exiting");
                     *control_flow = ControlFlow::Exit;

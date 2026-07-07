@@ -3227,6 +3227,9 @@
                 meta.classList.toggle("doc-meta--dirty", payload === true);
             }
         },
+        ShowQuitDialog: function () {
+            showQuitDialog();
+        },
         SlideInspectorUpdate: function (payload) {
             slideInspectorData = payload || null;
             // Refresh the Slide box if it is the visible state (no selection,
@@ -6795,6 +6798,37 @@
                 sub.style.color = "#c0392b";
             }
         }
+    }
+
+    // showQuitDialog — raise the unsaved-changes quit confirmation. Cancel
+    // dismisses locally; the other two buttons reply with QuitConfirmed and let
+    // Rust drive the save (if any) and the exit. Idempotent: re-raising while
+    // already open is a no-op.
+    function showQuitDialog() {
+        if (document.getElementById("quit-dialog")) {
+            return;
+        }
+        const box = document.createElement("div");
+        box.id = "quit-dialog";
+        box.className = "quit-dlg";
+        box.innerHTML = '<div class="quit-dlg__panel" role="dialog" aria-modal="true">'
+            + '<h2 class="quit-dlg__title">Unsaved changes</h2>'
+            + '<p class="quit-dlg__sub">Save your work before exiting?</p>'
+            + '<div class="quit-dlg__row">'
+            + '<button type="button" class="quit-dlg__btn quit-dlg__btn--cancel">Cancel</button>'
+            + '<button type="button" class="quit-dlg__btn quit-dlg__btn--discard">Exit without saving</button>'
+            + '<button type="button" class="quit-dlg__btn quit-dlg__btn--save">Save and exit</button>'
+            + '</div></div>';
+        box.querySelector(".quit-dlg__btn--cancel").addEventListener("click", function () {
+            box.remove();
+        });
+        box.querySelector(".quit-dlg__btn--discard").addEventListener("click", function () {
+            window.__deck.send("Interaction", { kind: "QuitConfirmed", save: false });
+        });
+        box.querySelector(".quit-dlg__btn--save").addEventListener("click", function () {
+            window.__deck.send("Interaction", { kind: "QuitConfirmed", save: true });
+        });
+        document.body.appendChild(box);
     }
 
     // ---------- thumbnail row ----------
