@@ -3217,6 +3217,12 @@
             renderRulerGuides();
             showGuideInspector();
         },
+        SaveStateUpdate: function (payload) {
+            const meta = document.querySelector(".doc-meta");
+            if (meta) {
+                meta.classList.toggle("doc-meta--dirty", payload === true);
+            }
+        },
         SlideInspectorUpdate: function (payload) {
             slideInspectorData = payload || null;
             // Refresh the Slide box if it is the visible state (no selection,

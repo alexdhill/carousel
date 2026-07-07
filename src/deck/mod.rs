@@ -325,6 +325,16 @@ impl Deck {
             }
         }
     }
+
+    // has_unsaved_changes
+    // Inputs: &self.
+    // Output: true when any slide, the manifest, or any layout is dirty; the
+    // save flags cleared on IoResponse::Saved. Drives the title's unsaved dot.
+    pub fn has_unsaved_changes(&self) -> bool {
+        !self.dirty_slides.is_empty()
+            || self.manifest_dirty
+            || self.theme.layouts.values().any(|l| l.dirty)
+    }
 }
 
 #[cfg(test)]
@@ -363,6 +373,23 @@ mod tests {
         assert!(d.assets.is_empty());
         assert!(d.bundle_path.is_none());
         assert!(!d.manifest.deck_id.is_empty());
+    }
+
+    #[test]
+    fn has_unsaved_changes_tracks_slide_manifest_and_layout_dirt() {
+        let mut d = Deck::sample();
+        assert!(!d.has_unsaved_changes());
+        d.dirty_slides.insert(d.slide_order[0].clone());
+        assert!(d.has_unsaved_changes());
+        d.dirty_slides.clear();
+        assert!(!d.has_unsaved_changes());
+        d.manifest_dirty = true;
+        assert!(d.has_unsaved_changes());
+        d.manifest_dirty = false;
+        if let Some(layout) = d.theme.layouts.values_mut().next() {
+            layout.dirty = true;
+            assert!(d.has_unsaved_changes());
+        }
     }
 
     #[test]

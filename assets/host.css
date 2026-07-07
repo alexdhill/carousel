@@ -366,10 +366,32 @@ button {
 }
 
 .doc-meta {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: 1px;
     line-height: 1.15;
+}
+
+/* Accent dot to the left of the title. Absolutely positioned in the gap so
+   it never shifts the title; a faint accent glow makes it read as lit.
+   Invisible until the deck has unsaved changes (.doc-meta--dirty). */
+.doc-meta__dot {
+    position: absolute;
+    left: -10px;
+    top: 32%;
+    transform: translateY(-50%);
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--acc);
+    box-shadow: 0 0 6px 1px color-mix(in srgb, var(--acc) 40%, transparent);
+    opacity: 0;
+    pointer-events: none;
+}
+
+.doc-meta--dirty .doc-meta__dot {
+    opacity: 1;
 }
 
 .doc-meta__title {
@@ -1228,8 +1250,7 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
     background:
         radial-gradient(circle, #fff 0%, rgba(255, 255, 255, 0) 70%),
-        conic-gradient(from 0deg,
-            #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+        conic-gradient(from 0deg, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
     cursor: crosshair;
     touch-action: none;
 }
@@ -1248,7 +1269,9 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     margin: -6px 0 0 -6px;
     border-radius: 50%;
     border: 1.5px solid #fff;
-    box-shadow: 0 0 0 1px var(--acc), 0 1px 2px rgba(40, 35, 30, 0.3);
+    box-shadow:
+        0 0 0 1px var(--acc),
+        0 1px 2px rgba(40, 35, 30, 0.3);
     pointer-events: none;
 }
 
@@ -2275,14 +2298,59 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 
 /* ===================== Chromium download modal ===================== */
 
-.chromium-dl { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; background: rgba(20,16,12,0.4); }
-.chromium-dl__panel { width: 360px; padding: 22px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card, 12px); box-shadow: 0 18px 50px rgba(0,0,0,0.3); }
-.chromium-dl__title { margin: 0 0 6px; font-size: 15px; font-weight: 600; color: var(--ink); }
-.chromium-dl__sub { margin: 0 0 14px; font-size: 12px; color: var(--label); }
-.chromium-dl__track { height: 8px; border-radius: 999px; background: var(--field); overflow: hidden; }
-.chromium-dl__bar { height: 100%; width: 0; background: var(--acc); border-radius: 999px; transition: width 0.2s; }
-.chromium-dl__bar--indet { width: 40% !important; animation: chromium-dl-indet 1.1s ease-in-out infinite; }
-@keyframes chromium-dl-indet { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }
+.chromium-dl {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(20, 16, 12, 0.4);
+}
+.chromium-dl__panel {
+    width: 360px;
+    padding: 22px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--r-card, 12px);
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.3);
+}
+.chromium-dl__title {
+    margin: 0 0 6px;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--ink);
+}
+.chromium-dl__sub {
+    margin: 0 0 14px;
+    font-size: 12px;
+    color: var(--label);
+}
+.chromium-dl__track {
+    height: 8px;
+    border-radius: 999px;
+    background: var(--field);
+    overflow: hidden;
+}
+.chromium-dl__bar {
+    height: 100%;
+    width: 0;
+    background: var(--acc);
+    border-radius: 999px;
+    transition: width 0.2s;
+}
+.chromium-dl__bar--indet {
+    width: 40% !important;
+    animation: chromium-dl-indet 1.1s ease-in-out infinite;
+}
+@keyframes chromium-dl-indet {
+    0% {
+        margin-left: -40%;
+    }
+    100% {
+        margin-left: 100%;
+    }
+}
 
 /* ===================== Share / export dropdown ===================== */
 
@@ -2388,7 +2456,11 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     flex: 1 1 auto;
     min-height: 240px;
     resize: vertical;
-    font: 13px ui-monospace, SFMono-Regular, Menlo, monospace;
+    font:
+        13px ui-monospace,
+        SFMono-Regular,
+        Menlo,
+        monospace;
     color: var(--ink);
     background: var(--field);
     border: 1px solid var(--line);
@@ -2483,12 +2555,18 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     pointer-events: none;
 }
 .guide--inherited.guide--h {
-    background: repeating-linear-gradient(to right,
-        var(--acc-line) 0 6px, transparent 6px 12px);
+    background: repeating-linear-gradient(
+        to right,
+        var(--acc-line) 0 6px,
+        transparent 6px 12px
+    );
 }
 .guide--inherited.guide--v {
-    background: repeating-linear-gradient(to bottom,
-        var(--acc-line) 0 6px, transparent 6px 12px);
+    background: repeating-linear-gradient(
+        to bottom,
+        var(--acc-line) 0 6px,
+        transparent 6px 12px
+    );
 }
 
 .snap-guide--line {

@@ -341,7 +341,8 @@ impl ApplicationCore {
                 self.send_font_list()?;
                 self.send_active_slide()?;
                 self.send_slide_animations()?;
-                self.send_guides()
+                self.send_guides()?;
+                self.send_save_state()
             }
             MessageKind::Interaction(event) => self.handle_interaction(event),
             other => {
@@ -548,6 +549,14 @@ impl ApplicationCore {
             None => return Ok(()),
         };
         self.sender.send(MessageKind::ObjectTreeUpdate(tree))
+    }
+
+    // send_save_state
+    // Inputs: none. Output: Ok(()) after shipping one SaveStateUpdate with
+    // the deck's current unsaved-changes flag so JS toggles the title dot.
+    fn send_save_state(&self) -> AppResult<()> {
+        let dirty: bool = self.dispatcher.deck().has_unsaved_changes();
+        self.sender.send(MessageKind::SaveStateUpdate(dirty))
     }
 
     // send_slide_list
@@ -1994,6 +2003,10 @@ impl ApplicationCore {
                 warn!("paste selection broadcast failed: {}", e);
             }
         }
+        // Any mutation may have changed the unsaved-changes state.
+        if let Err(e) = self.send_save_state() {
+            warn!("save-state broadcast after dispatch failed: {}", e);
+        }
     }
 
     // resync_after_slide_list_change
@@ -2644,8 +2657,11 @@ private copy (~150 MB).",
                     deck.bundle_path = Some(path);
                     deck.dirty_slides.clear();
                     deck.manifest_dirty = false;
+                    for layout in deck.theme.layouts.values_mut() {
+                        layout.dirty = false;
+                    }
                 }
-                Ok(())
+                self.send_save_state()
             }
             IoResponse::Loaded { serialized, path } => {
                 info!(path = %path.display(), "file: load received");
@@ -2657,7 +2673,8 @@ private copy (~150 MB).",
                     .send(MessageKind::SetSelection(SelectionState::empty()))?;
                 self.send_slide_list()?;
                 self.send_assets_bundle()?;
-                self.send_active_slide()
+                self.send_active_slide()?;
+                self.send_save_state()
             }
             IoResponse::ThemeSaved { path } => {
                 info!(path = %path.display(), "theme: save committed");

@@ -186,6 +186,13 @@ pub enum MessageKind {
     // slide mount and after any slide-metadata command so the Slide box (shown
     // when nothing is selected) stays in sync.
     SlideInspectorUpdate(SlideInspectorData),
+
+    // SaveStateUpdate
+    // True when the deck has unsaved changes (a dirty slide, dirty manifest,
+    // or a dirty layout); false when everything is persisted. Drives the
+    // unsaved-changes dot beside the deck title. Sent after every mutation
+    // and after save / load.
+    SaveStateUpdate(bool),
 }
 
 // ---------- JS -> Rust payloads ----------
