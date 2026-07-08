@@ -132,9 +132,11 @@ fn encode_asset(media_type: &str, bytes: &[u8]) -> Option<(String, String)> {
 
 // downscale
 // Inputs: raw image bytes.
-// Output: Some(("image/png", png_bytes)) when the image decodes and is larger
-// than THUMB_MAX_DIM on either edge; None when it is already small or does not
-// decode (leaving the caller to inline the original).
+// Output: Some((mime, bytes)) when the image decodes and is larger than
+// THUMB_MAX_DIM on either edge; None when it is already small or does not decode
+// (leaving the caller to inline the original). Opaque images re-encode as JPEG
+// (far smaller for photographs); images with an alpha channel stay PNG so
+// transparency survives.
 fn downscale(bytes: &[u8]) -> Option<(String, Vec<u8>)> {
     let img = image::load_from_memory(bytes).ok()?;
     if img.width() <= THUMB_MAX_DIM && img.height() <= THUMB_MAX_DIM {
@@ -142,8 +144,18 @@ fn downscale(bytes: &[u8]) -> Option<(String, Vec<u8>)> {
     }
     let thumb = img.resize(THUMB_MAX_DIM, THUMB_MAX_DIM, FilterType::Triangle);
     let mut out: Vec<u8> = Vec::new();
-    thumb.write_to(&mut Cursor::new(&mut out), ImageFormat::Png).ok()?;
-    Some(("image/png".to_string(), out))
+    if thumb.color().has_alpha() {
+        thumb.write_to(&mut Cursor::new(&mut out), ImageFormat::Png).ok()?;
+        return Some(("image/png".to_string(), out));
+    }
+    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
+        Cursor::new(&mut out),
+        THUMB_JPEG_QUALITY,
+    );
+    image::DynamicImage::ImageRgb8(thumb.to_rgb8())
+        .write_with_encoder(encoder)
+        .ok()?;
+    Some(("image/jpeg".to_string(), out))
 }
 
 #[cfg(test)]

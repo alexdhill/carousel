@@ -18,14 +18,11 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 rfd = "0.15"
 sha2 = "0.10"
 base64 = "0.22"
+image = { version = "0.25" }
 font-kit = "0.14"
 headless_chrome = "1.0.22"
 ureq = "3"
 
-# macOS only: used to install a minimal NSApp main menu so wry 0.45's
-# keyDown handler has a valid (empty) performKeyEquivalent: target instead
-# of dereferencing a null main menu. Already present transitively via
-# tao/wry, so this adds no new crates to the build graph.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2"
 
@@ -38,9 +35,6 @@ unwrap_used = "deny"
 expect_used = "deny"
 
 [lints.rust]
-# objc 0.2's msg_send!/sel! macros expand to `#[cfg(feature = "cargo-clippy")]`
-# in our crate. We define no such feature, so declare it expected to keep
-# the build warning-free without blanket-allowing unexpected_cfgs.
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
 
 [profile.release]
