@@ -526,12 +526,19 @@ fn send_landing(webview: &WebView, data: &LandingData) {
 // landing_data
 // Output: the recents + template rows for the landing webview.
 fn landing_data() -> LandingData {
+    // ponytail: builds each recent's thumbnail synchronously on the main thread
+    // at landing open (N <= recents CAP). Move build_thumb onto the io thread
+    // and stream thumbs in if this ever stalls the landing paint.
     let recents: Vec<LandingRecent> = recents::load()
         .into_iter()
-        .map(|r| LandingRecent {
-            path: r.path,
-            title: r.title,
-            modified: r.modified,
+        .map(|r| {
+            let thumb = html::thumbnail::build_thumb(std::path::Path::new(&r.path));
+            LandingRecent {
+                path: r.path,
+                title: r.title,
+                modified: r.modified,
+                thumb,
+            }
         })
         .collect();
     let templates: Vec<LandingTemplate> = deck::templates::catalog()

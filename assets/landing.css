@@ -67,7 +67,7 @@ body {
 
 .landing__cards {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    grid-template-columns: repeat(auto-fill, 180px);
     gap: 12px;
 }
 
@@ -109,6 +109,11 @@ body {
 }
 
 .landing__tile-bar { position: absolute; border-radius: 3px; }
+
+/* First-slide thumbnail: the surface holds the slide at native pixel size and
+   is scaled down by JS (transform-origin top-left); the tile clips the rest. */
+.landing__thumb-stage { position: absolute; inset: 0; pointer-events: none; }
+.landing__thumb-surface { position: absolute; top: 0; left: 0; transform-origin: top left; }
 
 .landing__card-label {
     display: flex;
