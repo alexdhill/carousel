@@ -843,6 +843,10 @@ impl ApplicationCore {
         self.selection = SelectionState::empty();
         self.sender
             .send(MessageKind::SetSelection(SelectionState::empty()))?;
+        // Re-ship the layout list so JS refreshes the active-layout inspector
+        // data (Name + background) and re-highlights the active thumbnail; the
+        // slide-mode analogue is send_slide_inspector inside send_active_slide.
+        self.send_layout_list()?;
         self.send_active_slide()?;
         self.send_guides()
     }

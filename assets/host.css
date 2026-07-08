@@ -807,21 +807,27 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     overflow: hidden;
 }
 
-.inspector__scroll {
+/* Single scroll region for the whole styles pane: the slide/layout box, the
+   dynamic element sections, globals, and the theme actions all scroll together
+   below the fixed header. */
+.inspector__body {
     flex: 1 1 auto;
     /* min-height:0 lets this flex child shrink below its content height so it
        actually scrolls instead of growing and being clipped by the panel. */
     min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
+}
+
+.inspector__scroll {
     padding: 4px 0 6px;
 }
 
 /* Conditional overscroll: while an in-DOM dropdown/popover is open, lock the
    styles pane so a wheel over the pane can't scroll the anchored list out from
    under its input. The popovers keep their own internal scroll. */
-.panel--inspector:has(.inspector__fontcombo-pop:not([hidden])) .inspector__scroll,
-.panel--inspector:has(.animations__add-menu:not([hidden])) .inspector__scroll {
+.panel--inspector:has(.inspector__fontcombo-pop:not([hidden])) .inspector__body,
+.panel--inspector:has(.animations__add-menu:not([hidden])) .inspector__body {
     overflow-y: hidden;
 }
 
@@ -896,6 +902,13 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 
 .inspector__field--full {
     grid-column: 1 / -1;
+}
+
+/* Slide-only fields (title/layout/notes) are hidden in layout mode via the
+   `hidden` attribute; the class rule above sets display:flex, so restore the
+   hide with a matching-specificity attribute rule. */
+[data-slide-only][hidden] {
+    display: none;
 }
 
 .inspector__field-label {

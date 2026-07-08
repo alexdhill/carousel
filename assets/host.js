@@ -5652,8 +5652,12 @@
         if (bg && document.activeElement !== bg) {
             bg.value = isHexColor((data && data.background) || "") ? data.background : "#000000";
         }
+        const titleLabel = document.getElementById("slide-title-label");
+        if (titleLabel) {
+            titleLabel.textContent = layoutMode ? "Name" : "Title";
+        }
         if (title && document.activeElement !== title) {
-            title.value = (data && data.title) || "";
+            title.value = (data && (layoutMode ? data.name : data.title)) || "";
         }
         if (notes && document.activeElement !== notes) {
             notes.value = (data && data.notes) || "";
@@ -5796,6 +5800,17 @@
         const title = document.getElementById("slide-title");
         if (title) {
             title.addEventListener("blur", function () {
+                if (currentMode === "layout") {
+                    if (!layoutBgData || !layoutBgData.layout_id) {
+                        return;
+                    }
+                    window.__deck.send("Interaction", {
+                        kind: "LayoutNameEditRequested",
+                        layout_id: layoutBgData.layout_id,
+                        new_name: title.value,
+                    });
+                    return;
+                }
                 if (!slideInspectorData) {
                     return;
                 }
