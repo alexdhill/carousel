@@ -58,3 +58,15 @@ Not done yet: wiring these into CI so releases ship an installable artifact —
 a macOS `.app` (embedding `Info.plist`), a Windows installer (writing the
 registry keys), and a Linux package/AppImage (installing the `.desktop` +
 MIME). Until then these are applied manually for testing.
+
+## Release artifacts
+
+Each tagged release attaches:
+
+- `Carousel-aarch64.dmg` / `Carousel-x86_64.dmg` — macOS (Apple Silicon /
+  Intel), signed + notarized. Open the dmg, drag Carousel to Applications.
+- `Carousel-Setup-x86_64.exe` — Windows installer. Unsigned, so SmartScreen
+  shows "More info → Run anyway" on first launch. Installs the app and the
+  `.deck` association.
+- `Carousel-x86_64.deb` — Debian/Ubuntu. `sudo apt install ./Carousel-x86_64.deb`
+  (pulls `libwebkit2gtk-4.1-0`), then `.deck` files open in Carousel.
