@@ -142,10 +142,10 @@ mod tests {
     fn set_text_clears_placeholder_flag() {
         let (mut deck, sid, eid) = fresh_deck_first_text_child();
         // Force the target into placeholder state, then edit it.
-        if let Some(canvas) = deck.canvas_mut(&CanvasTarget::Slide(sid.clone())) {
-            if let Some(el) = canvas.find_element_mut(&eid) {
-                el.placeholder = true;
-            }
+        if let Some(canvas) = deck.canvas_mut(&CanvasTarget::Slide(sid.clone()))
+            && let Some(el) = canvas.find_element_mut(&eid)
+        {
+            el.placeholder = true;
         }
         SetTextContent {
             target: CanvasTarget::Slide(sid.clone()),
