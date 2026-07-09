@@ -127,7 +127,7 @@ impl PresentCursor {
     // Output: the mount payload for the current slide. None if out of range.
     pub fn current_slide_payload(&self, deck: &Deck) -> Option<PresentSlidePayload> {
         let sid: &SlideId = deck.slide_order.get(self.slide_index)?;
-        Some(slide_payload(deck, sid))
+        Some(slide_payload(deck, sid, self.slide_index + 1, deck.slide_order.len()))
     }
 
     // snapped_slide_change
@@ -142,7 +142,8 @@ impl PresentCursor {
     ) -> PresentStep {
         let sid: SlideId = deck.slide_order[self.slide_index].clone();
         let timeline = self.timeline(deck, &sid);
-        let mut slide: PresentSlidePayload = slide_payload(deck, &sid);
+        let mut slide: PresentSlidePayload =
+            slide_payload(deck, &sid, self.slide_index + 1, deck.slide_order.len());
         slide.transition = transition;
         PresentStep::SlideChanged {
             slide,
@@ -164,14 +165,22 @@ impl PresentCursor {
 // Output: the PresentSlidePayload (serialized HTML + theme/globals CSS). A
 // missing slide yields empty HTML rather than panicking — the caller guards
 // membership, so this is defensive only.
-fn slide_payload(deck: &Deck, sid: &str) -> PresentSlidePayload {
+fn slide_payload(deck: &Deck, sid: &str, number: usize, count: usize) -> PresentSlidePayload {
     assert!(!sid.is_empty(), "slide_payload: empty slide id");
+    let opts: crate::html::serialize::RenderOpts = crate::html::serialize::RenderOpts {
+        ctx: Some(crate::html::serialize::RenderCtx {
+            number,
+            count,
+            date: crate::html::serialize::today_ymd(),
+        }),
+        hide_placeholders: true,
+    };
     let slide_html: String = deck
         .slides
         .get(sid)
         .map(|s| {
             let (fill, img) = deck.effective_slide_bg(s);
-            serialize_slide_themed(s, fill.as_deref(), img.as_deref())
+            serialize_slide_themed(s, fill.as_deref(), img.as_deref(), &opts)
         })
         .unwrap_or_default();
     PresentSlidePayload {

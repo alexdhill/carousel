@@ -1039,6 +1039,8 @@ pub enum Patch {
     SetText {
         element_id: ElementId,
         text: String,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        src: Option<String>,
     },
     SetInnerHtml {
         element_id: ElementId,
@@ -1436,6 +1438,7 @@ mod tests {
             Patch::SetText {
                 element_id: "a".into(),
                 text: "hi".into(),
+                src: None,
             },
             Patch::SetInnerHtml {
                 element_id: "a".into(),

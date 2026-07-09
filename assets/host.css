@@ -838,7 +838,8 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 .inspector__section-header {
     width: 100%;
     background: transparent;
-    border: 0;
+    border: 1px 0 0 0;
+    border-color: var(--line);
     color: var(--ink2);
     font: inherit;
     font-size: 11px;

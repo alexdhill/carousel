@@ -426,6 +426,38 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
+    fn bundle_preserves_raw_token_text() {
+        use crate::deck::builders::{group_element, text_element};
+        let mut deck = Deck::sample();
+        let sid = deck.slide_order[0].clone();
+        deck.slides.get_mut(&sid).unwrap().root =
+            group_element("root", vec![text_element("tk", "Slide ${slideNumber}")]);
+        let serialized = serialize_deck(&deck).unwrap();
+        let back = deserialize_deck(serialized).unwrap();
+        let child = &back.slides[&sid].root.children[0];
+        match &child.content {
+            crate::deck::ElementContent::Text(rt) => assert_eq!(rt.plain, "Slide ${slideNumber}"),
+            _ => panic!("expected text"),
+        }
+    }
+
+    #[test]
+    fn bundle_preserves_placeholder_flag() {
+        use crate::deck::builders::{group_element, text_element};
+        let mut deck = Deck::sample();
+        let sid = deck.slide_order[0].clone();
+        let mut ph = text_element("layout_text_title", "Title");
+        ph.placeholder = true;
+        let edited = text_element("layout_text_body", "real");
+        deck.slides.get_mut(&sid).unwrap().root =
+            group_element("root", vec![ph, edited]);
+        let back = deserialize_deck(serialize_deck(&deck).unwrap()).unwrap();
+        let kids = &back.slides[&sid].root.children;
+        assert!(kids.iter().find(|c| c.id == "layout_text_title").unwrap().placeholder);
+        assert!(!kids.iter().find(|c| c.id == "layout_text_body").unwrap().placeholder);
+    }
+
+    #[test]
     fn serialize_sample_deck_has_manifest_theme_slides_assets() {
         let deck = Deck::sample();
         let s = serialize_deck(&deck).unwrap();

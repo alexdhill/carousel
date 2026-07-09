@@ -50,7 +50,15 @@ pub fn build_thumb(path: &Path) -> Option<ThumbData> {
     assert!(!deck.slide_order.is_empty(), "slide_order lost first id");
 
     let (fill, img) = deck.effective_slide_bg(slide);
-    let html: String = serialize_slide_themed(slide, fill.as_deref(), img.as_deref());
+    let opts: crate::html::serialize::RenderOpts = crate::html::serialize::RenderOpts {
+        ctx: Some(crate::html::serialize::RenderCtx {
+            number: 1,
+            count: deck.slide_order.len(),
+            date: crate::html::serialize::today_ymd(),
+        }),
+        hide_placeholders: true,
+    };
+    let html: String = serialize_slide_themed(slide, fill.as_deref(), img.as_deref(), &opts);
     let css: String = format!(
         "{}\n{}\n{}",
         ANIMATION_KEYFRAMES_CSS, deck.theme.theme_css, deck.theme.globals_css

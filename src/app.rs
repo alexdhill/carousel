@@ -523,9 +523,23 @@ impl ApplicationCore {
                 let deck = self.dispatcher.deck();
                 let slide = deck.slides.get(id)?;
                 let (fill, img) = deck.effective_slide_bg(slide);
+                let number: usize = deck
+                    .slide_order
+                    .iter()
+                    .position(|s| s == id)
+                    .map(|p| p + 1)
+                    .unwrap_or(1);
+                let opts: crate::html::serialize::RenderOpts = crate::html::serialize::RenderOpts {
+                    ctx: Some(crate::html::serialize::RenderCtx {
+                        number,
+                        count: deck.slide_order.len(),
+                        date: crate::html::serialize::today_ymd(),
+                    }),
+                    hide_placeholders: false,
+                };
                 Some((
                     id.clone(),
-                    serialize_slide_themed(slide, fill.as_deref(), img.as_deref()),
+                    serialize_slide_themed(slide, fill.as_deref(), img.as_deref(), &opts),
                     build_object_tree(slide),
                 ))
             }
@@ -3500,7 +3514,9 @@ fn build_object_tree_node(node: &ElementNode) -> ObjectTreeNode {
 // the manifest title is empty.
 fn build_slide_list_data(deck: &Deck, active_slide: Option<&SlideId>) -> SlideListData {
     let mut slides: Vec<SlideListEntry> = Vec::with_capacity(deck.slide_order.len());
-    for sid in &deck.slide_order {
+    let count: usize = deck.slide_order.len();
+    let date: String = crate::html::serialize::today_ymd();
+    for (idx, sid) in deck.slide_order.iter().enumerate() {
         let slide = match deck.slides.get(sid) {
             Some(s) => s,
             None => {
@@ -3513,7 +3529,15 @@ fn build_slide_list_data(deck: &Deck, active_slide: Option<&SlideId>) -> SlideLi
             _ => sid.clone(),
         };
         let (fill, img) = deck.effective_slide_bg(slide);
-        let html: String = serialize_slide_themed(slide, fill.as_deref(), img.as_deref());
+        let opts: crate::html::serialize::RenderOpts = crate::html::serialize::RenderOpts {
+            ctx: Some(crate::html::serialize::RenderCtx {
+                number: idx + 1,
+                count,
+                date: date.clone(),
+            }),
+            hide_placeholders: false,
+        };
+        let html: String = serialize_slide_themed(slide, fill.as_deref(), img.as_deref(), &opts);
         slides.push(SlideListEntry {
             slide_id: sid.clone(),
             title,
@@ -3659,6 +3683,7 @@ fn build_image_element_from_asset(
         }),
         children: vec![],
         placeholder_fill: None,
+        placeholder: false,
         name: None,
         link: None,
         attributes: BTreeMap::new(),
@@ -4472,6 +4497,7 @@ fn default_text_element() -> ElementNode {
         content: ElementContent::Text(RichText::new("New Text")),
         children: vec![],
         placeholder_fill: None,
+        placeholder: false,
         name: None,
         link: None,
         attributes: BTreeMap::new(),
@@ -4495,6 +4521,7 @@ fn default_shape_element() -> ElementNode {
         content: ElementContent::Shape(ShapeGeometry::Rectangle),
         children: vec![],
         placeholder_fill: None,
+        placeholder: false,
         name: None,
         link: None,
         attributes: BTreeMap::new(),
@@ -4527,6 +4554,7 @@ fn default_group_element() -> ElementNode {
         content: ElementContent::Group,
         children: vec![],
         placeholder_fill: None,
+        placeholder: false,
         name: None,
         link: None,
         attributes: BTreeMap::new(),
@@ -4583,6 +4611,7 @@ fn default_table_element() -> ElementNode {
         content: ElementContent::Table(data),
         children: vec![],
         placeholder_fill: None,
+        placeholder: false,
         name: None,
         link: None,
         attributes: BTreeMap::new(),
@@ -4612,6 +4641,7 @@ padding:12px;\">&lt;!-- HTML block: double-click to edit --&gt;</div>";
         content: ElementContent::Embed(placeholder.to_string()),
         children: vec![],
         placeholder_fill: None,
+        placeholder: false,
         name: None,
         link: None,
         attributes: BTreeMap::new(),

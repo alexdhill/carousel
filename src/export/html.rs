@@ -54,7 +54,9 @@ struct DeckData {
 // Errors: serde_json serialization failure (effectively never for this data).
 pub fn build_html_export(deck: &Deck) -> Result<ExportBundle, serde_json::Error> {
     let mut slides: Vec<SlideData> = Vec::with_capacity(deck.slide_order.len());
-    for sid in &deck.slide_order {
+    let count: usize = deck.slide_order.len();
+    let date: String = crate::html::serialize::today_ymd();
+    for (idx, sid) in deck.slide_order.iter().enumerate() {
         let slide = &deck.slides[sid];
         let timeline = &slide.animations;
         let n: usize = step_count(timeline);
@@ -74,7 +76,16 @@ pub fn build_html_export(deck: &Deck) -> Result<ExportBundle, serde_json::Error>
             step += 1;
         }
         let (fill, img) = deck.effective_slide_bg(slide);
-        let html: String = serialize_slide_themed(slide, fill.as_deref(), img.as_deref());
+        let opts = crate::html::serialize::RenderOpts {
+            ctx: Some(crate::html::serialize::RenderCtx {
+                number: idx + 1,
+                count,
+                date: date.clone(),
+            }),
+            hide_placeholders: true,
+        };
+        let html: String =
+            serialize_slide_themed(slide, fill.as_deref(), img.as_deref(), &opts);
         slides.push(SlideData {
             html,
             snaps,
@@ -196,5 +207,22 @@ mod tests {
                 entry.path
             );
         }
+    }
+
+    #[test]
+    fn export_substitutes_slide_tokens() {
+        use crate::deck::builders::{group_element, text_element};
+        let mut deck = Deck::sample();
+        let sid = deck.slide_order[0].clone();
+        // Replace the first child of slide 0 with a token text element.
+        let root = group_element("root", vec![text_element("tk", "${slideNumber}/${slideCount}")]);
+        deck.slides.get_mut(&sid).unwrap().root = root;
+        let bundle = build_html_export(&deck).unwrap();
+        let deck_js = String::from_utf8(file(&bundle, "deck.js").unwrap().to_vec()).unwrap();
+        assert!(
+            deck_js.contains("1/"),
+            "slide 1 number substituted: {}",
+            &deck_js[..200.min(deck_js.len())]
+        );
     }
 }

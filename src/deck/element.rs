@@ -156,9 +156,24 @@ pub struct ElementNode {
     pub attributes: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub inline_styles: BTreeMap<String, String>,
+    // True while this element is a layout-seeded slot still holding its default
+    // (placeholder) content — never edited by the user. Untouched placeholders
+    // render in the editor (styled click-to-edit) but are omitted from playback
+    // (present / export / pdf / thumbnail). Cleared to false by the first
+    // content edit. Added (non-layout) elements are always false.
+    #[serde(default)]
+    pub placeholder: bool,
 }
 
 impl ElementNode {
+    // is_layout_element
+    // Output: true when this element is a layout-seeded slot, identified by the
+    // `layout_<type>_<preset>` id convention. Added (user-inserted) elements
+    // carry ULID ids and return false.
+    pub fn is_layout_element(&self) -> bool {
+        self.id.starts_with("layout_")
+    }
+
     // is_consistent
     // Inputs: self.
     // Output: true if (element_type, style, content) form a coherent triple.
@@ -218,6 +233,9 @@ pub fn regenerate_ids(root: &mut ElementNode) -> std::collections::HashMap<Eleme
         let fresh: ElementId = new_element_id();
         map.insert(node.id.clone(), fresh.clone());
         node.id = fresh;
+        // A regenerated id means this is a fresh copy (paste / duplicate), never
+        // a layout slot — so it is user content, not an untouched placeholder.
+        node.placeholder = false;
         for child in node.children.iter_mut() {
             stack.push(child);
         }
@@ -230,6 +248,23 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
     use crate::deck::builders::{group_element, text_element};
+
+    #[test]
+    fn is_layout_element_by_id_prefix() {
+        let mut layout = crate::deck::builders::text_element("layout_text_title", "T");
+        assert!(layout.is_layout_element());
+        layout.id = "el_01ABC".into();
+        assert!(!layout.is_layout_element());
+    }
+
+    #[test]
+    fn regenerate_ids_clears_placeholder() {
+        let mut n = crate::deck::builders::text_element("layout_text_title", "T");
+        n.placeholder = true;
+        regenerate_ids(&mut n);
+        assert!(!n.placeholder, "a regenerated copy is user content, not a slot");
+        assert!(!n.is_layout_element(), "fresh id is not a layout slot");
+    }
 
     #[test]
     fn regenerate_ids_changes_every_id_and_preserves_structure() {

@@ -552,6 +552,11 @@
                 break;
             case "SetText":
                 el.textContent = patch.text;
+                if (typeof patch.src === "string") {
+                    el.dataset.src = patch.src;
+                } else if (el.dataset) {
+                    delete el.dataset.src;
+                }
                 break;
             case "SetInnerHtml":
                 el.innerHTML = patch.html;
@@ -2509,6 +2514,10 @@
             onKeydown: onKeydown,
             onBlur: onBlur,
         };
+        // Tokened text renders its resolved value; edit the raw ${…} source.
+        if (target.dataset && typeof target.dataset.src === "string") {
+            target.textContent = target.dataset.src;
+        }
         target.setAttribute("contenteditable", "true");
         target.spellcheck = false;
         target.addEventListener("keydown", onKeydown);
