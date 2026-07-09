@@ -4311,13 +4311,18 @@
         const pw = pop.offsetWidth || 240;
         const ph = pop.offsetHeight || 300;
         let left = r.left;
-        let top = r.bottom + 6;
+        let top = r.bottom + 8;
         left = Math.max(8, Math.min(left, window.innerWidth - pw - 8));
+        let above = false;
         if (top + ph > window.innerHeight - 8) {
-            top = Math.max(8, r.top - ph - 6);
+            top = Math.max(8, r.top - ph - 8);
+            above = true;
         }
         pop.style.left = left + "px";
         pop.style.top = top + "px";
+        pop.classList.toggle("colorpop--above", above);
+        const cx = r.left + r.width / 2 - left;
+        pop.style.setProperty("--arrow-x", Math.max(10, Math.min(cx, pw - 10)) + "px");
     }
 
     // makeColorControl
@@ -4335,37 +4340,80 @@
         const fill = document.createElement("span");
         fill.className = "inspector__color-fill";
         swatch.appendChild(fill);
-        const hexLabel = document.createElement("span");
-        hexLabel.className = "inspector__color-hex";
-        hexLabel.textContent = "—";
+        const hexInput = document.createElement("input");
+        hexInput.className = "inspector__color-hex";
+        hexInput.spellcheck = false;
+        // Growing gap between the hex text and the percentage: clicking here
+        // opens the picker (only the hex text itself edits).
+        const gap = document.createElement("span");
+        gap.className = "inspector__color-gap";
+        const pct = document.createElement("span");
+        pct.className = "inspector__color-pct";
+        pct.textContent = "100%";
         box.appendChild(swatch);
-        box.appendChild(hexLabel);
+        box.appendChild(hexInput);
+        box.appendChild(gap);
+        box.appendChild(pct);
 
-        const state = { h: 0, s: 0, l: 0, a: 100 };
-        const pop = buildColorPopover(state, render, commit);
+        const state = { h: 0, s: 0, l: 0, a: 100, none: false };
+        const pop = buildColorPopover(state, render, commit, setNone);
+        const alphaPop = buildAlphaPopover(state, render, commit);
         document.body.appendChild(pop.el);
+        document.body.appendChild(alphaPop.el);
 
-        // render: repaint the inline swatch + every popover control from state.
-        // No commit (callers commit explicitly). Skips inputs the user is
-        // actively dragging so live edits aren't clobbered.
-        function render() {
+        function stateHex() {
             const rgb = window.__style.hslToRgb(state.h, state.s, state.l);
-            const hex = window.__style.rgbToHex(rgb.r, rgb.g, rgb.b);
+            return window.__style.rgbToHex(rgb.r, rgb.g, rgb.b);
+        }
+        // render: repaint the inline row + popovers from state. No commit
+        // (callers commit explicitly). Skips inputs the user is editing.
+        function render() {
+            const hex = stateHex();
             const css = window.__style.composeRgba(hex, state.a);
-            fill.style.background = css;
-            hexLabel.textContent = hex.toUpperCase();
+            if (state.none) {
+                box.classList.add("inspector__color--none");
+                fill.style.background = "";
+                if (document.activeElement !== hexInput) { hexInput.value = "None"; }
+                pct.textContent = "";
+            } else {
+                box.classList.remove("inspector__color--none");
+                fill.style.background = css;
+                if (document.activeElement !== hexInput) {
+                    hexInput.value = hex.toUpperCase();
+                }
+                pct.textContent = Math.round(state.a) + "%";
+            }
+            hexInput.size = Math.max(hexInput.value.length, 1);
             pop.render(state, hex, css);
+            alphaPop.render(state, hex);
         }
         function commit() {
             box.dispatchEvent(new Event("change"));
         }
+        function setNone() {
+            state.none = true;
+            closePop();
+            render();
+            commit();
+        }
+        // Apply a parsed { hex, alpha } to state, keeping hue on achromatic
+        // colours so the wheel doesn't snap to red on grey/black/white.
+        function applyColor(hex, alpha, setAlpha) {
+            const rgb = window.__style.hexToRgb(hex);
+            const hsl = window.__style.rgbToHsl(rgb.r, rgb.g, rgb.b);
+            if (hsl.s > 0) { state.h = hsl.h; }
+            state.s = hsl.s;
+            state.l = hsl.l;
+            if (setAlpha) { state.a = alpha; }
+            state.none = false;
+        }
         function currentCss() {
-            const rgb = window.__style.hslToRgb(state.h, state.s, state.l);
-            const hex = window.__style.rgbToHex(rgb.r, rgb.g, rgb.b);
-            return window.__style.composeRgba(hex, state.a);
+            if (state.none) { return ""; }
+            return window.__style.composeRgba(stateHex(), state.a);
         }
 
         function openPop() {
+            closeAlpha();
             positionColorPopover(pop.el, swatch);
             pop.el.classList.add("colorpop--open");
             render();
@@ -4378,40 +4426,89 @@
             document.removeEventListener("keydown", onEsc, true);
         }
         function onOutside(e) {
-            if (!pop.el.contains(e.target) && !box.contains(e.target)) {
+            if (!pop.el.contains(e.target) && e.target !== swatch
+                    && !swatch.contains(e.target) && e.target !== gap) {
                 closePop();
             }
         }
         function onEsc(e) {
-            if (e.key === "Escape") { e.preventDefault(); closePop(); }
+            if (e.key === "Escape") { e.preventDefault(); closePop(); closeAlpha(); }
         }
-        // Toggle on a click anywhere in the control row, not just the 17px
-        // swatch (matches the old whole-row hit target).
-        box.addEventListener("click", function () {
+        function openAlpha() {
+            if (state.none) { return; }
+            closePop();
+            positionColorPopover(alphaPop.el, pct);
+            alphaPop.el.classList.add("colorpop--open");
+            render();
+            document.addEventListener("pointerdown", onAlphaOutside, true);
+            document.addEventListener("keydown", onEsc, true);
+        }
+        function closeAlpha() {
+            alphaPop.el.classList.remove("colorpop--open");
+            document.removeEventListener("pointerdown", onAlphaOutside, true);
+        }
+        function onAlphaOutside(e) {
+            if (!alphaPop.el.contains(e.target) && e.target !== pct) {
+                closeAlpha();
+            }
+        }
+
+        // Zone 1: swatch (and the gap after the hex text) → colour popover.
+        function togglePop(e) {
+            e.stopPropagation();
             if (pop.el.classList.contains("colorpop--open")) { closePop(); } else { openPop(); }
+        }
+        swatch.addEventListener("click", togglePop);
+        gap.addEventListener("click", togglePop);
+        // Zone 3: percentage → opacity popover.
+        pct.addEventListener("click", function (e) {
+            e.stopPropagation();
+            if (alphaPop.el.classList.contains("colorpop--open")) { closeAlpha(); } else { openAlpha(); }
+        });
+        // Zone 2: hex text → inline edit. 8-digit hex sets colour + alpha;
+        // "none"/empty clears; invalid reverts on blur.
+        hexInput.addEventListener("change", function () {
+            const raw = hexInput.value.trim().toLowerCase();
+            if (raw === "" || raw === "none") { setNone(); return; }
+            const m8 = /^#?([0-9a-f]{6})([0-9a-f]{2})$/.exec(raw);
+            if (m8) {
+                const alpha = Math.round(parseInt(m8[2], 16) / 255 * 100);
+                applyColor("#" + m8[1], alpha, true);
+                render();
+                commit();
+                return;
+            }
+            const hexed = raw[0] === "#" ? raw : "#" + raw;
+            if (!/^#([0-9a-f]{3}|[0-9a-f]{6})$/.test(hexed)) {
+                render();
+                return;
+            }
+            const parsed = window.__style.parseRgba(hexed);
+            applyColor(parsed.hex, parsed.alpha, false);
+            render();
+            commit();
+        });
+        hexInput.addEventListener("keydown", function (e) {
+            if (e.key === "Enter") { e.preventDefault(); hexInput.blur(); }
         });
 
         Object.defineProperty(box, "value", {
             get: currentCss,
             set: function (v) {
-                // While the popover is open the user is editing — the popover
-                // is the source of truth. Ignore the echo from the committed
-                // round-trip so it can't reset the live selection.
-                if (pop.el.classList.contains("colorpop--open")) {
+                // While a popover is open the user is editing — ignore the echo
+                // from the committed round-trip so it can't reset live edits.
+                if (pop.el.classList.contains("colorpop--open")
+                    || alphaPop.el.classList.contains("colorpop--open")) {
                     return;
                 }
-                const parsed = window.__style.parseRgba(v == null ? "" : v);
-                const rgb = window.__style.hexToRgb(parsed.hex);
-                const hsl = window.__style.rgbToHsl(rgb.r, rgb.g, rgb.b);
-                // Achromatic colours (grey/black/white) carry no hue; rgbToHsl
-                // reports h=0. Keep the prior hue so the wheel doesn't snap to
-                // red when lightness/alpha drives the colour to grey.
-                if (hsl.s > 0) {
-                    state.h = hsl.h;
+                const s = String(v == null ? "" : v).trim().toLowerCase();
+                if (s === "" || s === "none" || s === "transparent") {
+                    state.none = true;
+                    render();
+                    return;
                 }
-                state.s = hsl.s;
-                state.l = hsl.l;
-                state.a = parsed.alpha;
+                const parsed = window.__style.parseRgba(v);
+                applyColor(parsed.hex, parsed.alpha, true);
                 render();
             },
         });
@@ -4425,9 +4522,15 @@
     // — the popover DOM (an HS wheel + H/S/L/A sliders + hex field) wired to
     // mutate state then render/commit. `render(state, hex, css)` syncs the
     // popover's own controls (called by the parent's render).
-    function buildColorPopover(state, render, commit) {
+    function buildColorPopover(state, render, commit, setNone) {
         const el = document.createElement("div");
         el.className = "colorpop";
+        const noneBtn = document.createElement("button");
+        noneBtn.type = "button";
+        noneBtn.className = "colorpop__none";
+        noneBtn.textContent = "None";
+        noneBtn.addEventListener("click", function () { setNone(); });
+        el.appendChild(noneBtn);
         const wheel = document.createElement("div");
         wheel.className = "colorpop__wheel";
         // Lightness wash over the hue/sat disc: white above L=50, black below,
@@ -4445,6 +4548,7 @@
         function onAxis(key, scale) {
             return function (e) {
                 state[key] = Number(e.target.value) * scale;
+                state.none = false;
                 render();
             };
         }
@@ -4471,6 +4575,7 @@
             state.h = hsl.h;
             state.s = hsl.s;
             state.l = hsl.l;
+            state.none = false;
             render();
             commit();
         });
@@ -4506,6 +4611,27 @@
         return { el: el, render: renderPopover };
     }
 
+    // buildAlphaPopover
+    // Inputs: shared `state`, render(), commit(). Output: { el, render } — a
+    // small popover holding one 0..100 alpha slider + readout. Drag mutates
+    // state.a then render()s live; release commits. Opened from the row's
+    // percentage span; positioned by positionColorPopover.
+    function buildAlphaPopover(state, render, commit) {
+        const el = document.createElement("div");
+        el.className = "colorpop colorpop--alpha";
+        const slider = makeColorSlider("A", 100, function (e) {
+            state.a = Number(e.target.value);
+            render();
+        }, commit);
+        el.appendChild(slider.row);
+        function renderAlpha(st, hex) {
+            setColorAxis(slider, st.a, Math.round(st.a));
+            slider.input.style.background = "linear-gradient(to right,"
+                + " transparent, " + hex + ")";
+        }
+        return { el: el, render: renderAlpha };
+    }
+
     // setColorAxis: set a slider's value (unless the user is dragging it) and
     // its numeric readout. Keeps live drags from being clobbered by render.
     function setColorAxis(slider, value, shown) {
@@ -4531,6 +4657,7 @@
             if (deg < 0) { deg += 360; }
             state.h = deg;
             state.s = R > 0 ? (dist / R) * 100 : 0;
+            state.none = false;
             render();
         }
         function onMove(e) { fromPointer(e); }
@@ -5772,6 +5899,12 @@
             mount.appendChild(bg);
         }
         bg.addEventListener("change", function () {
+            if (bg.value === "") {
+                showToast("Slide background can't be None",
+                    "Pick a colour or set a background image");
+                renderSlideBox();
+                return;
+            }
             window.__deck.send("Interaction", {
                 kind: "SetSlideBackgroundRequested", background: bg.value,
             });
