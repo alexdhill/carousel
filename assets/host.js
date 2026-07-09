@@ -3861,6 +3861,14 @@
 
     const INSPECTOR_SECTIONS = [
         {
+            id: "presets",
+            label: "Presets",
+            appliesTo: ALL_TYPES,
+            fields: [
+                { prop: "preset", label: "Style preset", kind: "presets", full: true, composite: true },
+            ],
+        },
+        {
             id: "transform",
             label: "Transform",
             appliesTo: NON_GROUP_TYPES,
@@ -3870,14 +3878,6 @@
                 { prop: "size", label: "Size", kind: "size-row", full: true, composite: true },
                 { prop: "rotation", label: "Rotation", kind: "rotation-deg", suffix: "°", icon: "rotation" },
                 { prop: "opacity", label: "Opacity", kind: "number", suffix: "%", percent: true, icon: "opacity" },
-            ],
-        },
-        {
-            id: "presets",
-            label: "Presets",
-            appliesTo: ALL_TYPES,
-            fields: [
-                { prop: "preset", label: "Style preset", kind: "presets", full: true, composite: true },
             ],
         },
         {
