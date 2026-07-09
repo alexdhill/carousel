@@ -306,6 +306,20 @@
         return "#" + to_hex2(r) + to_hex2(g) + to_hex2(b);
     }
 
+    // splitLength
+    // Inputs: a CSS length string (e.g. "16px", "2.5rem", "16", "").
+    // Output: { num: "<number or ''>", unit: "<lowercased unit or ''>" }.
+    // Only the length units the inspector offers are recognised; anything
+    // else (or a non-length) yields { num: "", unit: "" }.
+    function splitLength(s) {
+        const str = String(s == null ? "" : s).trim();
+        const m = /^([-+]?[0-9]*\.?[0-9]+)\s*(px|em|rem|pt|in|pc|cm|mm)?$/i.exec(str);
+        if (!m) {
+            return { num: "", unit: "" };
+        }
+        return { num: m[1], unit: (m[2] || "").toLowerCase() };
+    }
+
     // rgbToHsl
     // Inputs: r, g, b in 0..255. Output: { h, s, l } with h in 0..360 and
     // s, l in 0..100. Achromatic inputs report h = 0, s = 0. Standard HSL
@@ -377,6 +391,7 @@
         hexToRgb: hexToRgb,
         rgbToHex: rgbToHex,
         rgbToHsl: rgbToHsl,
+        splitLength: splitLength,
         hslToRgb: hslToRgb,
         parseBoxShadow: parseBoxShadow,
         composeBoxShadow: composeBoxShadow,

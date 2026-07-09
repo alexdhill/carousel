@@ -3908,10 +3908,10 @@
             appliesTo: TEXT_TYPES,
             fields: [
                 { prop: "font-family", label: "Font", kind: "font-combo", full: true, composite: true },
-                { prop: "font-size", label: "Size", kind: "number", suffix: "px", unit: "px" },
+                { prop: "font-size", label: "Size", kind: "number", unit: "px", unitSelect: true },
                 { prop: "font-weight", label: "Weight", kind: "number", suffix: "" },
                 { prop: "line-height", label: "Line Height", kind: "number", suffix: "" },
-                { prop: "letter-spacing", label: "Letter Spacing", kind: "number", suffix: "px", unit: "px" },
+                { prop: "letter-spacing", label: "Letter Spacing", kind: "number", unit: "px", unitSelect: true },
                 {
                     prop: "text-align", label: "Alignment", kind: "segment", full: true,
                     options: [
@@ -3994,6 +3994,9 @@
 
     // Cluster cell specs: the four longhand props (in cell order) plus the short
     // label each cell shows. `parse` reads the live values off a decl map.
+    // Length units offered by the inspector unit chips (px is the default).
+    const UNITS = ["px", "em", "rem", "pt", "in", "pc", "cm", "mm"];
+
     const CLUSTER_SPECS = {
         width: {
             cells: [
@@ -4164,23 +4167,187 @@
         return wrap;
     }
 
+    // UNIT_CHEVRON: the small down-caret drawn inside a unit chip.
+    const UNIT_CHEVRON = '<svg width="9" height="9" viewBox="0 0 24 24" fill="none"'
+        + ' stroke="currentColor" stroke-width="3" stroke-linecap="round"'
+        + ' stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
+
+    // makeDropdown
+    // Inputs: { label, options:[{value,label}], value, placeholder, variant,
+    //   className, onChange }. Output: a trigger element (button for "field",
+    //   span chip for "chip") styled like the Add-Animation menu. It owns a
+    //   fixed-position popover (single header = `label`, then the options) built
+    //   lazily on open; click-off / Esc close it. Exposes `.value` get/set,
+    //   `.setOptions()`, and fires `change` on selection (drop-in for a native
+    //   <select>). See docs/… unified-dropdown spec.
+    function makeDropdown(opts) {
+        const variant = opts.variant === "chip" ? "chip" : "field";
+        const label = opts.label || "";
+        let placeholder = opts.placeholder || "";
+        let options = (opts.options || []).slice();
+        let value = opts.value == null ? "" : String(opts.value);
+        const trigger = document.createElement(variant === "chip" ? "span" : "button");
+        if (variant === "chip") {
+            trigger.className = "inspector__unitchip tt";
+            trigger.setAttribute("data-tip", label);
+            trigger.setAttribute("data-key", "");
+        } else {
+            trigger.type = "button";
+            trigger.className = "inspector__dropdown";
+        }
+        if (opts.className) { trigger.classList.add(opts.className); }
+        const lab = document.createElement("span");
+        lab.className = variant === "chip"
+            ? "inspector__unitchip-label" : "inspector__dropdown-label";
+        const caret = document.createElement("span");
+        caret.className = variant === "chip"
+            ? "inspector__unitchip-caret" : "inspector__dropdown-caret";
+        caret.innerHTML = UNIT_CHEVRON;
+        trigger.appendChild(lab);
+        trigger.appendChild(caret);
+        const menu = document.createElement("div");
+        menu.className = "dropdown-menu";
+
+        function labelFor(v) {
+            for (let i = 0; i < options.length; i++) {
+                if (options[i].value === v) { return options[i].label; }
+            }
+            return "";
+        }
+        function relabel() {
+            const t = labelFor(value);
+            lab.textContent = t !== "" ? t : placeholder;
+        }
+        function buildMenu() {
+            menu.replaceChildren();
+            const h = document.createElement("div");
+            h.className = "anim-menu__cat";
+            h.textContent = label;
+            menu.appendChild(h);
+            for (let i = 0; i < options.length; i++) {
+                const o = options[i];
+                const b = document.createElement("button");
+                b.type = "button";
+                b.className = "anim-menu__item";
+                b.textContent = o.label;
+                b.setAttribute("aria-selected", o.value === value ? "true" : "false");
+                (function (v) {
+                    b.addEventListener("click", function () { select(v); close(); });
+                }(o.value));
+                menu.appendChild(b);
+            }
+        }
+        function select(v) {
+            value = String(v);
+            relabel();
+            if (opts.onChange) { opts.onChange(value); }
+            trigger.dispatchEvent(new Event("change"));
+        }
+        function open() {
+            buildMenu();
+            document.body.appendChild(menu);
+            menu.style.minWidth = trigger.getBoundingClientRect().width + "px";
+            menu.classList.add("dropdown-menu--open");
+            positionColorPopover(menu, trigger);
+            document.addEventListener("pointerdown", onOutside, true);
+            document.addEventListener("keydown", onEsc, true);
+        }
+        function close() {
+            menu.classList.remove("dropdown-menu--open");
+            menu.remove();
+            document.removeEventListener("pointerdown", onOutside, true);
+            document.removeEventListener("keydown", onEsc, true);
+        }
+        function onOutside(e) {
+            if (!menu.contains(e.target) && !trigger.contains(e.target)) { close(); }
+        }
+        function onEsc(e) {
+            if (e.key === "Escape") { e.preventDefault(); close(); }
+        }
+        trigger.addEventListener("click", function (e) {
+            e.stopPropagation();
+            if (menu.classList.contains("dropdown-menu--open")) { close(); } else { open(); }
+        });
+        Object.defineProperty(trigger, "value", {
+            get: function () { return value; },
+            set: function (v) { value = v == null ? "" : String(v); relabel(); },
+        });
+        trigger.setOptions = function (newOptions) {
+            options = (newOptions || []).slice();
+            relabel();
+        };
+        trigger.setPlaceholder = function (p) {
+            placeholder = p || "";
+            relabel();
+        };
+        relabel();
+        return trigger;
+    }
+
+    // makeUnitChip
+    // Inputs: getUnit() → current unit string, setUnit(u) → commit a new unit.
+    // Output: the "px ▾" chip (a chip-variant dropdown of UNITS). `.sync()`
+    // relabels from getUnit(). Errors: asserts both callbacks are functions.
+    function makeUnitChip(getUnit, setUnit) {
+        console.assert(typeof getUnit === "function" && typeof setUnit === "function",
+            "unit chip needs get/set");
+        const chip = makeDropdown({
+            label: "Unit",
+            variant: "chip",
+            options: UNITS.map(function (u) { return { value: u, label: u }; }),
+            value: getUnit() || "px",
+            onChange: function (u) { setUnit(u); },
+        });
+        chip.sync = function () { chip.value = getUnit() || "px"; };
+        return chip;
+    }
+
+    // makeUnitNumberControl
+    // Inputs: a "number" field definition carrying unitSelect.
+    // Output: a box holding a numeric <input> plus a unit chip. Exposes `.value`
+    // (the bare number, proxying the input) and a live `dataset.unit`; fires
+    // `change` on number commit (Enter/blur) and on unit change. Reinterprets on
+    // unit switch (keeps the number). `setUnit()` sets the unit without a commit
+    // (used by populate). The normal buildField wiring appends dataset.unit.
+    function makeUnitNumberControl(field) {
+        const box = document.createElement("div");
+        box.className = "inspector__unitfield";
+        let unit = field.unit || "px";
+        box.dataset.unit = unit;
+        const input = document.createElement("input");
+        input.className = "inspector__input";
+        input.spellcheck = false;
+        const chip = makeUnitChip(function () { return unit; }, function (u) {
+            unit = u;
+            box.dataset.unit = u;
+            box.dispatchEvent(new Event("change"));
+        });
+        input.addEventListener("change", function () { box.dispatchEvent(new Event("change")); });
+        input.addEventListener("keydown", function (e) {
+            if (e.key === "Enter") { e.preventDefault(); input.blur(); }
+        });
+        box.appendChild(input);
+        box.appendChild(chip);
+        box.setUnit = function (u) {
+            unit = u || "px";
+            box.dataset.unit = unit;
+            chip.sync();
+        };
+        Object.defineProperty(box, "value", {
+            get: function () { return input.value; },
+            set: function (v) { input.value = v; },
+        });
+        return box;
+    }
+
     // buildFieldControl
     // Inputs: a field definition.
     // Output: the bare control element for the field's kind — a <select> for
     // "select", a color swatch for "color", otherwise a text <input> (the
     // Enter-to-blur affordance is wired for text inputs only).
     function buildFieldControl(field) {
-        if (field.kind === "select") {
-            const sel = document.createElement("select");
-            sel.className = "inspector__input inspector__select";
-            const opts = field.options || [];
-            for (let i = 0; i < opts.length; i++) {
-                const o = document.createElement("option");
-                o.value = opts[i].value;
-                o.textContent = opts[i].label;
-                sel.appendChild(o);
-            }
-            return sel;
+        if (field.kind === "number" && field.unitSelect) {
+            return makeUnitNumberControl(field);
         }
         if (field.kind === "segment") {
             return makeSegmentControl(field.options || []);
@@ -4782,6 +4949,7 @@
         const box = document.createElement("div");
         box.className = "inspector__cluster";
         let linked = true;
+        let unit = "px";
         const inputs = [];
         const link = document.createElement("button");
         link.type = "button";
@@ -4791,10 +4959,21 @@
         link.innerHTML = LINK_ICON;
         const grid = document.createElement("div");
         grid.className = "inspector__cluster-grid";
+        const chip = makeUnitChip(function () { return unit; }, function (u) {
+            unit = u;
+            recommitAll();
+        });
         function emitAll(v) {
             for (let j = 0; j < inputs.length; j++) {
                 inputs[j].value = String(v);
-                sendPropertyChanged(spec.cells[j].prop, v + "px");
+                sendPropertyChanged(spec.cells[j].prop, v + unit);
+            }
+        }
+        // Re-post every cell with its own current number (used on unit switch —
+        // reinterpret, so per-side values are kept).
+        function recommitAll() {
+            for (let j = 0; j < inputs.length; j++) {
+                sendPropertyChanged(spec.cells[j].prop, numOr0(inputs[j].value) + unit);
             }
         }
         for (let i = 0; i < spec.cells.length; i++) {
@@ -4807,7 +4986,7 @@
                     if (linked) {
                         emitAll(v);
                     } else {
-                        sendPropertyChanged(spec.cells[idx].prop, v + "px");
+                        sendPropertyChanged(spec.cells[idx].prop, v + unit);
                     }
                 });
                 input.addEventListener("keydown", function (e) {
@@ -4824,6 +5003,7 @@
         });
         box.appendChild(link);
         box.appendChild(grid);
+        box.appendChild(chip);
         box.syncDecls = function (decls) {
             const vals = spec.parse(decls);
             let uniform = true;
@@ -4835,6 +5015,13 @@
             }
             linked = uniform;
             box.dataset.linked = linked ? "true" : "false";
+            // Reflect the stored unit from the first present longhand (else px).
+            let found = "";
+            for (let j = 0; j < spec.cells.length && found === ""; j++) {
+                found = window.__style.splitLength(decls[spec.cells[j].prop] || "").unit;
+            }
+            unit = found || "px";
+            chip.sync();
         };
         box.dataset.linked = "true";
         Object.defineProperty(box, "value", { get: function () { return ""; }, set: function () {} });
@@ -5243,8 +5430,19 @@
         const box = document.createElement("div");
         box.className = "inspector__presets";
         let currentType = "";
-        const select = document.createElement("select");
-        select.className = "inspector__input inspector__select inspector__presets-apply";
+        const select = makeDropdown({
+            label: "Preset",
+            className: "inspector__presets-apply",
+            placeholder: "Apply preset…",
+            options: [],
+            value: "",
+            onChange: function (cls) {
+                if (cls !== "" && currentType !== "") {
+                    applyPreset(currentType, cls);
+                }
+                select.value = "";
+            },
+        });
         const saveRow = document.createElement("div");
         saveRow.className = "inspector__presets-save";
         const nameInput = document.createElement("input");
@@ -5262,26 +5460,12 @@
         function rebuild() {
             const presets = window.__preset.parsePresets(currentGlobalsCss)
                 .filter(function (p) { return p.type === currentType; });
-            select.replaceChildren();
-            const ph = document.createElement("option");
-            ph.value = "";
-            ph.textContent = presets.length ? "Apply preset…" : "No presets for this type";
-            select.appendChild(ph);
-            for (let i = 0; i < presets.length; i++) {
-                const o = document.createElement("option");
-                o.value = presets[i].className;
-                o.textContent = presets[i].className;
-                select.appendChild(o);
-            }
+            select.setPlaceholder(presets.length ? "Apply preset…" : "No presets for this type");
+            select.setOptions(presets.map(function (p) {
+                return { value: p.className, label: p.className };
+            }));
             select.value = "";
         }
-        select.addEventListener("change", function () {
-            const cls = select.value;
-            select.value = "";
-            if (cls !== "" && currentType !== "") {
-                applyPreset(currentType, cls);
-            }
-        });
         saveBtn.addEventListener("click", function () { onSavePreset(nameInput); });
         nameInput.addEventListener("keydown", function (e) {
             if (e.key === "Enter") {
@@ -5573,7 +5757,7 @@
         }
         // Strip optional unit suffixes ("px", "°") so the user can type
         // "200px" or "45°" and it still parses.
-        const numeric = trimmed.replace(/(px|deg|rad|°|%)\s*$/i, "").trim();
+        const numeric = trimmed.replace(/(px|em|rem|pt|in|pc|cm|mm|deg|rad|°|%)\s*$/i, "").trim();
         const n = Number(numeric);
         if (!isFinite(n)) {
             return null;
@@ -5820,15 +6004,11 @@
                 bgImgClear.hidden = !url;
             }
         }
-        if (layout && document.activeElement !== layout) {
+        if (layout) {
             const layouts = (data && data.layouts) || [];
-            layout.replaceChildren();
-            for (let i = 0; i < layouts.length; i++) {
-                const o = document.createElement("option");
-                o.value = layouts[i].id;
-                o.textContent = layouts[i].name || layouts[i].id;
-                layout.appendChild(o);
-            }
+            layout.setOptions(layouts.map(function (l) {
+                return { value: l.id, label: l.name || l.id };
+            }));
             layout.value = (data && data.layout_id) || "";
         }
         // Transition controls (slide-only): dropdown + duration/easing, the
@@ -5847,6 +6027,7 @@
     // Output: side-effect; reflects data.transition into the dropdown + the
     // duration/easing controls, hiding the timing row for a None (cut).
     function renderSlideTransition(data) {
+        wireSlideTransition();
         const sel = document.getElementById("slide-transition");
         const timing = document.getElementById("slide-transition-timing");
         const dur = document.getElementById("slide-transition-dur");
@@ -5931,8 +6112,12 @@
                 window.__deck.send("Interaction", { kind: "SetSlideBackgroundImageCleared" });
             });
         }
-        const layout = document.getElementById("slide-layout");
-        if (layout) {
+        const layoutMount = document.getElementById("slide-layout-mount");
+        if (layoutMount && !layoutMount.dataset.wired) {
+            layoutMount.dataset.wired = "1";
+            const layout = makeDropdown({ label: "Layout", options: [], value: "" });
+            layout.id = "slide-layout";
+            layoutMount.appendChild(layout);
             layout.addEventListener("change", function () {
                 window.__deck.send("Interaction", {
                     kind: "SetSlideLayoutRequested", layout_id: layout.value,
@@ -6005,8 +6190,16 @@
             mount.appendChild(seg);
             seg.addEventListener("change", sendSlideTransition);
         }
-        const sel = document.getElementById("slide-transition");
-        if (sel) {
+        const selMount = document.getElementById("slide-transition-mount");
+        if (selMount && !selMount.dataset.wired) {
+            selMount.dataset.wired = "1";
+            const sel = makeDropdown({
+                label: "Transition",
+                options: SLIDE_TRANSITIONS.map(function (t) { return { value: t, label: t }; }),
+                value: "None",
+            });
+            sel.id = "slide-transition";
+            selMount.appendChild(sel);
             sel.addEventListener("change", function () {
                 const timing = document.getElementById("slide-transition-timing");
                 if (timing) {
@@ -6117,9 +6310,10 @@
             const key = cssOnly[i];
             setIfNotPending(key, decls[key] || "");
         }
-        // Typography numeric-with-px fields strip the unit for the number input.
-        setIfNotPending("font-size", stripPx(decls["font-size"]));
-        setIfNotPending("letter-spacing", stripPx(decls["letter-spacing"]));
+        // Typography length fields split the stored value into the number input
+        // and the unit chip.
+        setUnitNumber("font-size", decls["font-size"]);
+        setUnitNumber("letter-spacing", decls["letter-spacing"]);
         // Composite controls + the Custom CSS declarations list.
         for (let i = 0; i < textStyleControls.length; i++) {
             textStyleControls[i].syncDecls(decls);
@@ -6128,6 +6322,25 @@
             compositeControls[i].syncDecls(decls);
         }
         renderCustomDeclarations(decls);
+    }
+
+    // setUnitNumber: populate a unit-number control (font-size / letter-spacing)
+    // from its raw CSS value — the bare number into the input, the unit into the
+    // chip. Respects the same pending / active-edit guards as setIfNotPending.
+    function setUnitNumber(prop, raw) {
+        const box = inspectorInputs[prop];
+        if (!box || inspectorPending.has(prop)) {
+            return;
+        }
+        const parts = window.__style.splitLength(raw);
+        if (box.setUnit && parts.unit !== "") {
+            box.setUnit(parts.unit);
+        }
+        const input = box.firstChild;
+        if (document.activeElement === input) {
+            return;
+        }
+        box.value = parts.num;
     }
 
     function setIfNotPending(prop, value) {
@@ -7784,6 +7997,8 @@
 
     // ---------- animations panel ----------
 
+    const SLIDE_TRANSITIONS = ["None", "Fade", "Push", "Dissolve", "Wipe", "Flip", "Cube"];
+
     const ANIM_TRIGGERS = [
         { value: "on_click", label: "On click" },
         { value: "with_previous", label: "With previous" },
@@ -7951,19 +8166,14 @@
         }
         const easingLabel = document.createElement("label");
         easingLabel.textContent = "Easing:";
-        const easingSelect = document.createElement("select");
-        easingSelect.className = "morph-easing";
-        easingSelect.dataset.elementId = elId;
         const easings = ["linear", "ease-in", "ease-out", "ease-in-out", "cubic-bezier(0.34, 1.56, 0.64, 1)"];
-        for (let i = 0; i < easings.length; i++) {
-            const opt = document.createElement("option");
-            opt.value = easings[i];
-            opt.textContent = easings[i];
-            if (easings[i] === state.easing) {
-                opt.selected = true;
-            }
-            easingSelect.appendChild(opt);
-        }
+        const easingSelect = makeDropdown({
+            label: "Easing",
+            className: "morph-easing",
+            options: easings.map(function (e) { return { value: e, label: e }; }),
+            value: state.easing,
+        });
+        easingSelect.dataset.elementId = elId;
         row2.appendChild(easingLabel);
         row2.appendChild(easingSelect);
         wrapper.appendChild(row2);
@@ -8084,7 +8294,11 @@
         trig.textContent = animTriggerLabel(entry);
         const chev = document.createElement("span");
         chev.className = "anim-bar__btn";
-        chev.textContent = animExpanded[entry.animation_id] ? "▾" : "▸";
+        chev.innerHTML = UNIT_CHEVRON;
+        chev.classList.add("anim-bar__chev");
+        if (!animExpanded[entry.animation_id]) {
+            chev.classList.add("anim-bar__chev--collapsed");
+        }
         const rm = document.createElement("button");
         rm.type = "button";
         rm.className = "anim-bar__btn";
@@ -8215,27 +8429,21 @@
         };
     }
 
-    // flexSelect — a labelled <select> that posts SetGroupLayout on change.
+    // flexSelect — a labelled dropdown that posts SetGroupLayout on change.
     function flexSelect(label, opts, current, field) {
-        const row = document.createElement("label");
-        row.className = "anim-bar__field";
-        const span = document.createElement("span");
-        span.textContent = label;
-        const sel = document.createElement("select");
-        opts.forEach(function (o) {
-            const opt = document.createElement("option");
-            opt.value = o.v; opt.textContent = o.t; opt.selected = o.v === current;
-            sel.appendChild(opt);
+        const dd = makeDropdown({
+            label: label,
+            options: opts.map(function (o) { return { value: o.v, label: o.t }; }),
+            value: current,
+            onChange: function (v) {
+                if (currentSelectionIds.length !== 1) { return; }
+                const body = { kind: "SetGroupLayout", element_id: currentSelectionIds[0],
+                    direction: null, distribution: null, alignment: null };
+                body[field] = v;
+                window.__deck.send("Interaction", body);
+            },
         });
-        sel.addEventListener("change", function () {
-            if (currentSelectionIds.length !== 1) { return; }
-            const body = { kind: "SetGroupLayout", element_id: currentSelectionIds[0],
-                direction: null, distribution: null, alignment: null };
-            body[field] = sel.value;
-            window.__deck.send("Interaction", body);
-        });
-        row.append(span, sel);
-        return row;
+        return animField(label, dd);
     }
 
     // refreshGroupFlexSection — rebuild #flex-controls from the selected group.
@@ -8280,7 +8488,11 @@
         const chev = document.createElement("button");
         chev.type = "button";
         chev.className = "anim-bar__btn";
-        chev.textContent = animExpanded[entry.animation_id] ? "▾" : "▸";
+        chev.innerHTML = UNIT_CHEVRON;
+        chev.classList.add("anim-bar__chev");
+        if (!animExpanded[entry.animation_id]) {
+            chev.classList.add("anim-bar__chev--collapsed");
+        }
         chev.addEventListener("click", function () {
             animExpanded[entry.animation_id] = !animExpanded[entry.animation_id];
             refreshAnimationsSection();
@@ -8316,9 +8528,10 @@
         return body;
     }
 
-    // animField — a labelled control row wrapper.
+    // animField — a labelled control row wrapper. A div (not a <label>) so a
+    // dropdown-trigger button inside isn't double-toggled by label forwarding.
     function animField(labelText, control) {
-        const row = document.createElement("label");
+        const row = document.createElement("div");
         row.className = "anim-bar__field";
         const span = document.createElement("span");
         span.textContent = labelText;
@@ -8328,58 +8541,50 @@
 
     // buildAnimEffectRow — swap the effect within its category (remove + add).
     function buildAnimEffectRow(entry) {
-        const sel = document.createElement("select");
         const current = catalogForEntry(entry);
-        animationCatalog.filter(function (i) {
+        const options = animationCatalog.filter(function (i) {
             return i.category === entry.category && i.kind === "named";
-        }).forEach(function (item) {
-            const o = document.createElement("option");
-            o.value = item.id;
-            o.textContent = item.label;
-            o.selected = current && item.id === current.id;
-            sel.appendChild(o);
+        }).map(function (item) {
+            return { value: item.id, label: item.label };
         });
-        sel.addEventListener("change", function () {
-            const item = animationCatalog.find(function (i) { return i.id === sel.value; });
-            const dir = item && item.directional ? (animDirectionOf(entry) || "top") : null;
-            animReplace(entry.animation_id, sel.value, dir, entry.element_id);
+        const dd = makeDropdown({
+            label: "Effect",
+            options: options,
+            value: current ? current.id : "",
+            onChange: function (v) {
+                const item = animationCatalog.find(function (i) { return i.id === v; });
+                const dir = item && item.directional ? (animDirectionOf(entry) || "top") : null;
+                animReplace(entry.animation_id, v, dir, entry.element_id);
+            },
         });
-        return animField("Effect", sel);
+        return animField("Effect", dd);
     }
 
     // buildAnimDirectionRow — direction picker for a directional effect.
     function buildAnimDirectionRow(entry, dir) {
         const item = catalogForEntry(entry);
-        const sel = document.createElement("select");
-        ANIM_DIRECTIONS.forEach(function (d) {
-            const o = document.createElement("option");
-            o.value = d.value;
-            o.textContent = d.label;
-            o.selected = d.value === dir;
-            sel.appendChild(o);
+        const dd = makeDropdown({
+            label: "Direction",
+            options: ANIM_DIRECTIONS.map(function (d) { return { value: d.value, label: d.label }; }),
+            value: dir,
+            onChange: function (v) {
+                if (item) {
+                    animReplace(entry.animation_id, item.id, v, entry.element_id);
+                }
+            },
         });
-        sel.addEventListener("change", function () {
-            if (item) {
-                animReplace(entry.animation_id, item.id, sel.value, entry.element_id);
-            }
-        });
-        return animField("Direction", sel);
+        return animField("Direction", dd);
     }
 
     // buildAnimTriggerRow — On click / With previous / After previous.
     function buildAnimTriggerRow(entry) {
-        const sel = document.createElement("select");
-        ANIM_TRIGGERS.forEach(function (t) {
-            const o = document.createElement("option");
-            o.value = t.value;
-            o.textContent = t.label;
-            o.selected = t.value === entry.trigger;
-            sel.appendChild(o);
+        const dd = makeDropdown({
+            label: "Trigger",
+            options: ANIM_TRIGGERS.map(function (t) { return { value: t.value, label: t.label }; }),
+            value: entry.trigger,
+            onChange: function (v) { animUpdate(entry.animation_id, { trigger: v }); },
         });
-        sel.addEventListener("change", function () {
-            animUpdate(entry.animation_id, { trigger: sel.value });
-        });
-        return animField("Trigger", sel);
+        return animField("Trigger", dd);
     }
 
     // buildAnimTimingRow — duration + delay (ms), committed on change.
@@ -8413,18 +8618,13 @@
 
     // buildAnimEasingRow — the 4 easing presets as a dropdown of CSS tokens.
     function buildAnimEasingRow(entry) {
-        const sel = document.createElement("select");
-        ANIM_EASINGS.forEach(function (e) {
-            const o = document.createElement("option");
-            o.value = e.token;
-            o.textContent = e.label;
-            o.selected = e.token === entry.easing;
-            sel.appendChild(o);
+        const dd = makeDropdown({
+            label: "Easing",
+            options: ANIM_EASINGS.map(function (e) { return { value: e.token, label: e.label }; }),
+            value: entry.easing,
+            onChange: function (v) { animUpdate(entry.animation_id, { easing: v }); },
         });
-        sel.addEventListener("change", function () {
-            animUpdate(entry.animation_id, { easing: sel.value });
-        });
-        return animField("Easing", sel);
+        return animField("Easing", dd);
     }
 
     // buildAnimIterationsRow — emphasis count, or ∞ toggle (Infinite).

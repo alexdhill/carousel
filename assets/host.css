@@ -26,7 +26,7 @@
     --field: var(--bg);
     --field-on: color-mix(in srgb, var(--field) 50%, var(--panel));
     --hover: color-mix(in srgb, var(--field) 95%, var(--acc));
-    --line: transparent;
+    --line: #f2f0eb;
     /* guides (transient measurement overlays) */
     --guide: var(--acc);
     /* radii */
@@ -838,7 +838,7 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 .inspector__section-header {
     width: 100%;
     background: transparent;
-    border: 1px 0 0 0;
+    border-width: 0 0 0 0;
     border-color: var(--line);
     color: var(--ink2);
     font: inherit;
@@ -944,6 +944,76 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     background: var(--field);
     color: var(--ink3);
     cursor: not-allowed;
+}
+
+/* ---- Unit chip (px ▾) + unit-number field ---- */
+.inspector__unitchip {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 1px;
+    padding: 0 6px;
+    color: var(--ink3);
+    font-size: 11px;
+    font-weight: 500;
+    border-radius: 6px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.inspector__unitchip:hover {
+    background: #e7e2d9;
+    color: var(--ink2);
+}
+
+.inspector__unitchip-caret {
+    display: inline-flex;
+}
+
+.inspector__unitchip-select {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    opacity: 0;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+}
+
+.inspector__unitfield {
+    display: flex;
+    align-items: stretch;
+    background: var(--field);
+    border: 1px solid transparent;
+    border-radius: var(--r-field);
+    overflow: hidden;
+}
+
+.inspector__unitfield:hover {
+    background: #efebe3;
+}
+
+.inspector__unitfield:focus-within {
+    background: var(--field-on);
+    border-color: var(--acc);
+}
+
+.inspector__unitfield .inspector__input,
+.inspector__unitfield .inspector__input:hover,
+.inspector__unitfield .inspector__input:focus {
+    flex: 1 1 auto;
+    background: transparent;
+    border-color: transparent;
+    outline: none;
+}
+
+.inspector__unitfield .inspector__unitchip {
+    align-self: stretch;
+    border-radius: 0;
 }
 
 .inspector__custom {
@@ -1245,9 +1315,14 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 
 /* None state: white box with a diagonal red slash, "None" label. */
 .inspector__color--none .inspector__color-fill {
-    background:
-        #fff
-        linear-gradient(135deg, transparent 45%, #e0584f 45%, #e0584f 55%, transparent 55%);
+    background: #fff
+        linear-gradient(
+            135deg,
+            transparent 45%,
+            #e0584f 45%,
+            #e0584f 55%,
+            transparent 55%
+        );
 }
 
 .inspector__color--none .inspector__color-hex {
@@ -1597,6 +1672,14 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 .inspector__cluster[data-linked="true"] .inspector__cluster-link {
     background: var(--acc-soft);
     color: var(--acc-ink);
+}
+
+.inspector__cluster > .inspector__unitchip {
+    position: absolute;
+    top: -22px;
+    right: 24px;
+    height: 18px;
+    padding: 0 5px;
 }
 
 .inspector__cluster-grid {
@@ -3203,6 +3286,89 @@ body[data-mode="layout"] .theme-actions {
 
 .anim-menu__item:hover {
     background: var(--hover);
+}
+
+.anim-bar__chev {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--ink3);
+    transition: transform 0.1s ease;
+}
+
+.anim-bar__chev--collapsed {
+    transform: rotate(-90deg);
+}
+
+.anim-menu__item[aria-selected="true"] {
+    background: var(--acc-soft);
+    color: var(--acc-ink);
+    font-weight: 600;
+}
+
+/* ---- Unified dropdown (trigger + menu) ---- */
+.dropdown-menu {
+    position: fixed;
+    z-index: 2000;
+    display: none;
+    min-width: 120px;
+    max-height: 280px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--r-field);
+    box-shadow: var(--shadow-slide);
+    padding: 4px;
+}
+
+.dropdown-menu--open {
+    display: block;
+}
+
+.inspector__dropdown {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    height: 30px;
+    padding: 0 8px;
+    background: var(--field);
+    border: 1px solid transparent;
+    border-radius: var(--r-field);
+    color: var(--ink);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+}
+
+.inspector__dropdown:hover {
+    background: #efebe3;
+}
+
+.inspector__dropdown-label {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.inspector__dropdown-caret {
+    flex: 0 0 auto;
+    display: inline-flex;
+    color: var(--ink3);
+}
+
+.anim-bar__field .inspector__dropdown,
+.morph-row .inspector__dropdown {
+    flex: 1;
+    width: auto;
+    height: auto;
+    padding: 4px 6px;
+    font-size: 11px;
+    border-color: var(--line);
 }
 
 /* ===================== Toasts ===================== */
