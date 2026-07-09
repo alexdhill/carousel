@@ -371,6 +371,7 @@ button {
     flex-direction: column;
     gap: 1px;
     line-height: 1.15;
+    padding-left: 10px;
 }
 
 /* Accent dot to the left of the title. Absolutely positioned in the gap so
@@ -378,7 +379,7 @@ button {
    Invisible until the deck has unsaved changes (.doc-meta--dirty). */
 .doc-meta__dot {
     position: absolute;
-    left: -10px;
+    left: -3px;
     top: 32%;
     transform: translateY(-50%);
     width: 7px;

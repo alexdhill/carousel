@@ -2,7 +2,7 @@
 <html>
     <head>
         <meta charset="utf-8" />
-        <title>carousel</title>
+        <title>Carousel</title>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
         <link
@@ -542,330 +542,346 @@
                 </div>
 
                 <div class="inspector__body" id="inspector-body">
-                <section id="slide-box" class="inspector__section slide-box">
-                    <button
-                        type="button"
-                        class="inspector__section-header"
-                        id="slide-box-header"
-                    >
-                        Slide
-                        <span class="inspector__chevron" aria-hidden="true"></span>
-                    </button>
-                    <div class="inspector__section-body">
-                        <div class="inspector__field inspector__field--full">
-                            <label
-                                class="inspector__field-label"
-                                for="slide-title"
-                                id="slide-title-label"
-                                >Title</label
-                            >
-                            <input
-                                type="text"
-                                id="slide-title"
-                                class="inspector__input"
-                                spellcheck="false"
-                            />
-                        </div>
-                        <div
-                            class="inspector__field inspector__field--full"
-                            data-slide-only
-                        >
-                            <label class="inspector__field-label">Layout</label>
-                            <div id="slide-layout-mount"></div>
-                        </div>
-                        <div class="inspector__field inspector__field--full">
-                            <label class="inspector__field-label">Fill</label>
-                            <div id="slide-bg-mount"></div>
-                        </div>
-                        <div class="inspector__field inspector__field--full">
-                            <label class="inspector__field-label">Image</label>
-                            <div class="slide-bg-well">
-                                <button
-                                    type="button"
-                                    id="slide-bg-image"
-                                    class="slide-bg-well__pick"
-                                    title="Choose a background image"
-                                >
-                                    Choose…
-                                </button>
-                                <button
-                                    type="button"
-                                    id="slide-bg-image-clear"
-                                    class="slide-bg-well__clear"
-                                    title="Remove background image"
-                                    hidden
-                                >
-                                    ✕
-                                </button>
-                                <input
-                                    type="file"
-                                    id="slide-bg-image-file"
-                                    accept="image/*"
-                                    hidden
-                                />
-                            </div>
-                        </div>
-                        <div
-                            class="inspector__field inspector__field--full"
-                            data-slide-only
-                        >
-                            <label class="inspector__field-label" for="slide-notes"
-                                >Notes</label
-                            >
-                            <textarea
-                                id="slide-notes"
-                                class="inspector__input slide-box__notes"
-                                spellcheck="false"
-                                placeholder="Speaker notes…"
-                            ></textarea>
-                        </div>
-                        <div
-                            class="inspector__field inspector__field--full"
-                            data-slide-only
-                        >
-                            <label class="inspector__field-label">Transition</label>
-                            <div id="slide-transition-mount"></div>
-                        </div>
-                        <div
-                            class="inspector__field inspector__field--full slide-transition__timing"
-                            id="slide-transition-timing"
-                            data-slide-only
-                            hidden
-                        >
-                            <div class="inspector__field">
-                                <label
-                                    class="inspector__field-label"
-                                    for="slide-transition-dur"
-                                    >Duration (ms)</label
-                                >
-                                <input
-                                    type="number"
-                                    id="slide-transition-dur"
-                                    class="inspector__input"
-                                    min="0"
-                                    step="50"
-                                />
-                            </div>
-                            <div class="inspector__field">
-                                <label class="inspector__field-label">Easing</label>
-                                <div
-                                    id="slide-transition-easing-mount"
-                                    class="slide-transition__easing"
-                                ></div>
-                            </div>
-                        </div>
-                        <div
-                            class="inspector__field inspector__field--full"
-                            data-slide-only
-                        >
-                            <label class="inspector__field-label">Animations</label>
-                            <div id="sac-groups" class="sac"></div>
-                        </div>
-                    </div>
-                </section>
-
-                <div class="inspector__scroll" id="inspector-scroll"></div>
-
-                <section id="crop-box" class="crop-box" hidden>
-                    <h3 class="crop-box__title">Crop</h3>
-                    <button type="button" id="crop-enter" class="crop-box__enter">
-                        Crop image
-                    </button>
-                    <label class="crop-box__field">
-                        <span>Zoom %</span>
-                        <input type="number" id="crop-zoom-pct" min="100" step="1" />
-                    </label>
-                    <label class="crop-box__field">
-                        <span>Offset X</span>
-                        <input type="number" id="crop-offset-x" step="1" />
-                    </label>
-                    <label class="crop-box__field">
-                        <span>Offset Y</span>
-                        <input type="number" id="crop-offset-y" step="1" />
-                    </label>
-                    <button type="button" id="crop-reset" class="crop-box__reset">
-                        Reset crop
-                    </button>
-                </section>
-
-                <section id="table-box" class="inspector__section table-box" hidden>
-                    <div
-                        class="inspector__section-header inspector__section-header--static"
-                    >
-                        Table
-                    </div>
-                    <div class="inspector__section-body">
-                        <div class="table-box__grid">
-                            <button
-                                type="button"
-                                id="table-add-row"
-                                class="table-box__btn"
-                            >
-                                + Row
-                            </button>
-                            <button
-                                type="button"
-                                id="table-del-row"
-                                class="table-box__btn"
-                            >
-                                − Row
-                            </button>
-                            <button
-                                type="button"
-                                id="table-add-col"
-                                class="table-box__btn"
-                            >
-                                + Col
-                            </button>
-                            <button
-                                type="button"
-                                id="table-del-col"
-                                class="table-box__btn"
-                            >
-                                − Col
-                            </button>
-                        </div>
-                        <label class="table-box__toggle">
-                            <input type="checkbox" id="table-header-row" /> Header row
-                        </label>
-                        <label class="table-box__toggle">
-                            <input type="checkbox" id="table-header-col" /> Header column
-                        </label>
-                        <p class="table-box__hint">
-                            Double-click a cell to edit · Shift / ⌘ click to multi-select
-                        </p>
-                    </div>
-                </section>
-
-                <section id="guide-box" class="inspector__section slide-box">
-                    <div class="inspector__section-body">
-                        <div class="inspector__field inspector__field--full">
-                            <label class="inspector__field-label" for="guide-pos">
-                                Position (<span id="guide-pos-label">Y</span>)
-                            </label>
-                            <input
-                                type="number"
-                                id="guide-pos"
-                                class="inspector__input"
-                                step="1"
-                            />
-                        </div>
-                    </div>
-                </section>
-
-                <form class="inspector__custom" id="inspector-custom" autocomplete="off">
-                    <p class="inspector__custom-hint">
-                        Add any property not listed above.
-                    </p>
-                    <div id="inspector-custom-list" class="inspector__decls"></div>
-                    <div class="inspector__custom-row">
-                        <input
-                            id="inspector-custom-key"
-                            class="inspector__decl-input"
-                            placeholder="property"
-                            spellcheck="false"
-                            list="css-prop-suggestions"
-                        />
-                        <input
-                            id="inspector-custom-value"
-                            class="inspector__decl-input"
-                            placeholder="value"
-                            spellcheck="false"
-                        />
-                        <button
-                            type="submit"
-                            class="inspector__apply"
-                            title="Add property"
-                        >
-                            <svg
-                                width="15"
-                                height="15"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="2.4"
-                                stroke-linecap="round"
-                            >
-                                <path d="M12 5v14M5 12h14" />
-                            </svg>
-                        </button>
-                    </div>
-                    <datalist id="css-prop-suggestions">
-                        <option value="display"></option>
-                        <option value="position"></option>
-                        <option value="margin"></option>
-                        <option value="padding"></option>
-                        <option value="gap"></option>
-                        <option value="align-items"></option>
-                        <option value="background"></option>
-                        <option value="background-image"></option>
-                        <option value="transition"></option>
-                        <option value="filter"></option>
-                        <option value="backdrop-filter"></option>
-                        <option value="mix-blend-mode"></option>
-                        <option value="overflow"></option>
-                        <option value="text-transform"></option>
-                        <option value="text-shadow"></option>
-                        <option value="white-space"></option>
-                        <option value="cursor"></option>
-                        <option value="outline"></option>
-                        <option value="object-fit"></option>
-                    </datalist>
-                </form>
-
-                <section id="animations-section" class="animations">
-                    <header class="animations__header">
-                        <span id="anim-count" class="animations__count">0</span>
+                    <section id="slide-box" class="inspector__section slide-box">
                         <button
                             type="button"
-                            id="anim-play"
-                            class="animations__play"
-                            title="Preview the slide build"
+                            class="inspector__section-header"
+                            id="slide-box-header"
                         >
-                            ▶ Play
+                            Slide
+                            <span class="inspector__chevron" aria-hidden="true"></span>
                         </button>
-                    </header>
-                    <div id="anim-bars" class="animations__bars"></div>
-                    <div class="animations__add-wrap">
-                        <button type="button" id="anim-add-btn" class="animations__add">
-                            + Add animation
+                        <div class="inspector__section-body">
+                            <div class="inspector__field inspector__field--full">
+                                <label
+                                    class="inspector__field-label"
+                                    for="slide-title"
+                                    id="slide-title-label"
+                                    >Title</label
+                                >
+                                <input
+                                    type="text"
+                                    id="slide-title"
+                                    class="inspector__input"
+                                    spellcheck="false"
+                                />
+                            </div>
+                            <div
+                                class="inspector__field inspector__field--full"
+                                data-slide-only
+                            >
+                                <label class="inspector__field-label">Layout</label>
+                                <div id="slide-layout-mount"></div>
+                            </div>
+                            <div class="inspector__field inspector__field--full">
+                                <label class="inspector__field-label">Fill</label>
+                                <div id="slide-bg-mount"></div>
+                            </div>
+                            <div class="inspector__field inspector__field--full">
+                                <label class="inspector__field-label">Image</label>
+                                <div class="slide-bg-well">
+                                    <button
+                                        type="button"
+                                        id="slide-bg-image"
+                                        class="slide-bg-well__pick"
+                                        title="Choose a background image"
+                                    >
+                                        Choose…
+                                    </button>
+                                    <button
+                                        type="button"
+                                        id="slide-bg-image-clear"
+                                        class="slide-bg-well__clear"
+                                        title="Remove background image"
+                                        hidden
+                                    >
+                                        ✕
+                                    </button>
+                                    <input
+                                        type="file"
+                                        id="slide-bg-image-file"
+                                        accept="image/*"
+                                        hidden
+                                    />
+                                </div>
+                            </div>
+                            <div
+                                class="inspector__field inspector__field--full"
+                                data-slide-only
+                            >
+                                <label class="inspector__field-label" for="slide-notes"
+                                    >Notes</label
+                                >
+                                <textarea
+                                    id="slide-notes"
+                                    class="inspector__input slide-box__notes"
+                                    spellcheck="false"
+                                    placeholder="Speaker notes…"
+                                ></textarea>
+                            </div>
+                            <div
+                                class="inspector__field inspector__field--full"
+                                data-slide-only
+                            >
+                                <label class="inspector__field-label">Transition</label>
+                                <div id="slide-transition-mount"></div>
+                            </div>
+                            <div
+                                class="inspector__field inspector__field--full slide-transition__timing"
+                                id="slide-transition-timing"
+                                data-slide-only
+                                hidden
+                            >
+                                <div class="inspector__field">
+                                    <label
+                                        class="inspector__field-label"
+                                        for="slide-transition-dur"
+                                        >Duration (ms)</label
+                                    >
+                                    <input
+                                        type="number"
+                                        id="slide-transition-dur"
+                                        class="inspector__input"
+                                        min="0"
+                                        step="50"
+                                    />
+                                </div>
+                                <div class="inspector__field">
+                                    <label class="inspector__field-label">Easing</label>
+                                    <div
+                                        id="slide-transition-easing-mount"
+                                        class="slide-transition__easing"
+                                    ></div>
+                                </div>
+                            </div>
+                            <div
+                                class="inspector__field inspector__field--full"
+                                data-slide-only
+                            >
+                                <label class="inspector__field-label">Animations</label>
+                                <div id="sac-groups" class="sac"></div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <div class="inspector__scroll" id="inspector-scroll"></div>
+
+                    <section id="crop-box" class="crop-box" hidden>
+                        <h3 class="crop-box__title">Crop</h3>
+                        <button type="button" id="crop-enter" class="crop-box__enter">
+                            Crop image
                         </button>
-                        <div id="anim-add-menu" class="animations__add-menu" hidden></div>
-                    </div>
-                </section>
+                        <label class="crop-box__field">
+                            <span>Zoom %</span>
+                            <input type="number" id="crop-zoom-pct" min="100" step="1" />
+                        </label>
+                        <label class="crop-box__field">
+                            <span>Offset X</span>
+                            <input type="number" id="crop-offset-x" step="1" />
+                        </label>
+                        <label class="crop-box__field">
+                            <span>Offset Y</span>
+                            <input type="number" id="crop-offset-y" step="1" />
+                        </label>
+                        <button type="button" id="crop-reset" class="crop-box__reset">
+                            Reset crop
+                        </button>
+                    </section>
 
-                <section id="group-flex-section" class="animations">
-                    <div id="flex-controls"></div>
-                </section>
+                    <section id="table-box" class="inspector__section table-box" hidden>
+                        <div
+                            class="inspector__section-header inspector__section-header--static"
+                        >
+                            Table
+                        </div>
+                        <div class="inspector__section-body">
+                            <div class="table-box__grid">
+                                <button
+                                    type="button"
+                                    id="table-add-row"
+                                    class="table-box__btn"
+                                >
+                                    + Row
+                                </button>
+                                <button
+                                    type="button"
+                                    id="table-del-row"
+                                    class="table-box__btn"
+                                >
+                                    − Row
+                                </button>
+                                <button
+                                    type="button"
+                                    id="table-add-col"
+                                    class="table-box__btn"
+                                >
+                                    + Col
+                                </button>
+                                <button
+                                    type="button"
+                                    id="table-del-col"
+                                    class="table-box__btn"
+                                >
+                                    − Col
+                                </button>
+                            </div>
+                            <label class="table-box__toggle">
+                                <input type="checkbox" id="table-header-row" /> Header row
+                            </label>
+                            <label class="table-box__toggle">
+                                <input type="checkbox" id="table-header-col" /> Header
+                                column
+                            </label>
+                            <p class="table-box__hint">
+                                Double-click a cell to edit · Shift / ⌘ click to
+                                multi-select
+                            </p>
+                        </div>
+                    </section>
 
-                <section id="globals-editor" class="globals">
-                    <label class="globals__label" for="globals-css">Globals CSS</label>
-                    <textarea
-                        id="globals-css"
-                        class="globals__textarea"
-                        spellcheck="false"
-                        placeholder="/* deck-wide CSS: @keyframes, :root custom properties… */"
-                    ></textarea>
-                </section>
+                    <section id="guide-box" class="inspector__section slide-box">
+                        <div class="inspector__section-body">
+                            <div class="inspector__field inspector__field--full">
+                                <label class="inspector__field-label" for="guide-pos">
+                                    Position (<span id="guide-pos-label">Y</span>)
+                                </label>
+                                <input
+                                    type="number"
+                                    id="guide-pos"
+                                    class="inspector__input"
+                                    step="1"
+                                />
+                            </div>
+                        </div>
+                    </section>
 
-                <section id="theme-actions" class="theme-actions">
-                    <button
-                        type="button"
-                        id="theme-save-btn"
-                        class="theme-actions__btn"
-                        title="Export this theme (layouts + globals + styling) to a file"
+                    <form
+                        class="inspector__custom"
+                        id="inspector-custom"
+                        autocomplete="off"
                     >
-                        Save Theme…
-                    </button>
-                    <button
-                        type="button"
-                        id="theme-load-btn"
-                        class="theme-actions__btn"
-                        title="Load a theme file (replaces layouts + globals + styling; undoable)"
-                    >
-                        Load Theme…
-                    </button>
-                </section>
+                        <p class="inspector__custom-hint">
+                            Add any property not listed above.
+                        </p>
+                        <div id="inspector-custom-list" class="inspector__decls"></div>
+                        <div class="inspector__custom-row">
+                            <input
+                                id="inspector-custom-key"
+                                class="inspector__decl-input"
+                                placeholder="property"
+                                spellcheck="false"
+                                list="css-prop-suggestions"
+                            />
+                            <input
+                                id="inspector-custom-value"
+                                class="inspector__decl-input"
+                                placeholder="value"
+                                spellcheck="false"
+                            />
+                            <button
+                                type="submit"
+                                class="inspector__apply"
+                                title="Add property"
+                            >
+                                <svg
+                                    width="15"
+                                    height="15"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2.4"
+                                    stroke-linecap="round"
+                                >
+                                    <path d="M12 5v14M5 12h14" />
+                                </svg>
+                            </button>
+                        </div>
+                        <datalist id="css-prop-suggestions">
+                            <option value="display"></option>
+                            <option value="position"></option>
+                            <option value="margin"></option>
+                            <option value="padding"></option>
+                            <option value="gap"></option>
+                            <option value="align-items"></option>
+                            <option value="background"></option>
+                            <option value="background-image"></option>
+                            <option value="transition"></option>
+                            <option value="filter"></option>
+                            <option value="backdrop-filter"></option>
+                            <option value="mix-blend-mode"></option>
+                            <option value="overflow"></option>
+                            <option value="text-transform"></option>
+                            <option value="text-shadow"></option>
+                            <option value="white-space"></option>
+                            <option value="cursor"></option>
+                            <option value="outline"></option>
+                            <option value="object-fit"></option>
+                        </datalist>
+                    </form>
+
+                    <section id="animations-section" class="animations">
+                        <header class="animations__header">
+                            <span id="anim-count" class="animations__count">0</span>
+                            <button
+                                type="button"
+                                id="anim-play"
+                                class="animations__play"
+                                title="Preview the slide build"
+                            >
+                                ▶ Play
+                            </button>
+                        </header>
+                        <div id="anim-bars" class="animations__bars"></div>
+                        <div class="animations__add-wrap">
+                            <button
+                                type="button"
+                                id="anim-add-btn"
+                                class="animations__add"
+                            >
+                                + Add animation
+                            </button>
+                            <div
+                                id="anim-add-menu"
+                                class="animations__add-menu"
+                                hidden
+                            ></div>
+                        </div>
+                    </section>
+
+                    <section id="group-flex-section" class="animations">
+                        <div id="flex-controls"></div>
+                    </section>
+
+                    <section id="globals-editor" class="globals">
+                        <label class="globals__label" for="globals-css"
+                            >Globals CSS</label
+                        >
+                        <textarea
+                            id="globals-css"
+                            class="globals__textarea"
+                            spellcheck="false"
+                            placeholder="/* deck-wide CSS: @keyframes, :root custom properties… */"
+                        ></textarea>
+                    </section>
+
+                    <section id="theme-actions" class="theme-actions">
+                        <button
+                            type="button"
+                            id="theme-save-btn"
+                            class="theme-actions__btn"
+                            title="Export this theme (layouts + globals + styling) to a file"
+                        >
+                            Save Theme…
+                        </button>
+                        <button
+                            type="button"
+                            id="theme-load-btn"
+                            class="theme-actions__btn"
+                            title="Load a theme file (replaces layouts + globals + styling; undoable)"
+                        >
+                            Load Theme…
+                        </button>
+                    </section>
                 </div>
             </aside>
         </div>
