@@ -627,27 +627,32 @@
                             <div id="slide-transition-mount"></div>
                         </div>
                         <div
-                            class="inspector__field inspector__field--full"
+                            class="inspector__field inspector__field--full slide-transition__timing"
                             id="slide-transition-timing"
                             data-slide-only
                             hidden
                         >
-                            <label
-                                class="inspector__field-label"
-                                for="slide-transition-dur"
-                                >Duration (ms)</label
-                            >
-                            <input
-                                type="number"
-                                id="slide-transition-dur"
-                                class="inspector__input"
-                                min="0"
-                                step="50"
-                            />
-                            <div
-                                id="slide-transition-easing-mount"
-                                class="slide-transition__easing"
-                            ></div>
+                            <div class="inspector__field">
+                                <label
+                                    class="inspector__field-label"
+                                    for="slide-transition-dur"
+                                    >Duration (ms)</label
+                                >
+                                <input
+                                    type="number"
+                                    id="slide-transition-dur"
+                                    class="inspector__input"
+                                    min="0"
+                                    step="50"
+                                />
+                            </div>
+                            <div class="inspector__field">
+                                <label class="inspector__field-label">Easing</label>
+                                <div
+                                    id="slide-transition-easing-mount"
+                                    class="slide-transition__easing"
+                                ></div>
+                            </div>
                         </div>
                         <div
                             class="inspector__field inspector__field--full"

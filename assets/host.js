@@ -173,6 +173,7 @@
     // div whose shadow root contains theme CSS + slide HTML. Caches the
     // shadow root and host for the selection overlay + patch applier.
     function mountSlide(slideId, slideHtml, themeCss, globalsCss) {
+        const prevSlideId = currentSlideHost ? currentSlideHost.dataset.slideId : null;
         if (typeof globalsCss === "string") {
             currentGlobalsCss = globalsCss;
         }
@@ -211,9 +212,15 @@
         currentSlideHost = host;
         assetVarStyleEl = shadow.getElementById("asset-vars");
         refreshAssetVarStyle();
-        // Selection from the previous slide does not transfer.
-        currentSelectionIds = [];
-        clearSelectionOverlay();
+        // A remount of the SAME slide (e.g. toggling a morph transition) keeps
+        // the selection and redraws its overlay on the fresh nodes. Only a
+        // switch to a different slide drops the selection.
+        if (prevSlideId === slideId && currentSelectionIds.length > 0) {
+            updateSelectionOverlay();
+        } else {
+            currentSelectionIds = [];
+            clearSelectionOverlay();
+        }
         // Re-apply the current zoom to the fresh host (fit recomputes for the
         // new slide's dimensions).
         applyZoom();
@@ -3861,8 +3868,8 @@
                 { prop: "x", label: "X", kind: "number", suffix: "px" },
                 { prop: "y", label: "Y", kind: "number", suffix: "px" },
                 { prop: "size", label: "Size", kind: "size-row", full: true, composite: true },
-                { prop: "rotation", label: "Rotation", kind: "rotation-deg", suffix: "°" },
-                { prop: "opacity", label: "Opacity", kind: "number", suffix: "" },
+                { prop: "rotation", label: "Rotation", kind: "rotation-deg", suffix: "°", icon: "rotation" },
+                { prop: "opacity", label: "Opacity", kind: "number", suffix: "%", percent: true, icon: "opacity" },
             ],
         },
         {
@@ -3908,10 +3915,10 @@
             appliesTo: TEXT_TYPES,
             fields: [
                 { prop: "font-family", label: "Font", kind: "font-combo", full: true, composite: true },
-                { prop: "font-size", label: "Size", kind: "number", unit: "px", unitSelect: true },
-                { prop: "font-weight", label: "Weight", kind: "number", suffix: "" },
-                { prop: "line-height", label: "Line Height", kind: "number", suffix: "" },
-                { prop: "letter-spacing", label: "Letter Spacing", kind: "number", unit: "px", unitSelect: true },
+                { prop: "font-size", label: "Size", kind: "number", unit: "px", unitSelect: true, icon: "fontSize" },
+                { prop: "font-weight", label: "Weight", kind: "number", suffix: "", icon: "fontWeight" },
+                { prop: "line-height", label: "Line Height", kind: "number", suffix: "", icon: "lineHeight" },
+                { prop: "letter-spacing", label: "Letter Spacing", kind: "number", unit: "px", unitSelect: true, icon: "letterSpacing" },
                 {
                     prop: "text-align", label: "Alignment", kind: "segment", full: true,
                     options: [
@@ -4012,10 +4019,10 @@
         },
         radius: {
             cells: [
-                { prop: "border-top-left-radius", label: "TL", tip: "Top-left" },
-                { prop: "border-top-right-radius", label: "TR", tip: "Top-right" },
-                { prop: "border-bottom-right-radius", label: "BR", tip: "Bottom-right" },
-                { prop: "border-bottom-left-radius", label: "BL", tip: "Bottom-left" },
+                { prop: "border-top-left-radius", label: "TL", tip: "Top-left", icon: "cornerTL" },
+                { prop: "border-top-right-radius", label: "TR", tip: "Top-right", icon: "cornerTR" },
+                { prop: "border-bottom-right-radius", label: "BR", tip: "Bottom-right", icon: "cornerBR" },
+                { prop: "border-bottom-left-radius", label: "BL", tip: "Bottom-left", icon: "cornerBL" },
             ],
             parse: function (decls) {
                 const r = window.__style.parseRadius(decls);
@@ -4133,7 +4140,8 @@
         }
         const label = document.createElement("label");
         label.className = "inspector__field-label";
-        label.textContent = field.label + (field.suffix ? " (" + field.suffix.trim() + ")" : "");
+        label.textContent = field.label
+            + (field.suffix && !field.icon ? " (" + field.suffix.trim() + ")" : "");
         const control = buildFieldControl(field);
         control.dataset.prop = field.prop;
         control.dataset.kind = field.kind;
@@ -4151,6 +4159,9 @@
         // unit and stay bare floats for the Rust geometry path.
         if (field.unit) {
             control.dataset.unit = field.unit;
+        }
+        if (field.percent) {
+            control.dataset.percent = "1";
         }
         // Composite controls (swatch/cluster/shadow/border-style/size-row) wire
         // their own commits internally, so skip the single-prop change handler
@@ -4171,6 +4182,47 @@
     const UNIT_CHEVRON = '<svg width="9" height="9" viewBox="0 0 24 24" fill="none"'
         + ' stroke="currentColor" stroke-width="3" stroke-linecap="round"'
         + ' stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
+
+    // FIELD_ICONS: inner SVG markup for each inspector field icon (wrapped by
+    // makeFieldIcon in a 24-box, 1.8-stroke svg). The design-doc icons plus
+    // three matched additions (rotation / font size / font weight).
+    const FIELD_ICONS = {
+        opacity: '<circle cx="12" cy="12" r="8"/>'
+            + '<path d="M12 4a8 8 0 0 0 0 16z" fill="currentColor" stroke="none"/>',
+        rotation: '<path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v5h-5"/>',
+        lineHeight: '<path d="M6 4v16M4 6l2-2 2 2M4 18l2 2 2-2M12 6h8M12 12h8M12 18h8"/>',
+        letterSpacing: '<path d="M4 5v14M20 5v14M9 9l-2 3 2 3M15 9l2 3-2 3"/>',
+        fontSize: '<path d="M3 19l4.5-12 4.5 12M4.6 15h5.8"/>'
+            + '<path d="M14 19l3-8 3 8M15 16h4"/>',
+        fontWeight: '<path d="M7 5h6a3.5 3.5 0 0 1 0 7H7zM7 12h7a3.5 3.5 0 0 1 0 7H7z"/>',
+        cornerTL: '<path d="M19 5h-8a6 6 0 0 0-6 6v8"/>',
+        cornerTR: '<path d="M5 5h8a6 6 0 0 1 6 6v8"/>',
+        cornerBR: '<path d="M5 19h8a6 6 0 0 0 6-6V5"/>',
+        cornerBL: '<path d="M19 19h-8a6 6 0 0 1-6-6V5"/>',
+    };
+
+    // Per-icon stroke overrides (default 1.8); the weight "B" reads bolder.
+    const FIELD_ICON_STROKE = { fontWeight: 3 };
+
+    // fieldIconSvg — the 14px svg markup for a field icon key ("" if unknown).
+    function fieldIconSvg(key) {
+        const inner = FIELD_ICONS[key];
+        if (!inner) {
+            return "";
+        }
+        const sw = FIELD_ICON_STROKE[key] || 1.8;
+        return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none"'
+            + ' stroke="currentColor" stroke-width="' + sw + '" stroke-linecap="round"'
+            + ' stroke-linejoin="round">' + inner + '</svg>';
+    }
+
+    // makeFieldIcon — a leading icon span for a number field.
+    function makeFieldIcon(key) {
+        const span = document.createElement("span");
+        span.className = "inspector__field-icon";
+        span.innerHTML = fieldIconSvg(key);
+        return span;
+    }
 
     // makeDropdown
     // Inputs: { label, options:[{value,label}], value, placeholder, variant,
@@ -4302,37 +4354,47 @@
         return chip;
     }
 
-    // makeUnitNumberControl
-    // Inputs: a "number" field definition carrying unitSelect.
-    // Output: a box holding a numeric <input> plus a unit chip. Exposes `.value`
-    // (the bare number, proxying the input) and a live `dataset.unit`; fires
-    // `change` on number commit (Enter/blur) and on unit change. Reinterprets on
-    // unit switch (keeps the number). `setUnit()` sets the unit without a commit
-    // (used by populate). The normal buildField wiring appends dataset.unit.
-    function makeUnitNumberControl(field) {
+    // makeNumberField
+    // Inputs: a number / rotation-deg field carrying `icon` and/or `unitSelect`
+    // (else `suffix`). Output: a box laid out `[icon][input][chip | suffix]`.
+    // Exposes `.value` (proxying the input); unit fields also carry a live
+    // `dataset.unit` + `setUnit()`. Fires `change` on number commit and (unit
+    // fields) on unit change. Reused for opacity/rotation/line-height/weight and
+    // the unit-select fields (font-size / letter-spacing).
+    function makeNumberField(field) {
         const box = document.createElement("div");
         box.className = "inspector__unitfield";
-        let unit = field.unit || "px";
-        box.dataset.unit = unit;
         const input = document.createElement("input");
         input.className = "inspector__input";
         input.spellcheck = false;
-        const chip = makeUnitChip(function () { return unit; }, function (u) {
-            unit = u;
-            box.dataset.unit = u;
-            box.dispatchEvent(new Event("change"));
-        });
+        if (field.icon) {
+            box.appendChild(makeFieldIcon(field.icon));
+        }
         input.addEventListener("change", function () { box.dispatchEvent(new Event("change")); });
         input.addEventListener("keydown", function (e) {
             if (e.key === "Enter") { e.preventDefault(); input.blur(); }
         });
         box.appendChild(input);
-        box.appendChild(chip);
-        box.setUnit = function (u) {
-            unit = u || "px";
+        if (field.unitSelect) {
+            let unit = field.unit || "px";
             box.dataset.unit = unit;
-            chip.sync();
-        };
+            const chip = makeUnitChip(function () { return unit; }, function (u) {
+                unit = u;
+                box.dataset.unit = u;
+                box.dispatchEvent(new Event("change"));
+            });
+            box.appendChild(chip);
+            box.setUnit = function (u) {
+                unit = u || "px";
+                box.dataset.unit = unit;
+                chip.sync();
+            };
+        } else if (field.suffix) {
+            const sfx = document.createElement("span");
+            sfx.className = "inspector__field-suffix";
+            sfx.textContent = field.suffix;
+            box.appendChild(sfx);
+        }
         Object.defineProperty(box, "value", {
             get: function () { return input.value; },
             set: function (v) { input.value = v; },
@@ -4346,8 +4408,9 @@
     // "select", a color swatch for "color", otherwise a text <input> (the
     // Enter-to-blur affordance is wired for text inputs only).
     function buildFieldControl(field) {
-        if (field.kind === "number" && field.unitSelect) {
-            return makeUnitNumberControl(field);
+        if ((field.kind === "number" || field.kind === "rotation-deg")
+                && (field.icon || field.unitSelect)) {
+            return makeNumberField(field);
         }
         if (field.kind === "segment") {
             return makeSegmentControl(field.options || []);
@@ -4910,7 +4973,11 @@
         wrap.setAttribute("data-key", "");
         const lab = document.createElement("span");
         lab.className = "inspector__cluster-cell-label";
-        lab.textContent = cell.label;
+        if (cell.icon) {
+            lab.innerHTML = fieldIconSvg(cell.icon);
+        } else {
+            lab.textContent = cell.label;
+        }
         const input = document.createElement("input");
         input.className = "inspector__cluster-input";
         input.spellcheck = false;
@@ -5691,6 +5758,10 @@
         if (kind === "number" && input.dataset.unit && wire !== null && wire !== "") {
             wire = wire + input.dataset.unit;
         }
+        // Percent fields show 0..100 but store the CSS fraction 0..1.
+        if (kind === "number" && input.dataset.percent && wire !== null && wire !== "") {
+            wire = String(Number(wire) / 100);
+        }
         if (wire === null) {
             // Invalid input — restore the displayed value from DOM and bail.
             refreshInspector();
@@ -6294,7 +6365,7 @@
         setIfNotPending("y", stripPx(decls.top));
         setIfNotPending("width", stripPx(decls.width));
         setIfNotPending("height", stripPx(decls.height));
-        setIfNotPending("opacity", decls.opacity || "");
+        setPercentNumber("opacity", decls.opacity, 100);
         setIfNotPending("rotation", radiansToDegreesStr(extractRotationRad(decls.transform)));
         setIfNotPending("z-index", decls["z-index"] || "");
         const cssOnly = [
@@ -6313,7 +6384,7 @@
         // Typography length fields split the stored value into the number input
         // and the unit chip.
         setUnitNumber("font-size", decls["font-size"]);
-        setUnitNumber("letter-spacing", decls["letter-spacing"]);
+        setUnitNumber("letter-spacing", decls["letter-spacing"], "0");
         // Composite controls + the Custom CSS declarations list.
         for (let i = 0; i < textStyleControls.length; i++) {
             textStyleControls[i].syncDecls(decls);
@@ -6327,20 +6398,36 @@
     // setUnitNumber: populate a unit-number control (font-size / letter-spacing)
     // from its raw CSS value — the bare number into the input, the unit into the
     // chip. Respects the same pending / active-edit guards as setIfNotPending.
-    function setUnitNumber(prop, raw) {
+    function setUnitNumber(prop, raw, defNum) {
         const box = inspectorInputs[prop];
         if (!box || inspectorPending.has(prop)) {
             return;
         }
         const parts = window.__style.splitLength(raw);
-        if (box.setUnit && parts.unit !== "") {
-            box.setUnit(parts.unit);
+        if (box.setUnit) {
+            box.setUnit(parts.unit || "px");
         }
-        const input = box.firstChild;
+        const input = box.querySelector(".inspector__input");
         if (document.activeElement === input) {
             return;
         }
-        box.value = parts.num;
+        box.value = parts.num !== "" ? parts.num : (defNum || "");
+    }
+
+    // setPercentNumber: populate a percent field (opacity) — the CSS fraction
+    // 0..1 shows as 0..100; an absent value falls back to `def`.
+    function setPercentNumber(prop, raw, def) {
+        const box = inspectorInputs[prop];
+        if (!box || inspectorPending.has(prop)) {
+            return;
+        }
+        const input = box.querySelector(".inspector__input") || box;
+        if (document.activeElement === input) {
+            return;
+        }
+        const n = (raw === "" || raw == null)
+            ? def : Math.round(parseFloat(raw) * 100);
+        box.value = isFinite(n) ? String(n) : String(def);
     }
 
     function setIfNotPending(prop, value) {

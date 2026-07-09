@@ -905,6 +905,11 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     grid-column: 1 / -1;
 }
 
+/* The transition timing group stacks Duration + Easing as two labelled rows. */
+.slide-transition__timing {
+    gap: 10px;
+}
+
 /* Slide-only fields (title/layout/notes) are hidden in layout mode via the
    `hidden` attribute; the class rule above sets display:flex, so restore the
    hide with a matching-specificity attribute rule. */
@@ -1014,6 +1019,25 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 .inspector__unitfield .inspector__unitchip {
     align-self: stretch;
     border-radius: 0;
+}
+
+.inspector__field-icon {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    color: var(--ink3);
+}
+
+.inspector__field-suffix {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    padding: 0 8px;
+    color: var(--ink3);
+    font-size: 11px;
+    font-weight: 500;
 }
 
 .inspector__custom {
@@ -1709,6 +1733,9 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 .inspector__cluster-cell-label {
     width: 20px;
     flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     text-align: center;
     color: var(--ink3);
     font-size: 10px;
