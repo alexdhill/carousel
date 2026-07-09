@@ -48,6 +48,7 @@ where
     if let ElementContent::Table(td) = &mut element.content {
         f(td)?;
     }
+    element.placeholder = false;
     let new_html: String = serialize_element(element);
     canvas.mark_dirty();
     canvas.invalidate_index();

@@ -44,7 +44,8 @@ fn theme_layout_path(id: &str) -> String {
 // On-disk schema for the archive's theme.json: a format version (validated on
 // load like the deck manifest), the theme id + display name, and the layout
 // list in display order. Reuses the deck bundle's LayoutMeta shape.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+// Not `Eq`: LayoutMeta carries f64 guide positions.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 struct ThemeArchiveManifest {
     format_version: String,
     theme_id: String,
@@ -85,6 +86,7 @@ pub fn serialize_theme(theme: &ThemeData, assets: &AssetRegistry) -> BundleResul
             name: layout.name.clone(),
             background: layout.background.clone(),
             background_image: layout.background_image.clone(),
+            guides: layout.guides.clone(),
         });
         // Reuse the slide serializer via a transient SlideNode carrying the
         // layout's own background (a layout root is a Group, like a slide root).
@@ -237,6 +239,7 @@ pub fn deserialize_theme(src: SerializedTheme) -> BundleResult<(ThemeData, Asset
                 LayoutNode::new(meta.id.clone(), meta.name.clone(), parsed.root);
             node.background = meta.background.clone();
             node.background_image = meta.background_image.clone();
+            node.guides = meta.guides.clone();
             layouts.insert(meta.id.clone(), node);
             layout_order.push(meta.id.clone());
         }

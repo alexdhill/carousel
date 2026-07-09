@@ -12,6 +12,7 @@
 // cleanly into newer code.
 
 use crate::bundle::BundleError;
+use crate::deck::guide::Guide;
 use crate::deck::{AnimationEntry, SlideId, SlideTransition};
 use serde::{Deserialize, Serialize};
 
@@ -73,7 +74,8 @@ pub struct ThemeRef {
 // One row in the manifest's `slides` array. Order is canonical display
 // order; the id is decoupled from the path so renames and reorders are
 // independent operations.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+// Not `Eq`: the guide list carries an f64 position.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SlideEntry {
     pub id: SlideId,
     pub path: String,
@@ -92,6 +94,11 @@ pub struct SlideEntry {
     // save and hydrated on load. Absent in older bundles → empty.
     #[serde(default)]
     pub animations: Vec<AnimationEntry>,
+    // The slide's saveable guides. `SlideNode.guides` is the in-memory source
+    // of truth; synced on save and hydrated on load like `animations`. Absent
+    // in older bundles → empty.
+    #[serde(default)]
+    pub guides: Vec<Guide>,
     // Per-slide background (inspector Slide box). `SlideNode.metadata.background`
     // is the in-memory source of truth (it renders); this is the on-disk format,
     // synced on save and hydrated on load like `animations`. Absent → None.
@@ -349,6 +356,7 @@ mod tests {
             duration_hint: Some(30),
             notes_ref: None,
             animations: Vec::new(),
+            guides: Vec::new(),
             background: None,
             background_image: None,
             notes: None,
@@ -367,6 +375,7 @@ mod tests {
             duration_hint: None,
             notes_ref: None,
             animations: Vec::new(),
+            guides: Vec::new(),
             background: None,
             background_image: None,
             notes: None,

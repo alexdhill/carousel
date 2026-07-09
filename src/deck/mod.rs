@@ -13,6 +13,7 @@ pub mod builders;
 pub mod canvas;
 pub mod element;
 pub mod group_layout;
+pub mod guide;
 pub mod ids;
 pub mod layout;
 pub mod slide;
@@ -34,6 +35,7 @@ pub use element::{
     AssetRef, ElementContent, ElementNode, ElementStyle, ElementType, RichText, ShapeGeometry,
     TableCell, TableData,
 };
+pub use guide::{Guide, GuideAxis};
 pub use ids::{
     AnimationId, AssetId, ElementId, LayoutId, SlideId, new_animation_id, new_element_id,
     new_slide_id,
@@ -121,6 +123,19 @@ impl Deck {
         (fill, img)
     }
 
+    // inherited_guides
+    // Inputs: a slide.
+    // Output: the guides of the layout the slide is built on (read-only
+    // reference guides shown beneath the slide's own editable guides). Empty
+    // when the slide's layout is missing. The slide's own guides are
+    // `slide.guides`; this returns only the inherited set.
+    pub fn inherited_guides(&self, slide: &SlideNode) -> Vec<crate::deck::guide::Guide> {
+        match self.theme.layouts.get(&slide.layout_id) {
+            Some(layout) => layout.guides.clone(),
+            None => Vec::new(),
+        }
+    }
+
     // new_blank
     // Inputs: none.
     // Output: a fresh deck with one empty slide (the ROADMAP definition of
@@ -148,6 +163,7 @@ impl Deck {
                 duration_hint: None,
                 notes_ref: None,
                 animations: Vec::new(),
+                guides: Vec::new(),
                 background: None,
                 background_image: None,
                 notes: None,
@@ -254,6 +270,7 @@ impl Deck {
                 duration_hint: None,
                 notes_ref: None,
                 animations: Vec::new(),
+                guides: Vec::new(),
                 background: None,
                 background_image: None,
                 notes: None,
@@ -308,6 +325,16 @@ impl Deck {
             }
         }
     }
+
+    // has_unsaved_changes
+    // Inputs: &self.
+    // Output: true when any slide, the manifest, or any layout is dirty; the
+    // save flags cleared on IoResponse::Saved. Drives the title's unsaved dot.
+    pub fn has_unsaved_changes(&self) -> bool {
+        !self.dirty_slides.is_empty()
+            || self.manifest_dirty
+            || self.theme.layouts.values().any(|l| l.dirty)
+    }
 }
 
 #[cfg(test)]
@@ -346,6 +373,23 @@ mod tests {
         assert!(d.assets.is_empty());
         assert!(d.bundle_path.is_none());
         assert!(!d.manifest.deck_id.is_empty());
+    }
+
+    #[test]
+    fn has_unsaved_changes_tracks_slide_manifest_and_layout_dirt() {
+        let mut d = Deck::sample();
+        assert!(!d.has_unsaved_changes());
+        d.dirty_slides.insert(d.slide_order[0].clone());
+        assert!(d.has_unsaved_changes());
+        d.dirty_slides.clear();
+        assert!(!d.has_unsaved_changes());
+        d.manifest_dirty = true;
+        assert!(d.has_unsaved_changes());
+        d.manifest_dirty = false;
+        if let Some(layout) = d.theme.layouts.values_mut().next() {
+            layout.dirty = true;
+            assert!(d.has_unsaved_changes());
+        }
     }
 
     #[test]

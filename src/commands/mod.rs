@@ -21,6 +21,7 @@ pub mod composite;
 pub mod group_commands;
 pub mod group_relayout;
 pub mod group_select;
+pub mod guide_commands;
 pub mod history;
 pub mod insert_element;
 pub mod layout_lifecycle;
@@ -35,6 +36,7 @@ pub mod set_element_id;
 pub mod set_embed;
 pub mod set_geometry;
 pub mod set_inline_style;
+pub mod set_morph_transition;
 pub mod set_text;
 pub mod slide_lifecycle;
 pub mod slide_metadata;
@@ -71,6 +73,7 @@ pub use patch_buffer::PatchBuffer;
 pub use remove_element::RemoveElementCommand;
 pub use set_element_id::SetElementId;
 pub use set_embed::SetEmbedHtml;
+pub use set_morph_transition::SetMorphTransition;
 pub use set_text::SetTextContent;
 pub use slide_lifecycle::{InsertSlide, RemoveSlide};
 pub use slide_metadata::{SetDeckTitle, SetSlideTitle};
@@ -148,6 +151,12 @@ pub trait Command: Send + Sync + std::fmt::Debug {
     // reacts by rebroadcasting SlideInspectorUpdate so the Slide box resyncs on
     // apply, undo, and redo.
     fn affects_slide_meta(&self) -> bool {
+        false
+    }
+    // affects_guides (saveable guides) — the command changed the active
+    // canvas's guide set. The editor reacts by rebroadcasting GuidesUpdate so
+    // the overlay redraws on apply, undo, and redo.
+    fn affects_guides(&self) -> bool {
         false
     }
 }
@@ -242,6 +251,7 @@ pub struct DispatchOutcome {
     pub affects_animations: bool,
     pub affects_assets: bool,
     pub affects_slide_meta: bool,
+    pub affects_guides: bool,
     pub warnings: Vec<String>,
 }
 
@@ -519,6 +529,7 @@ impl CommandDispatcher {
         let affects_animations: bool = command.affects_animations();
         let affects_assets: bool = command.affects_assets();
         let affects_slide_meta: bool = command.affects_slide_meta();
+        let affects_guides: bool = command.affects_guides();
         debug!("dispatching: {}", label);
         let output: CommandOutput = command.apply(&mut self.deck)?;
         // Reparent emits no patches yet still touches the tree, so the
@@ -553,6 +564,7 @@ impl CommandDispatcher {
             affects_animations,
             affects_assets,
             affects_slide_meta,
+            affects_guides,
             warnings,
         })
     }
@@ -588,6 +600,7 @@ impl CommandDispatcher {
             affects_animations: out.affects_animations,
             affects_assets: out.affects_assets,
             affects_slide_meta: out.affects_slide_meta,
+            affects_guides: out.affects_guides,
             warnings: out.warnings,
         }))
     }
@@ -620,6 +633,7 @@ impl CommandDispatcher {
             affects_animations: out.affects_animations,
             affects_assets: out.affects_assets,
             affects_slide_meta: out.affects_slide_meta,
+            affects_guides: out.affects_guides,
             warnings: out.warnings,
         }))
     }

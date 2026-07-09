@@ -26,7 +26,7 @@
     --field: var(--bg);
     --field-on: color-mix(in srgb, var(--field) 50%, var(--panel));
     --hover: color-mix(in srgb, var(--field) 95%, var(--acc));
-    --line: transparent;
+    --line: #f2f0eb;
     /* guides (transient measurement overlays) */
     --guide: var(--acc);
     /* radii */
@@ -366,10 +366,33 @@ button {
 }
 
 .doc-meta {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: 1px;
     line-height: 1.15;
+    padding-left: 10px;
+}
+
+/* Accent dot to the left of the title. Absolutely positioned in the gap so
+   it never shifts the title; a faint accent glow makes it read as lit.
+   Invisible until the deck has unsaved changes (.doc-meta--dirty). */
+.doc-meta__dot {
+    position: absolute;
+    left: -3px;
+    top: 32%;
+    transform: translateY(-50%);
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--acc);
+    box-shadow: 0 0 6px 1px color-mix(in srgb, var(--acc) 40%, transparent);
+    opacity: 0;
+    pointer-events: none;
+}
+
+.doc-meta--dirty .doc-meta__dot {
+    opacity: 1;
 }
 
 .doc-meta__title {
@@ -785,21 +808,27 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     overflow: hidden;
 }
 
-.inspector__scroll {
+/* Single scroll region for the whole styles pane: the slide/layout box, the
+   dynamic element sections, globals, and the theme actions all scroll together
+   below the fixed header. */
+.inspector__body {
     flex: 1 1 auto;
     /* min-height:0 lets this flex child shrink below its content height so it
        actually scrolls instead of growing and being clipped by the panel. */
     min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
+}
+
+.inspector__scroll {
     padding: 4px 0 6px;
 }
 
 /* Conditional overscroll: while an in-DOM dropdown/popover is open, lock the
    styles pane so a wheel over the pane can't scroll the anchored list out from
    under its input. The popovers keep their own internal scroll. */
-.panel--inspector:has(.inspector__fontcombo-pop:not([hidden])) .inspector__scroll,
-.panel--inspector:has(.animations__add-menu:not([hidden])) .inspector__scroll {
+.panel--inspector:has(.inspector__fontcombo-pop:not([hidden])) .inspector__body,
+.panel--inspector:has(.animations__add-menu:not([hidden])) .inspector__body {
     overflow-y: hidden;
 }
 
@@ -810,7 +839,8 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 .inspector__section-header {
     width: 100%;
     background: transparent;
-    border: 0;
+    border-width: 0 0 0 0;
+    border-color: var(--line);
     color: var(--ink2);
     font: inherit;
     font-size: 11px;
@@ -876,6 +906,18 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     grid-column: 1 / -1;
 }
 
+/* The transition timing group stacks Duration + Easing as two labelled rows. */
+.slide-transition__timing {
+    gap: 10px;
+}
+
+/* Slide-only fields (title/layout/notes) are hidden in layout mode via the
+   `hidden` attribute; the class rule above sets display:flex, so restore the
+   hide with a matching-specificity attribute rule. */
+[data-slide-only][hidden] {
+    display: none;
+}
+
 .inspector__field-label {
     font-size: 10px;
     font-weight: 500;
@@ -908,6 +950,95 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     background: var(--field);
     color: var(--ink3);
     cursor: not-allowed;
+}
+
+/* ---- Unit chip (px ▾) + unit-number field ---- */
+.inspector__unitchip {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 1px;
+    padding: 0 6px;
+    color: var(--ink3);
+    font-size: 11px;
+    font-weight: 500;
+    border-radius: 6px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.inspector__unitchip:hover {
+    background: #e7e2d9;
+    color: var(--ink2);
+}
+
+.inspector__unitchip-caret {
+    display: inline-flex;
+}
+
+.inspector__unitchip-select {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    opacity: 0;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+}
+
+.inspector__unitfield {
+    display: flex;
+    align-items: stretch;
+    background: var(--field);
+    border: 1px solid transparent;
+    border-radius: var(--r-field);
+    overflow: hidden;
+}
+
+.inspector__unitfield:hover {
+    background: #efebe3;
+}
+
+.inspector__unitfield:focus-within {
+    background: var(--field-on);
+    border-color: var(--acc);
+}
+
+.inspector__unitfield .inspector__input,
+.inspector__unitfield .inspector__input:hover,
+.inspector__unitfield .inspector__input:focus {
+    flex: 1 1 auto;
+    background: transparent;
+    border-color: transparent;
+    outline: none;
+}
+
+.inspector__unitfield .inspector__unitchip {
+    align-self: stretch;
+    border-radius: 0;
+}
+
+.inspector__field-icon {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    color: var(--ink3);
+}
+
+.inspector__field-suffix {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    padding: 0 8px;
+    color: var(--ink3);
+    font-size: 11px;
+    font-weight: 500;
 }
 
 .inspector__custom {
@@ -1152,38 +1283,99 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     background: #efebe3;
 }
 
+/* Checkerboard behind any partly-transparent colour fill. */
+:root {
+    --checker: repeating-conic-gradient(#cfcabf 0% 25%, #ffffff 0% 50%) 0 / 8px 8px;
+}
+
 .inspector__color-swatch {
+    position: relative;
     width: 17px;
     height: 17px;
     flex: 0 0 auto;
     padding: 0;
     border: 0;
     border-radius: 4px;
-    background: none;
+    background: var(--checker);
     box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
     cursor: pointer;
+    overflow: hidden;
 }
 
-.inspector__color-swatch::-webkit-color-swatch-wrapper {
-    padding: 0;
-}
-.inspector__color-swatch::-webkit-color-swatch {
-    border: 0;
+.inspector__color-fill {
+    position: absolute;
+    inset: 0;
     border-radius: 4px;
 }
 
 .inspector__color-hex {
-    flex: 1 1 auto;
+    flex: 0 0 auto;
     min-width: 0;
+    border: 0;
+    background: transparent;
+    outline: none;
+    padding: 0;
+    font: inherit;
     font-size: 12px;
     font-weight: 500;
     color: var(--ink);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    text-transform: uppercase;
+    cursor: text;
 }
 
-/* ---- Swatch + opacity row (Fill, Border colour) ---- */
+.inspector__color-gap {
+    flex: 1 1 auto;
+    align-self: stretch;
+    min-width: 6px;
+    cursor: pointer;
+}
+
+.inspector__color-pct {
+    flex: 0 0 auto;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--ink3);
+    cursor: pointer;
+}
+
+/* None state: white box with a diagonal red slash, "None" label. */
+.inspector__color--none .inspector__color-fill {
+    background: #fff
+        linear-gradient(
+            135deg,
+            transparent 45%,
+            #e0584f 45%,
+            #e0584f 55%,
+            transparent 55%
+        );
+}
+
+.inspector__color--none .inspector__color-hex {
+    color: var(--ink2);
+    text-transform: none;
+}
+
+.colorpop__none {
+    height: 26px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-field);
+    background: var(--field);
+    color: var(--ink2);
+    font: inherit;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+}
+
+.colorpop__none:hover {
+    background: #efebe3;
+}
+
+.colorpop--alpha {
+    width: 200px;
+}
+
+/* ---- Swatch row (Fill, Border colour) ---- */
 .inspector__swatchrow {
     display: flex;
     align-items: center;
@@ -1195,10 +1387,126 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     min-width: 0;
 }
 
-.inspector__swatchrow-opacity {
-    width: 52px;
-    flex: 0 0 auto;
-    height: 30px;
+/* ---- Colour picker popover ---- */
+.colorpop {
+    position: fixed;
+    z-index: 2000;
+    display: none;
+    flex-direction: column;
+    gap: 10px;
+    width: 224px;
+    padding: 12px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--r-panel);
+    box-shadow: 0 8px 24px rgba(40, 35, 30, 0.18);
+}
+
+.colorpop--open {
+    display: flex;
+}
+
+/* Caret pointing back at the anchor (swatch / percentage) that opened it. */
+.colorpop::before {
+    content: "";
+    position: absolute;
+    top: -6px;
+    left: var(--arrow-x, 16px);
+    width: 10px;
+    height: 10px;
+    margin-left: -5px;
+    background: var(--panel);
+    border-left: 1px solid var(--line);
+    border-top: 1px solid var(--line);
+    border-radius: 2px 0 0 0;
+    transform: rotate(45deg);
+}
+
+.colorpop--above::before {
+    top: auto;
+    bottom: -6px;
+    border-radius: 0 0 0 2px;
+    transform: rotate(-135deg);
+}
+
+.colorpop__wheel {
+    position: relative;
+    width: 200px;
+    height: 200px;
+    align-self: center;
+    border-radius: 50%;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+    background:
+        radial-gradient(circle, #fff 0%, rgba(255, 255, 255, 0) 70%),
+        conic-gradient(from 0deg, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+    cursor: crosshair;
+    touch-action: none;
+}
+
+.colorpop__wheel-lum {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    pointer-events: none;
+}
+
+.colorpop__dot {
+    position: absolute;
+    width: 12px;
+    height: 12px;
+    margin: -6px 0 0 -6px;
+    border-radius: 50%;
+    border: 1.5px solid #fff;
+    box-shadow:
+        0 0 0 1px var(--acc),
+        0 1px 2px rgba(40, 35, 30, 0.3);
+    pointer-events: none;
+}
+
+.colorpop__slider {
+    display: grid;
+    grid-template-columns: 14px 1fr 30px;
+    align-items: center;
+    gap: 8px;
+}
+
+.colorpop__slider-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--ink3);
+}
+
+.colorpop__slider-val {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--ink2);
+    text-align: right;
+}
+
+.colorpop__slider input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 8px;
+    border-radius: 4px;
+    background: var(--field);
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+    cursor: pointer;
+}
+
+.colorpop__slider input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #fff;
+    border: 1.5px solid var(--acc);
+    box-shadow: 0 1px 2px rgba(40, 35, 30, 0.25);
+}
+
+.colorpop__hex {
+    width: 100%;
+    height: 28px;
     background: var(--field);
     border: 1px solid transparent;
     border-radius: var(--r-field);
@@ -1206,24 +1514,14 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     font: inherit;
     font-size: 12px;
     font-weight: 500;
-    text-align: right;
-    padding: 0 4px 0 8px;
+    text-transform: uppercase;
+    padding: 0 8px;
 }
 
-.inspector__swatchrow-opacity:hover {
-    background: #efebe3;
-}
-.inspector__swatchrow-opacity:focus {
+.colorpop__hex:focus {
     outline: none;
     background: var(--field-on);
     border-color: var(--acc);
-}
-
-.inspector__swatchrow-pct {
-    flex: 0 0 auto;
-    color: var(--ink3);
-    font-size: 11px;
-    font-weight: 500;
 }
 
 /* ---- Fill image picker (no preview) ---- */
@@ -1401,6 +1699,14 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     color: var(--acc-ink);
 }
 
+.inspector__cluster > .inspector__unitchip {
+    position: absolute;
+    top: -22px;
+    right: 24px;
+    height: 18px;
+    padding: 0 5px;
+}
+
 .inspector__cluster-grid {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -1428,6 +1734,9 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 .inspector__cluster-cell-label {
     width: 20px;
     flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     text-align: center;
     color: var(--ink3);
     font-size: 10px;
@@ -1459,6 +1768,36 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
     gap: 6px;
+}
+
+/* Shadow cell: label stacked above the value (multi-char names need the room). */
+.inspector__shadow-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+
+.inspector__shadow-cell-label {
+    color: var(--ink3);
+    font-size: 10px;
+    font-weight: 600;
+}
+
+.inspector__shadow-cell .inspector__cluster-input {
+    height: 30px;
+    background: var(--field);
+    border: 1px solid transparent;
+    border-radius: var(--r-field);
+    padding: 0 8px;
+}
+
+.inspector__shadow-cell .inspector__cluster-input:hover {
+    background: #efebe3;
+}
+.inspector__shadow-cell .inspector__cluster-input:focus {
+    background: var(--field-on);
+    border-color: var(--acc);
 }
 
 /* ---- Transform Width [chain] Height row ---- */
@@ -2158,14 +2497,131 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 
 /* ===================== Chromium download modal ===================== */
 
-.chromium-dl { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; background: rgba(20,16,12,0.4); }
-.chromium-dl__panel { width: 360px; padding: 22px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card, 12px); box-shadow: 0 18px 50px rgba(0,0,0,0.3); }
-.chromium-dl__title { margin: 0 0 6px; font-size: 15px; font-weight: 600; color: var(--ink); }
-.chromium-dl__sub { margin: 0 0 14px; font-size: 12px; color: var(--label); }
-.chromium-dl__track { height: 8px; border-radius: 999px; background: var(--field); overflow: hidden; }
-.chromium-dl__bar { height: 100%; width: 0; background: var(--acc); border-radius: 999px; transition: width 0.2s; }
-.chromium-dl__bar--indet { width: 40% !important; animation: chromium-dl-indet 1.1s ease-in-out infinite; }
-@keyframes chromium-dl-indet { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }
+.chromium-dl {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(20, 16, 12, 0.4);
+}
+.chromium-dl__panel {
+    width: 360px;
+    padding: 22px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--r-card, 12px);
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.3);
+}
+.chromium-dl__title {
+    margin: 0 0 6px;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--ink);
+}
+.chromium-dl__sub {
+    margin: 0 0 14px;
+    font-size: 12px;
+    color: var(--label);
+}
+.chromium-dl__track {
+    height: 8px;
+    border-radius: 999px;
+    background: var(--field);
+    overflow: hidden;
+}
+.chromium-dl__bar {
+    height: 100%;
+    width: 0;
+    background: var(--acc);
+    border-radius: 999px;
+    transition: width 0.2s;
+}
+.chromium-dl__bar--indet {
+    width: 40% !important;
+    animation: chromium-dl-indet 1.1s ease-in-out infinite;
+}
+@keyframes chromium-dl-indet {
+    0% {
+        margin-left: -40%;
+    }
+    100% {
+        margin-left: 100%;
+    }
+}
+
+/* ===================== Quit confirmation dialog ===================== */
+
+.quit-dlg {
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(20, 16, 12, 0.4);
+}
+.quit-dlg__panel {
+    width: 400px;
+    padding: 22px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--r-card, 12px);
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.3);
+}
+.quit-dlg__title {
+    margin: 0 0 6px;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--ink);
+}
+.quit-dlg__sub {
+    margin: 0 0 18px;
+    font-size: 12px;
+    color: var(--label);
+}
+.quit-dlg__row {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+.quit-dlg__btn {
+    height: 32px;
+    padding: 0 14px;
+    border-radius: var(--r-btn);
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+}
+/* Cancel — light neutral pill. */
+.quit-dlg__btn--cancel {
+    border: 0;
+    background: var(--field);
+    color: var(--ink2);
+}
+.quit-dlg__btn--cancel:hover {
+    background: var(--hover);
+}
+/* Exit without saving — outlined, accent text. */
+.quit-dlg__btn--discard {
+    border: 1px solid var(--acc);
+    background: transparent;
+    color: var(--acc-ink);
+}
+.quit-dlg__btn--discard:hover {
+    background: var(--acc-soft);
+}
+/* Save and exit — filled accent (primary). */
+.quit-dlg__btn--save {
+    border: 0;
+    background: var(--acc);
+    color: #fff;
+    box-shadow: 0 1px 2px rgba(181, 86, 58, 0.35);
+}
+.quit-dlg__btn--save:hover {
+    background: var(--acc-hover);
+}
 
 /* ===================== Share / export dropdown ===================== */
 
@@ -2271,7 +2727,11 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     flex: 1 1 auto;
     min-height: 240px;
     resize: vertical;
-    font: 13px ui-monospace, SFMono-Regular, Menlo, monospace;
+    font:
+        13px ui-monospace,
+        SFMono-Regular,
+        Menlo,
+        monospace;
     color: var(--ink);
     background: var(--field);
     border: 1px solid var(--line);
@@ -2357,6 +2817,27 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 
 .guide--selected.guide--v {
     width: 2px;
+}
+
+/* Inherited (layout) guides: read-only, muted + dashed so they read as
+   reference lines distinct from the slide's own editable guides. */
+.guide--inherited {
+    background: transparent;
+    pointer-events: none;
+}
+.guide--inherited.guide--h {
+    background: repeating-linear-gradient(
+        to right,
+        var(--acc-line) 0 6px,
+        transparent 6px 12px
+    );
+}
+.guide--inherited.guide--v {
+    background: repeating-linear-gradient(
+        to bottom,
+        var(--acc-line) 0 6px,
+        transparent 6px 12px
+    );
 }
 
 .snap-guide--line {
@@ -2835,6 +3316,89 @@ body[data-mode="layout"] .theme-actions {
     background: var(--hover);
 }
 
+.anim-bar__chev {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--ink3);
+    transition: transform 0.1s ease;
+}
+
+.anim-bar__chev--collapsed {
+    transform: rotate(-90deg);
+}
+
+.anim-menu__item[aria-selected="true"] {
+    background: var(--acc-soft);
+    color: var(--acc-ink);
+    font-weight: 600;
+}
+
+/* ---- Unified dropdown (trigger + menu) ---- */
+.dropdown-menu {
+    position: fixed;
+    z-index: 2000;
+    display: none;
+    min-width: 120px;
+    max-height: 280px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--r-field);
+    box-shadow: var(--shadow-slide);
+    padding: 4px;
+}
+
+.dropdown-menu--open {
+    display: block;
+}
+
+.inspector__dropdown {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    height: 30px;
+    padding: 0 8px;
+    background: var(--field);
+    border: 1px solid transparent;
+    border-radius: var(--r-field);
+    color: var(--ink);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+}
+
+.inspector__dropdown:hover {
+    background: #efebe3;
+}
+
+.inspector__dropdown-label {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.inspector__dropdown-caret {
+    flex: 0 0 auto;
+    display: inline-flex;
+    color: var(--ink3);
+}
+
+.anim-bar__field .inspector__dropdown,
+.morph-row .inspector__dropdown {
+    flex: 1;
+    width: auto;
+    height: auto;
+    padding: 4px 6px;
+    font-size: 11px;
+    border-color: var(--line);
+}
+
 /* ===================== Toasts ===================== */
 
 #toast-stack {
@@ -2885,6 +3449,64 @@ body[data-mode="layout"] .theme-actions {
     color: rgba(255, 255, 255, 0.82);
     white-space: normal;
     word-break: break-word;
+}
+
+/* ===================== Morph Transition Controls ===================== */
+
+#morph-control-container {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px 0;
+}
+
+.morph-control {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.morph-check-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    font-weight: 500;
+    user-select: none;
+}
+
+.morph-check-label input[type="checkbox"] {
+    cursor: pointer;
+}
+
+.morph-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.morph-row label {
+    flex: 0 0 120px;
+    font-size: 12px;
+    color: var(--label);
+}
+
+.morph-row input[type="number"],
+.morph-row select {
+    flex: 1 1 auto;
+    padding: 6px 8px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-field);
+    background: var(--field);
+    color: var(--ink);
+    font-size: 12px;
+}
+
+.morph-row input[type="number"]:focus,
+.morph-row select:focus {
+    outline: none;
+    background: var(--field-on);
+    border-color: var(--acc);
 }
 
 @keyframes toast-drop-in {

@@ -37,6 +37,7 @@ const PRESET_CSS_JS: &str = include_str!("../assets/preset_css.js");
 const PRESENT_HTML_TEMPLATE: &str = include_str!("../assets/present.html");
 const PRESENT_CSS: &str = include_str!("../assets/present.css");
 const PRESENT_JS: &str = include_str!("../assets/present.js");
+const MORPH_JS: &str = include_str!("../assets/morph.js");
 const LANDING_HTML_TEMPLATE: &str = include_str!("../assets/landing.html");
 const LANDING_CSS: &str = include_str!("../assets/landing.css");
 const LANDING_JS: &str = include_str!("../assets/landing.js");
@@ -225,7 +226,9 @@ fn install_main_menu() {
         // Application menu — Quit.
         let app_item: *mut Object = msg_send![class!(NSMenuItem), new];
         let app_menu: *mut Object = msg_send![class!(NSMenu), new];
-        let quit: *mut Object = menu_item("Quit", sel!(terminate:), "q");
+        // performClose: (not terminate:) so Cmd+Q routes through the tao
+        // CloseRequested path, where the unsaved-changes quit dialog lives.
+        let quit: *mut Object = menu_item("Quit", sel!(performClose:), "q");
         let _: () = msg_send![app_menu, addItem: quit];
         let _: () = msg_send![quit, release];
         let _: () = msg_send![app_item, setSubmenu: app_menu];
@@ -304,14 +307,18 @@ fn assemble_host_html(
 }
 
 // assemble_present_html
-// Inputs: the presentation template (must contain the present CSS + JS
-// placeholders) plus the css and js bodies.
+// Inputs: the presentation template (must contain the present CSS, morph JS,
+// and present JS placeholders) plus the css, morph, and js bodies.
 // Output: assembled HTML for the presentation webview.
-// Errors: asserts both placeholders are present.
-fn assemble_present_html(template: &str, css: &str, js: &str) -> String {
+// Errors: asserts all three placeholders are present.
+fn assemble_present_html(template: &str, css: &str, morph: &str, js: &str) -> String {
     assert!(
         template.contains("__PRESENT_CSS__"),
         "present template missing CSS marker"
+    );
+    assert!(
+        template.contains("__MORPH_JS__"),
+        "present template missing morph JS marker"
     );
     assert!(
         template.contains("__PRESENT_JS__"),
@@ -319,6 +326,7 @@ fn assemble_present_html(template: &str, css: &str, js: &str) -> String {
     );
     template
         .replace("__PRESENT_CSS__", css)
+        .replace("__MORPH_JS__", morph)
         .replace("__PRESENT_JS__", js)
 }
 
@@ -340,7 +348,8 @@ fn build_presentation(
         .with_title("carousel — presenting")
         .with_fullscreen(Some(Fullscreen::Borderless(None)))
         .build(target)?;
-    let html: String = assemble_present_html(PRESENT_HTML_TEMPLATE, PRESENT_CSS, PRESENT_JS);
+    let html: String =
+        assemble_present_html(PRESENT_HTML_TEMPLATE, PRESENT_CSS, MORPH_JS, PRESENT_JS);
     assert!(!html.is_empty(), "assembled present html is empty");
     let webview = WebViewBuilder::new(&window)
         .with_html(html)
@@ -518,12 +527,19 @@ fn send_landing(webview: &WebView, data: &LandingData) {
 // landing_data
 // Output: the recents + template rows for the landing webview.
 fn landing_data() -> LandingData {
+    // ponytail: builds each recent's thumbnail synchronously on the main thread
+    // at landing open (N <= recents CAP). Move build_thumb onto the io thread
+    // and stream thumbs in if this ever stalls the landing paint.
     let recents: Vec<LandingRecent> = recents::load()
         .into_iter()
-        .map(|r| LandingRecent {
-            path: r.path,
-            title: r.title,
-            modified: r.modified,
+        .map(|r| {
+            let thumb = html::thumbnail::build_thumb(std::path::Path::new(&r.path));
+            LandingRecent {
+                path: r.path,
+                title: r.title,
+                modified: r.modified,
+                thumb,
+            }
         })
         .collect();
     let templates: Vec<LandingTemplate> = deck::templates::catalog()
@@ -563,12 +579,20 @@ fn deck_for_open(inbound: &LandingInbound) -> Option<(Deck, Option<PathBuf>)> {
         // swapped out when the load returns.
         LandingInbound::OpenDefault => {
             let path: PathBuf = rfd::FileDialog::new()
-                .add_filter("Slide Deck", &["slidedeck"])
+                .add_filter("Slide Deck", &["deck", "slidedeck"])
                 .pick_file()?;
             Some((new_deck(light_theme(), "title"), Some(path)))
         }
         _ => None,
     }
+}
+
+// initial_open_path
+// Output: the first CLI argument as a path when it names an existing file
+// (a deck double-clicked on Windows / Linux, or a CLI launch), else None.
+fn initial_open_path() -> Option<PathBuf> {
+    let path = PathBuf::from(std::env::args_os().nth(1)?);
+    if path.is_file() { Some(path) } else { None }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -585,9 +609,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // EventLoopWindowTarget, only reachable in the run closure). `ipc_tx` and
     // `proxy` are kept for build_editor.
     let (landing_tx, landing_rx) = std::sync::mpsc::channel::<LandingInbound>();
+    // Kept for injecting file-open requests (launch argv + macOS openURLs) into
+    // the same open flow the landing uses.
+    let landing_tx_startup = landing_tx.clone();
+    let landing_tx_open = landing_tx.clone();
     let (landing_win, landing_wv) = build_landing(&event_loop, proxy.clone(), landing_tx)?;
     let mut landing_window: Option<Window> = Some(landing_win);
     let mut landing_webview: Option<WebView> = Some(landing_wv);
+
+    // A path passed on the command line (double-click on Windows / Linux, or a
+    // CLI launch) opens straight into that deck via the OpenRecent flow.
+    if let Some(path) = initial_open_path() {
+        let _ = landing_tx_startup.send(LandingInbound::OpenRecent {
+            path: path.to_string_lossy().into_owned(),
+        });
+        let _ = proxy.send_event(UserEvent::LandingIpcReceived);
+    }
 
     let schedule_flush: Box<dyn Fn()> = {
         let p = proxy_for_app.clone();
@@ -690,6 +727,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         error!("handle_ipc failed: {}", e);
                     }
                 }
+                if app.as_mut().is_some_and(|a| a.take_quit_requested()) {
+                    info!("quit confirmed; exiting");
+                    *control_flow = ControlFlow::Exit;
+                }
             }
             Event::UserEvent(UserEvent::FlushPatches) => {
                 if let Some(app) = app.as_mut()
@@ -705,6 +746,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     {
                         error!("handle_io_response failed: {}", e);
                     }
+                }
+                if app.as_mut().is_some_and(|a| a.take_quit_requested()) {
+                    info!("save-and-exit committed; exiting");
+                    *control_flow = ControlFlow::Exit;
                 }
             }
             Event::UserEvent(UserEvent::OpenPresentation) => {
@@ -836,6 +881,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
+            // macOS delivers Finder double-clicks / "Open with" as file URLs
+            // (application:openURLs:), not argv. Route each into the same open
+            // flow; the open arm ignores it once an editor is already up.
+            Event::Opened { urls } => {
+                for u in &urls {
+                    if let Ok(path) = u.to_file_path() {
+                        let _ = landing_tx_open.send(LandingInbound::OpenRecent {
+                            path: path.to_string_lossy().into_owned(),
+                        });
+                        let _ = proxy.send_event(UserEvent::LandingIpcReceived);
+                    }
+                }
+            }
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
                 window_id,
@@ -848,8 +906,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     present_window = None;
                 } else if Some(window_id) == editor_window.as_ref().map(|w| w.id()) {
-                    info!("editor closed; exiting");
-                    *control_flow = ControlFlow::Exit;
+                    match app.as_ref() {
+                        Some(a) if a.wants_quit_confirmation() => {
+                            info!("editor close requested with unsaved changes; confirming");
+                            if let Err(e) = a.show_quit_dialog() {
+                                error!("show_quit_dialog failed: {}", e);
+                            }
+                        }
+                        _ => {
+                            info!("editor closed; exiting");
+                            *control_flow = ControlFlow::Exit;
+                        }
+                    }
                 } else if Some(window_id) == landing_window.as_ref().map(|w| w.id()) {
                     info!("landing closed; exiting");
                     *control_flow = ControlFlow::Exit;

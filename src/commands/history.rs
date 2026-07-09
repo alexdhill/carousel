@@ -54,6 +54,7 @@ pub struct UndoOutput {
     pub affects_animations: bool,
     pub affects_assets: bool,
     pub affects_slide_meta: bool,
+    pub affects_guides: bool,
     pub warnings: Vec<String>,
 }
 
@@ -156,6 +157,7 @@ impl CommandHistory {
         let affects_animations: bool = entry.inverse.affects_animations();
         let affects_assets: bool = entry.inverse.affects_assets();
         let affects_slide_meta: bool = entry.inverse.affects_slide_meta();
+        let affects_guides: bool = entry.inverse.affects_guides();
         let CommandOutput {
             patches,
             inverse,
@@ -182,6 +184,7 @@ impl CommandHistory {
             affects_animations,
             affects_assets,
             affects_slide_meta,
+            affects_guides,
             warnings,
         }))
     }
@@ -208,6 +211,7 @@ impl CommandHistory {
         let affects_animations: bool = entry.inverse.affects_animations();
         let affects_assets: bool = entry.inverse.affects_assets();
         let affects_slide_meta: bool = entry.inverse.affects_slide_meta();
+        let affects_guides: bool = entry.inverse.affects_guides();
         let CommandOutput {
             patches,
             inverse,
@@ -234,6 +238,7 @@ impl CommandHistory {
             affects_animations,
             affects_assets,
             affects_slide_meta,
+            affects_guides,
             warnings,
         }))
     }

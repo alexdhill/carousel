@@ -26,6 +26,11 @@ pub struct LayoutNode {
     pub background: Option<String>,
     #[serde(default)]
     pub background_image: Option<String>,
+    // Editor alignment guides owned by this layout. Slides built on the layout
+    // display these read-only (inherited) in addition to their own; see
+    // Deck::inherited_guides. Persisted via theme_io like the layout background.
+    #[serde(default)]
+    pub guides: Vec<crate::deck::guide::Guide>,
     pub dirty: bool,
 }
 
@@ -52,8 +57,28 @@ impl LayoutNode {
             root,
             background: None,
             background_image: None,
+            guides: Vec::new(),
             dirty: false,
         }
+    }
+
+    // seeded_children
+    // Output: this layout's top-level elements cloned for stamping onto a slide.
+    // Content-bearing slots (Text / Image / Media / Table) are marked
+    // `placeholder = true` so an untouched slot hides in playback; decorative
+    // slots (Shape / Group / Embed) are always rendered (`placeholder = false`),
+    // matching how PowerPoint/Keynote treat layout graphics. Ids are preserved —
+    // they are the slot keys used for layout-change remapping.
+    pub fn seeded_children(&self) -> Vec<ElementNode> {
+        use crate::deck::element::ElementType;
+        let mut out: Vec<ElementNode> = self.root.children.clone();
+        for child in out.iter_mut() {
+            child.placeholder = matches!(
+                child.element_type,
+                ElementType::Text | ElementType::Image | ElementType::Media | ElementType::Table
+            );
+        }
+        out
     }
 
     // preview_slide
@@ -79,6 +104,12 @@ impl Canvas for LayoutNode {
     }
     fn mark_dirty(&mut self) {
         self.dirty = true;
+    }
+    fn guides(&self) -> &Vec<crate::deck::guide::Guide> {
+        &self.guides
+    }
+    fn guides_mut(&mut self) -> &mut Vec<crate::deck::guide::Guide> {
+        &mut self.guides
     }
 }
 
@@ -136,5 +167,20 @@ mod tests {
         let json = serde_json::to_string(&layout).unwrap();
         let back: LayoutNode = serde_json::from_str(&json).unwrap();
         assert_eq!(back, layout);
+    }
+
+    #[test]
+    fn seeded_children_marks_content_types_only() {
+        use crate::deck::builders::{shape_element, text_element};
+        use crate::deck::element::ShapeGeometry;
+        let text = text_element("layout_text_title", "T");
+        let shape = shape_element("layout_shape_hero", ShapeGeometry::Rectangle);
+        let root = group_element("r", vec![text, shape]);
+        let layout = LayoutNode::new("l".into(), "L".into(), root);
+        let seeded = layout.seeded_children();
+        let t = seeded.iter().find(|c| c.id == "layout_text_title").unwrap();
+        let s = seeded.iter().find(|c| c.id == "layout_shape_hero").unwrap();
+        assert!(t.placeholder, "text slot is a placeholder");
+        assert!(!s.placeholder, "decorative shape always renders");
     }
 }

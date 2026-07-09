@@ -1,0 +1,9 @@
+Package: carousel
+Version: @VERSION@
+Section: graphics
+Priority: optional
+Architecture: amd64
+Depends: libwebkit2gtk-4.1-0
+Maintainer: Alex Hill <dev@alexdhill.xyz>
+Description: Carousel slide deck editor
+ A desktop editor for .deck slide decks.

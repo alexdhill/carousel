@@ -107,6 +107,7 @@ pub fn parse_slide_fragment(html: &str) -> Result<SlideNode, ParseError> {
         content: ElementContent::Group,
         children,
         placeholder_fill: None,
+        placeholder: false,
         name: None,
         link: None,
         attributes: BTreeMap::new(),
@@ -156,6 +157,10 @@ fn parse_node(node: &NodeRef) -> Result<ElementNode, ParseError> {
     let name: Option<String> = attrs.get("data-name").map(str::to_string);
     let link: Option<String> = attrs.get("data-link").map(str::to_string);
     let placeholder_fill: Option<String> = attrs.get("data-placeholder-fill").map(str::to_string);
+    let placeholder: bool = attrs
+        .get("data-placeholder")
+        .map(|v| v == "true")
+        .unwrap_or(false);
 
     let mut custom: BTreeMap<String, String> = BTreeMap::new();
     for (qn, attr) in attrs.map.iter() {
@@ -199,6 +204,7 @@ fn parse_node(node: &NodeRef) -> Result<ElementNode, ParseError> {
         content,
         children,
         placeholder_fill,
+        placeholder,
         name,
         link,
         attributes: custom,
@@ -411,6 +417,7 @@ fn is_known_attr(key: &str) -> bool {
             | "data-name"
             | "data-link"
             | "data-placeholder-fill"
+            | "data-placeholder"
             | "style"
             | "data-asset-id"
             | "data-shape"
@@ -1366,6 +1373,7 @@ mod tests {
                 content: ElementContent::Text(RichText::new(text)),
                 children: vec![],
                 placeholder_fill: None,
+                placeholder: false,
                 name: None,
                 link: None,
                 attributes: BTreeMap::new(),

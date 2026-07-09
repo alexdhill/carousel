@@ -114,6 +114,44 @@
         return card;
     }
 
+    // thumbScaler
+    // One observer for every mounted thumbnail: whenever a stage's width
+    // changes (window resize, row reflow) it rescales that stage's surface so
+    // the native-pixel slide keeps filling the tile. A per-mount transform set
+    // once would freeze at its first width and drift as the row reflows.
+    const thumbScaler = new ResizeObserver(function (entries) {
+        for (let i = 0; i < entries.length; i++) {
+            const stage = entries[i].target;
+            const surface = stage.firstChild;
+            const native = Number(surface && surface.dataset.w) || 1;
+            surface.style.transform = "scale(" + stage.clientWidth / native + ")";
+        }
+    });
+
+    // mountThumb
+    // Inputs: a tile element and a thumb payload { html, css, asset_vars_css,
+    // width, height }. Output: side-effect; mounts the first-slide render in a
+    // shadow root on the tile (so :host-scoped theme vars resolve) and scales
+    // the native slide dimensions down to the tile's width via thumbScaler.
+    // Inert: pointer events off, no interaction.
+    function mountThumb(tile, thumb) {
+        const w = Number(thumb.width) || 1920;
+        const h = Number(thumb.height) || 1080;
+        const stage = document.createElement("div");
+        stage.className = "landing__thumb-stage";
+        const surface = document.createElement("div");
+        surface.className = "landing__thumb-surface";
+        surface.style.width = w + "px";
+        surface.style.height = h + "px";
+        surface.dataset.w = String(w);
+        const shadow = surface.attachShadow({ mode: "open" });
+        shadow.innerHTML = "<style>" + thumb.css + "</style><style>"
+            + (thumb.asset_vars_css || "") + "</style>" + thumb.html;
+        stage.appendChild(surface);
+        tile.appendChild(stage);
+        thumbScaler.observe(stage);
+    }
+
     // renderRecents / renderLayouts
     // Fill each row from the payload, or show an empty state.
     function renderRecents(recents) {
@@ -130,6 +168,9 @@
             const r = recents[i];
             const tile = document.createElement("div");
             tile.className = "landing__tile";
+            if (r.thumb) {
+                mountThumb(tile, r.thumb);
+            }
             const card = makeCard(tile, r.title || "Untitled", relativeDate(r.modified),
                 { kind: "recent", path: r.path }, function () {
                     post("OpenRecent", { path: r.path });

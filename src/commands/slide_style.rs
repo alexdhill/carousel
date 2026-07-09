@@ -11,8 +11,9 @@
 // affects_slide_meta so the editor rebroadcasts SlideInspectorUpdate.
 
 use crate::commands::{Command, CommandError, CommandOutput};
-use crate::deck::element::regenerate_ids;
+use crate::deck::element::ElementContent;
 use crate::deck::{CanvasTarget, ElementNode, SlideId};
+use std::collections::{HashMap, HashSet};
 
 // SetSlideBackground
 #[derive(Debug, Clone)]
@@ -236,21 +237,18 @@ impl Command for SetSlideLayout {
     // constrains forward choices to real layouts.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(!self.slide_id.is_empty(), "SetSlideLayout: empty slide_id");
-        // Forward apply: clone the chosen layout's template children (with fresh
-        // ids so re-stamping the same layout can't collide) before the mutable
-        // slide borrow. Inverse apply (restore_root set) skips this.
-        let mut template: Vec<ElementNode> = if self.restore_root.is_none() {
+        // Forward apply: fetch the chosen layout's slot children (placeholder-
+        // seeded, ids preserved) before the mutable slide borrow. Inverse apply
+        // (restore_root set) skips this and restores the snapshot verbatim.
+        let new_slots: Vec<ElementNode> = if self.restore_root.is_none() {
             deck.theme
                 .layouts
                 .get(&self.new_layout_id)
-                .map(|l| l.root.children.clone())
+                .map(|l| l.seeded_children())
                 .unwrap_or_default()
         } else {
             Vec::new()
         };
-        for child in template.iter_mut() {
-            regenerate_ids(child);
-        }
         let slide = deck
             .slides
             .get_mut(&self.slide_id)
@@ -261,7 +259,8 @@ impl Command for SetSlideLayout {
         if let Some(root) = &self.restore_root {
             slide.root = root.clone();
         } else {
-            slide.root.children.extend(template);
+            let old_children: Vec<ElementNode> = std::mem::take(&mut slide.root.children);
+            slide.root.children = remap_layout_children(old_children, new_slots);
         }
         if let Some(entry) = deck
             .manifest
@@ -296,6 +295,44 @@ impl Command for SetSlideLayout {
     fn affects_slide_meta(&self) -> bool {
         true
     }
+}
+
+// remap_layout_children
+// Inputs: the slide's current children and the new layout's placeholder-seeded
+// slot children.
+// Output: the reflowed child list. For each new slot: if the old slide had a
+// touched (edited) layout element with the same id, emit the new slot (its
+// geometry / style / preset) carrying the user's content, cleared of the
+// placeholder flag; otherwise emit the fresh placeholder slot. Then keep every
+// user-added element and every touched overflow layout element (a touched slot
+// absent from the new layout). Untouched placeholders with no new-layout slot
+// are dropped.
+// Control flow: one map build, one pass over slots, one pass over old children —
+// no recursion, bounds are the two input lengths.
+fn remap_layout_children(old: Vec<ElementNode>, new_slots: Vec<ElementNode>) -> Vec<ElementNode> {
+    let touched: HashMap<String, ElementContent> = old
+        .iter()
+        .filter(|e| e.is_layout_element() && !e.placeholder)
+        .map(|e| (e.id.clone(), e.content.clone()))
+        .collect();
+    let new_ids: HashSet<String> = new_slots.iter().map(|s| s.id.clone()).collect();
+    let mut result: Vec<ElementNode> = Vec::with_capacity(new_slots.len() + old.len());
+    for mut slot in new_slots {
+        if let Some(content) = touched.get(&slot.id) {
+            slot.content = content.clone();
+            slot.placeholder = false;
+        }
+        result.push(slot);
+    }
+    for el in old {
+        // Keep user-added elements, and touched overflow layout elements the new
+        // layout has no slot for. Untouched placeholders and consumed slots drop.
+        let overflow: bool = el.is_layout_element() && !el.placeholder && !new_ids.contains(&el.id);
+        if !el.is_layout_element() || overflow {
+            result.push(el);
+        }
+    }
+    result
 }
 
 #[cfg(test)]
@@ -416,14 +453,22 @@ mod tests {
     }
 
     #[test]
-    fn layout_appends_template_elements_keeping_edits_and_undo_restores() {
+    fn layout_change_remaps_edited_title_and_undo_restores() {
+        use crate::commands::SetTextContent;
+        use crate::deck::ElementContent;
         use crate::deck::templates::{light_theme, new_deck};
-        // A blank one-slide light deck; its slide starts seeded with "title".
+        // A blank one-slide light deck; slide seeded with "title" (title +
+        // subtitle placeholders).
         let mut deck = new_deck(light_theme(), "title");
         let sid = deck.slide_order[0].clone();
-        let before = deck.slides[&sid].root.children.len();
-        // Switch to "hero" (title + copy + accent block = 3): appended on top,
-        // not replacing the existing content.
+        // Edit the title so it becomes touched content.
+        SetTextContent {
+            target: CanvasTarget::Slide(sid.clone()),
+            element_id: "layout_text_title".into(),
+            new_content: crate::deck::RichText::new("My Talk"),
+        }
+        .apply(&mut deck)
+        .unwrap();
         let out = SetSlideLayout {
             slide_id: sid.clone(),
             new_layout_id: "hero".into(),
@@ -432,18 +477,74 @@ mod tests {
         .apply(&mut deck)
         .unwrap();
         assert_eq!(deck.slides[&sid].layout_id, "hero");
-        assert_eq!(deck.slides[&sid].root.children.len(), before + 3);
-        // Fresh ids: no duplicates after stamping on top.
-        let ids: std::collections::HashSet<&String> = deck.slides[&sid]
-            .root
-            .children
-            .iter()
-            .map(|c| &c.id)
-            .collect();
-        assert_eq!(ids.len(), before + 3);
+        let kids = &deck.slides[&sid].root.children;
+        // hero slots: title (carrying edited content, no longer placeholder),
+        // body + shape (fresh). Untouched subtitle dropped.
+        let title = kids.iter().find(|c| c.id == "layout_text_title").unwrap();
+        assert!(!title.placeholder, "edited title is not a placeholder");
+        match &title.content {
+            ElementContent::Text(rt) => assert_eq!(rt.plain, "My Talk"),
+            _ => panic!("title should be text"),
+        }
+        assert!(
+            kids.iter()
+                .any(|c| c.id == "layout_text_body" && c.placeholder)
+        );
+        assert!(kids.iter().any(|c| c.id == "layout_shape_hero"));
+        assert!(
+            !kids.iter().any(|c| c.id == "layout_text_subtitle"),
+            "untouched subtitle dropped"
+        );
+        // Undo restores the prior title layout + content verbatim.
         out.inverse.apply(&mut deck).unwrap();
         assert_eq!(deck.slides[&sid].layout_id, "title");
-        assert_eq!(deck.slides[&sid].root.children.len(), before);
+        assert!(
+            deck.slides[&sid]
+                .root
+                .children
+                .iter()
+                .any(|c| c.id == "layout_text_subtitle")
+        );
+    }
+
+    #[test]
+    fn layout_change_keeps_added_and_overflow_elements() {
+        use crate::commands::SetTextContent;
+        use crate::deck::templates::{light_theme, new_deck};
+        // title deck, edit subtitle so it is a touched layout element that "hero"
+        // has no slot for (overflow), and add a user element.
+        let mut deck = new_deck(light_theme(), "title");
+        let sid = deck.slide_order[0].clone();
+        SetTextContent {
+            target: CanvasTarget::Slide(sid.clone()),
+            element_id: "layout_text_subtitle".into(),
+            new_content: crate::deck::RichText::new("kept"),
+        }
+        .apply(&mut deck)
+        .unwrap();
+        // A user-added element (ULID id, not a layout slot).
+        deck.slides
+            .get_mut(&sid)
+            .unwrap()
+            .root
+            .children
+            .push(crate::deck::builders::text_element("usr_note", "note"));
+        SetSlideLayout {
+            slide_id: sid.clone(),
+            new_layout_id: "hero".into(),
+            restore_root: None,
+        }
+        .apply(&mut deck)
+        .unwrap();
+        let kids = &deck.slides[&sid].root.children;
+        assert!(
+            kids.iter().any(|c| c.id == "layout_text_subtitle"),
+            "touched overflow kept"
+        );
+        assert!(
+            kids.iter().any(|c| c.id == "usr_note"),
+            "added element kept"
+        );
     }
 
     #[test]

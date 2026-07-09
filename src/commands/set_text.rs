@@ -39,6 +39,16 @@ impl Command for SetTextContent {
             !self.element_id.is_empty(),
             "SetTextContent: element_id is empty"
         );
+        let count: usize = deck.slide_order.len();
+        let number: usize = match &self.target {
+            CanvasTarget::Slide(id) => deck
+                .slide_order
+                .iter()
+                .position(|s| s == id)
+                .map(|p| p + 1)
+                .unwrap_or(1),
+            _ => 1,
+        };
         let canvas = resolve_canvas_mut(deck, &self.target)?;
         let element = canvas
             .find_element_mut(&self.element_id)
@@ -55,6 +65,7 @@ impl Command for SetTextContent {
         };
 
         element.content = ElementContent::Text(self.new_content.clone());
+        element.placeholder = false;
         canvas.mark_dirty();
         canvas.invalidate_index();
 
@@ -64,10 +75,24 @@ impl Command for SetTextContent {
             new_content: prev_content,
         };
 
+        let raw: &str = self.new_content.plain.as_str();
+        let ctx: crate::html::serialize::RenderCtx = crate::html::serialize::RenderCtx {
+            number,
+            count,
+            date: crate::html::serialize::today_ymd(),
+        };
+        let text: String = crate::html::serialize::resolve_tokens(raw, &ctx);
+        let src: Option<String> = if raw.contains("${") {
+            Some(raw.to_string())
+        } else {
+            None
+        };
+
         Ok(CommandOutput {
             patches: vec![Patch::SetText {
                 element_id: self.element_id.clone(),
-                text: self.new_content.plain.clone(),
+                text,
+                src,
             }],
             inverse: Box::new(inverse),
             dirty_targets: vec![self.target.clone()],
@@ -96,6 +121,62 @@ mod tests {
     }
 
     #[test]
+    fn set_text_patch_resolves_and_carries_src_for_tokens() {
+        let (mut deck, sid, eid) = fresh_deck_first_text_child();
+        let cmd = SetTextContent {
+            target: CanvasTarget::Slide(sid),
+            element_id: eid,
+            new_content: RichText::new("Slide ${slideNumber}"),
+        };
+        let out = cmd.apply(&mut deck).unwrap();
+        match &out.patches[0] {
+            Patch::SetText { text, src, .. } => {
+                assert_eq!(text, "Slide 1");
+                assert_eq!(src.as_deref(), Some("Slide ${slideNumber}"));
+            }
+            _ => panic!("expected SetText"),
+        }
+    }
+
+    #[test]
+    fn set_text_clears_placeholder_flag() {
+        let (mut deck, sid, eid) = fresh_deck_first_text_child();
+        // Force the target into placeholder state, then edit it.
+        if let Some(canvas) = deck.canvas_mut(&CanvasTarget::Slide(sid.clone()))
+            && let Some(el) = canvas.find_element_mut(&eid)
+        {
+            el.placeholder = true;
+        }
+        SetTextContent {
+            target: CanvasTarget::Slide(sid.clone()),
+            element_id: eid.clone(),
+            new_content: RichText::new("edited"),
+        }
+        .apply(&mut deck)
+        .unwrap();
+        let canvas = deck.canvas(&CanvasTarget::Slide(sid)).unwrap();
+        assert!(!canvas.find_element(&eid).unwrap().placeholder);
+    }
+
+    #[test]
+    fn set_text_patch_no_src_without_tokens() {
+        let (mut deck, sid, eid) = fresh_deck_first_text_child();
+        let cmd = SetTextContent {
+            target: CanvasTarget::Slide(sid),
+            element_id: eid,
+            new_content: RichText::new("plain"),
+        };
+        let out = cmd.apply(&mut deck).unwrap();
+        match &out.patches[0] {
+            Patch::SetText { text, src, .. } => {
+                assert_eq!(text, "plain");
+                assert!(src.is_none());
+            }
+            _ => panic!("expected SetText"),
+        }
+    }
+
+    #[test]
     fn set_text_replaces_plain_content() {
         let (mut deck, sid, eid) = fresh_deck_first_text_child();
         let cmd = SetTextContent {
@@ -121,7 +202,9 @@ mod tests {
         let out = cmd.apply(&mut deck).unwrap();
         assert_eq!(out.patches.len(), 1);
         match &out.patches[0] {
-            Patch::SetText { element_id, text } => {
+            Patch::SetText {
+                element_id, text, ..
+            } => {
                 assert_eq!(element_id, &eid);
                 assert_eq!(text, "hi");
             }

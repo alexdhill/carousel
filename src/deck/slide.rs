@@ -90,6 +90,11 @@ pub struct SlideNode {
     // via the manifest SlideEntry, not the slide HTML.
     #[serde(default)]
     pub animations: Vec<AnimationEntry>,
+    // Editor alignment guides (Stage: saveable guides). Persisted via the
+    // manifest SlideEntry like `animations`; never part of the element tree, so
+    // they are absent from presentation / export / thumbnails by construction.
+    #[serde(default)]
+    pub guides: Vec<crate::deck::guide::Guide>,
     pub dirty: bool,
 }
 
@@ -179,6 +184,7 @@ impl SlideNode {
             root,
             metadata: SlideMetadata::default(),
             animations: Vec::new(),
+            guides: Vec::new(),
             dirty: false,
         }
     }
@@ -196,6 +202,12 @@ impl Canvas for SlideNode {
     }
     fn mark_dirty(&mut self) {
         self.dirty = true;
+    }
+    fn guides(&self) -> &Vec<crate::deck::guide::Guide> {
+        &self.guides
+    }
+    fn guides_mut(&mut self) -> &mut Vec<crate::deck::guide::Guide> {
+        &mut self.guides
     }
 }
 

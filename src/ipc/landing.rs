@@ -23,13 +23,31 @@ pub enum LandingInbound {
     Cancel,
 }
 
+// ThumbData
+// A self-contained render of a deck's first slide for the recents card. `html`
+// is the slide `<section>` fragment; `css` is the base + theme + globals sheet;
+// `asset_vars_css` maps `--asset-<id>` custom properties to inlined data-URI
+// images. `width`/`height` are the slide's native pixel dimensions, which the
+// card scales down. Mounted in a shadow root so `:host`-scoped theme variables
+// resolve exactly as they do in the editor.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ThumbData {
+    pub html: String,
+    pub css: String,
+    pub asset_vars_css: String,
+    pub width: u32,
+    pub height: u32,
+}
+
 // LandingRecent
-// One recents card: bundle path, display title, last-modified unix seconds.
+// One recents card: bundle path, display title, last-modified unix seconds, and
+// a best-effort first-slide thumbnail (None when the bundle cannot be read).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct LandingRecent {
     pub path: String,
     pub title: String,
     pub modified: u64,
+    pub thumb: Option<ThumbData>,
 }
 
 // LandingTemplate
@@ -101,6 +119,7 @@ mod tests {
                 path: "/a.slidedeck".into(),
                 title: "a".into(),
                 modified: 7,
+                thumb: None,
             }],
             templates: vec![LandingTemplate {
                 theme_id: "light".into(),

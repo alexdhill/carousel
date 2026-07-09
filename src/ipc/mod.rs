@@ -143,6 +143,11 @@ pub enum MessageKind {
     // Stage: animations — the active slide's timeline (id/element/category
     // per entry) so the inspector's Appear/Disappear toggles reflect state.
     SlideAnimationsUpdate(SlideAnimationsData),
+    // GuidesUpdate
+    // Saveable guides — the active canvas's own (editable) guides plus the
+    // guides inherited from its layout (read-only on a slide; empty when
+    // editing a layout). The editor redraws the ruler-guide overlay from this.
+    GuidesUpdate(GuidesData),
     // FontList
     // The installed font families (sorted, de-duplicated) for the styles
     // pane font-family combobox. Sent once after the editor webview is Ready.
@@ -181,6 +186,19 @@ pub enum MessageKind {
     // slide mount and after any slide-metadata command so the Slide box (shown
     // when nothing is selected) stays in sync.
     SlideInspectorUpdate(SlideInspectorData),
+
+    // SaveStateUpdate
+    // True when the deck has unsaved changes (a dirty slide, dirty manifest,
+    // or a dirty layout); false when everything is persisted. Drives the
+    // unsaved-changes dot beside the deck title. Sent after every mutation
+    // and after save / load.
+    SaveStateUpdate(bool),
+
+    // ShowQuitDialog
+    // Ask the editor webview to raise the unsaved-changes quit confirmation.
+    // Sent only when a close is requested while the deck has unsaved changes;
+    // the three buttons reply with QuitConfirmed or dismiss locally.
+    ShowQuitDialog,
 }
 
 // ---------- JS -> Rust payloads ----------
@@ -375,6 +393,23 @@ pub enum InteractionEvent {
         element_id: ElementId,
         property: String,
         value: String,
+    },
+    // Guide events (saveable guides). The editor drags a new guide off a
+    // ruler (GuideAdded), drags an existing one (GuideMoved, coalesced into a
+    // single undo step), or deletes one (GuideRemoved). `axis` is "h" (a
+    // horizontal line from the top ruler) or "v" (vertical, from the left
+    // ruler); `pos` is in slide px; `index` addresses the active canvas's own
+    // guides. They route to the AddGuide / MoveGuide / RemoveGuide commands.
+    GuideAdded {
+        axis: String,
+        pos: f64,
+    },
+    GuideMoved {
+        index: usize,
+        pos: f64,
+    },
+    GuideRemoved {
+        index: usize,
     },
     // SetSelectionFromPanel
     // Stage 9 — Object Panel. The user clicked an element in the panel.
@@ -571,6 +606,17 @@ pub enum InteractionEvent {
     SetSlideTransitionRequested {
         transition: Option<crate::deck::SlideTransition>,
     },
+    // SetMorphTransitionRequested
+    // Enable or disable morphing transition for an element on forward slide
+    // advances. `enabled` toggles the morph on/off; `duration_ms` and `easing`
+    // are used when enabled. Dispatches a SetMorphTransition command. Warnings
+    // about missing next-slide elements come back via Notice.
+    SetMorphTransitionRequested {
+        element_id: ElementId,
+        enabled: bool,
+        duration_ms: u32,
+        easing: String,
+    },
     SetSlideLayoutRequested {
         layout_id: LayoutId,
     },
@@ -608,6 +654,12 @@ pub enum InteractionEvent {
     // a new group at the top member's z-slot. The Rust side mints the group id.
     GroupSelectionRequested {
         element_ids: Vec<ElementId>,
+    },
+    // QuitConfirmed — a button in the unsaved-changes quit dialog. `save=true`
+    // saves then exits; `save=false` exits without saving. Cancel dismisses the
+    // dialog client-side and sends nothing.
+    QuitConfirmed {
+        save: bool,
     },
 }
 
@@ -890,6 +942,25 @@ pub struct SlideAnimationsData {
     pub entries: Vec<SlideAnimationEntry>,
 }
 
+// GuideDto / GuidesData
+// Wire shape for saveable guides. `axis` is "h" or "v"; `pos` is slide px.
+// `own` are the active canvas's editable guides; `inherited` are its layout's
+// guides, drawn read-only on a slide (empty when editing a layout). Carries an
+// f64, so this is not Eq (unlike the Patch enum) — guides ride their own
+// message rather than the DOM patch stream.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct GuideDto {
+    pub axis: String,
+    pub pos: f64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct GuidesData {
+    pub canvas_id: String,
+    pub own: Vec<GuideDto>,
+    pub inherited: Vec<GuideDto>,
+}
+
 // SlideAnimationEntry
 // One timeline entry fully rendered for the panel: stable id, target element,
 // category ("entrance"|"emphasis"|"exit"|"property"), the resolved effect
@@ -968,6 +1039,8 @@ pub enum Patch {
     SetText {
         element_id: ElementId,
         text: String,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        src: Option<String>,
     },
     SetInnerHtml {
         element_id: ElementId,
@@ -1365,6 +1438,7 @@ mod tests {
             Patch::SetText {
                 element_id: "a".into(),
                 text: "hi".into(),
+                src: None,
             },
             Patch::SetInnerHtml {
                 element_id: "a".into(),

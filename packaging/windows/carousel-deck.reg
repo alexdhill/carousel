@@ -1,0 +1,17 @@
+Windows Registry Editor Version 5.00
+
+; Associates .deck files with Carousel for the current user.
+; Replace C:\\Path\\To\\Carousel.exe with the installed executable path
+; before importing (double-click the .reg, or `reg import carousel-deck.reg`).
+
+[HKEY_CURRENT_USER\Software\Classes\.deck]
+@="Carousel.Deck"
+
+[HKEY_CURRENT_USER\Software\Classes\Carousel.Deck]
+@="Slide Deck"
+
+[HKEY_CURRENT_USER\Software\Classes\Carousel.Deck\DefaultIcon]
+@="\"C:\\Path\\To\\Carousel.exe\",0"
+
+[HKEY_CURRENT_USER\Software\Classes\Carousel.Deck\shell\open\command]
+@="\"C:\\Path\\To\\Carousel.exe\" \"%1\""

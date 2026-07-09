@@ -110,6 +110,28 @@ mod tests {
     }
 
     #[test]
+    fn renames_the_element_id_on_a_layout_canvas() {
+        let mut deck = Deck::sample();
+        let layout = deck.theme.layouts.get_mut("blank").unwrap();
+        layout
+            .root
+            .children
+            .push(crate::deck::builders::text_element("el_lt", "hi"));
+        let cmd = SetElementId {
+            target: CanvasTarget::Layout("blank".into()),
+            old_id: "el_lt".into(),
+            new_id: "el_lt_renamed".into(),
+        };
+        cmd.apply(&mut deck).unwrap();
+        assert!(
+            deck.theme.layouts["blank"]
+                .find_element("el_lt_renamed")
+                .is_some()
+        );
+        assert!(deck.theme.layouts["blank"].find_element("el_lt").is_none());
+    }
+
+    #[test]
     fn remounts_and_refreshes_object_tree() {
         let cmd = SetElementId {
             target: CanvasTarget::Slide("s".into()),

@@ -125,12 +125,22 @@ pub fn build_pdf_print_html(deck: &Deck) -> String {
 
     let mut pages: String = String::new();
     let mut page_index: usize = 0;
-    for sid in &deck.slide_order {
+    let slide_count: usize = deck.slide_order.len();
+    let today: String = crate::html::serialize::today_ymd();
+    for (slide_idx, sid) in deck.slide_order.iter().enumerate() {
         let slide = &deck.slides[sid];
         let timeline = &slide.animations;
         let n: usize = step_count(timeline);
         let (fill, img) = deck.effective_slide_bg(slide);
-        let html: String = serialize_slide_themed(slide, fill.as_deref(), img.as_deref());
+        let opts: crate::html::serialize::RenderOpts = crate::html::serialize::RenderOpts {
+            ctx: Some(crate::html::serialize::RenderCtx {
+                number: slide_idx + 1,
+                count: slide_count,
+                date: today.clone(),
+            }),
+            hide_placeholders: true,
+        };
+        let html: String = serialize_slide_themed(slide, fill.as_deref(), img.as_deref(), &opts);
         // Pages whose slide uses a compositing-only effect carry a marker so the
         // Chromium renderer screenshots and splices them (see raster_page_rects).
         let needs_raster: bool = slide_needs_raster(slide, &deck.theme.globals_css);

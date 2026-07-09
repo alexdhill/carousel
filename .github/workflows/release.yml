@@ -59,15 +59,105 @@ jobs:
             - name: Build
               run: cargo build --release --target ${{ matrix.target }}
 
-            - name: Stage artifact
+            - name: Package macOS (.dmg, sign + notarize)
+              if: runner.os == 'macOS'
+              shell: bash
+              env:
+                  MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+                  MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+                  MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+                  APPLE_ID: ${{ secrets.APPLE_ID }}
+                  APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+                  APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+              run: |
+                  set -euo pipefail
+                  target="${{ matrix.target }}"
+                  arch="${target%%-*}"          # aarch64 or x86_64
+                  app="Carousel.app"
+
+                  # Icon: build an iconset then an .icns.
+                  mkdir -p Carousel.iconset
+                  for s in 16 32 64 128 256 512; do
+                    sips -z "$s" "$s" packaging/icon.png --out "Carousel.iconset/icon_${s}x${s}.png" >/dev/null
+                    d=$((s * 2))
+                    sips -z "$d" "$d" packaging/icon.png --out "Carousel.iconset/icon_${s}x${s}@2x.png" >/dev/null
+                  done
+                  iconutil -c icns Carousel.iconset -o Carousel.icns
+
+                  # App bundle.
+                  mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+                  cp "target/$target/release/Carousel" "$app/Contents/MacOS/Carousel"
+                  chmod +x "$app/Contents/MacOS/Carousel"
+                  cp packaging/macos/Info.plist "$app/Contents/Info.plist"
+                  cp Carousel.icns "$app/Contents/Resources/Carousel.icns"
+
+                  # Sign (only when the cert secret is present).
+                  if [ -n "${MACOS_CERT_P12:-}" ]; then
+                    kc="$RUNNER_TEMP/build.keychain"
+                    security create-keychain -p actions "$kc"
+                    security set-keychain-settings -lut 21600 "$kc"
+                    security unlock-keychain -p actions "$kc"
+                    echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+                    security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+                    security list-keychains -d user -s "$kc" login.keychain
+                    security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions "$kc"
+                    codesign --deep --force --options runtime --timestamp \
+                      --sign "$MACOS_SIGN_IDENTITY" "$app"
+                    codesign --verify --strict --verbose=2 "$app"
+                  else
+                    echo "no MACOS_CERT_P12 secret; shipping unsigned app"
+                  fi
+
+                  # DMG.
+                  dmg="Carousel-${arch}.dmg"
+                  mkdir -p dmgroot
+                  cp -R "$app" dmgroot/
+                  ln -s /Applications dmgroot/Applications
+                  hdiutil create -volname Carousel -srcfolder dmgroot -ov -format UDZO "$dmg"
+
+                  # Notarize + staple (only with both cert and Apple-ID creds).
+                  if [ -n "${MACOS_CERT_P12:-}" ] && [ -n "${APPLE_ID:-}" ]; then
+                    xcrun notarytool submit "$dmg" \
+                      --apple-id "$APPLE_ID" \
+                      --password "$APPLE_APP_PASSWORD" \
+                      --team-id "$APPLE_TEAM_ID" --wait
+                    xcrun stapler staple "$dmg"
+                    xcrun stapler validate "$dmg"
+                  else
+                    echo "notarization skipped (missing creds)"
+                  fi
+
+                  mkdir -p dist && mv "$dmg" dist/
+
+            - name: Package Windows (NSIS installer)
+              if: runner.os == 'Windows'
+              shell: pwsh
+              run: |
+                  choco install nsis imagemagick -y --no-progress
+                  magick convert packaging/icon.png -define icon:auto-resize=256,128,64,48,32,16 packaging/nsis/Carousel.ico
+                  Copy-Item "target/${{ matrix.target }}/release/Carousel.exe" packaging/nsis/Carousel.exe
+                  $ver = "${{ github.ref_name }}".TrimStart("v")
+                  & "$env:ProgramFiles(x86)\NSIS\makensis.exe" "/DVERSION=$ver" packaging/nsis/carousel.nsi
+                  New-Item -ItemType Directory -Force dist | Out-Null
+                  Copy-Item packaging/nsis/Carousel-Setup-x86_64.exe dist/
+
+            - name: Package Linux (.deb)
+              if: runner.os == 'Linux'
               shell: bash
               run: |
-                  mkdir dist
-                  if [ "${{ runner.os }}" = "Windows" ]; then
-                    cp "target/${{ matrix.target }}/release/Carousel.exe" "dist/Carousel-${{ matrix.target }}.exe"
-                  else
-                    cp "target/${{ matrix.target }}/release/Carousel" "dist/Carousel-${{ matrix.target }}"
-                  fi
+                  set -euo pipefail
+                  sudo apt-get install -y imagemagick
+                  ver="${GITHUB_REF_NAME#v}"
+                  pkg="pkgroot"
+                  install -Dm755 "target/${{ matrix.target }}/release/Carousel" "$pkg/usr/bin/Carousel"
+                  install -Dm644 packaging/linux/carousel.desktop "$pkg/usr/share/applications/carousel.desktop"
+                  install -Dm644 packaging/linux/carousel-deck.xml "$pkg/usr/share/mime/packages/carousel-deck.xml"
+                  convert packaging/icon.png -resize 256x256 "$pkg/usr/share/icons/hicolor/256x256/apps/carousel.png"
+                  install -Dm755 packaging/linux/deb/postinst "$pkg/DEBIAN/postinst"
+                  install -Dm755 packaging/linux/deb/postrm "$pkg/DEBIAN/postrm"
+                  sed "s/@VERSION@/${ver}/" packaging/linux/deb/control > "$pkg/DEBIAN/control"
+                  dpkg-deb --build --root-owner-group "$pkg" "Carousel-x86_64.deb"
+                  mkdir -p dist && mv "Carousel-x86_64.deb" dist/
 
             - uses: actions/upload-artifact@v4
               with:

@@ -148,6 +148,7 @@ mod tests {
         Patch::SetText {
             element_id: id.into(),
             text: t.into(),
+            src: None,
         }
     }
 

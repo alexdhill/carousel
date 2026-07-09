@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Carousel</string>
+    <key>CFBundleDisplayName</key>
+    <string>Carousel</string>
+    <key>CFBundleIdentifier</key>
+    <string>xyz.alexdhill.carousel</string>
+    <key>CFBundleVersion</key>
+    <string>1.0.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>CFBundleExecutable</key>
+    <string>Carousel</string>
+    <key>CFBundleIconFile</key>
+    <string>Carousel</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>10.15</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+
+    <!-- Declare that Carousel opens .deck documents. -->
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Slide Deck</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>xyz.alexdhill.carousel.deck</string>
+            </array>
+        </dict>
+    </array>
+
+    <!-- Own the .deck UTI (a zip archive of deck data). -->
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>xyz.alexdhill.carousel.deck</string>
+            <key>UTTypeDescription</key>
+            <string>Slide Deck</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+                <string>public.archive</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>deck</string>
+                </array>
+            </dict>
+        </dict>
+    </array>
+</dict>
+</plist>

@@ -128,6 +128,10 @@ impl Command for CompositeCommand {
     fn affects_slide_meta(&self) -> bool {
         self.commands.iter().any(|c| c.affects_slide_meta())
     }
+
+    fn affects_guides(&self) -> bool {
+        self.commands.iter().any(|c| c.affects_guides())
+    }
 }
 
 #[cfg(test)]

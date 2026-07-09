@@ -9,6 +9,7 @@ use serde::Serialize;
 const INDEX_HTML: &str = include_str!("../../assets/export/index.html");
 const PLAYER_CSS: &str = include_str!("../../assets/export/player.css");
 const PLAYER_JS: &str = include_str!("../../assets/export/player.js");
+const MORPH_JS: &str = include_str!("../../assets/morph.js");
 
 // ExportBundle
 // An in-memory list of (relative path, bytes) to write into the export folder.
@@ -53,7 +54,9 @@ struct DeckData {
 // Errors: serde_json serialization failure (effectively never for this data).
 pub fn build_html_export(deck: &Deck) -> Result<ExportBundle, serde_json::Error> {
     let mut slides: Vec<SlideData> = Vec::with_capacity(deck.slide_order.len());
-    for sid in &deck.slide_order {
+    let count: usize = deck.slide_order.len();
+    let date: String = crate::html::serialize::today_ymd();
+    for (idx, sid) in deck.slide_order.iter().enumerate() {
         let slide = &deck.slides[sid];
         let timeline = &slide.animations;
         let n: usize = step_count(timeline);
@@ -73,7 +76,15 @@ pub fn build_html_export(deck: &Deck) -> Result<ExportBundle, serde_json::Error>
             step += 1;
         }
         let (fill, img) = deck.effective_slide_bg(slide);
-        let html: String = serialize_slide_themed(slide, fill.as_deref(), img.as_deref());
+        let opts = crate::html::serialize::RenderOpts {
+            ctx: Some(crate::html::serialize::RenderCtx {
+                number: idx + 1,
+                count,
+                date: date.clone(),
+            }),
+            hide_placeholders: true,
+        };
+        let html: String = serialize_slide_themed(slide, fill.as_deref(), img.as_deref(), &opts);
         slides.push(SlideData {
             html,
             snaps,
@@ -115,6 +126,7 @@ pub fn build_html_export(deck: &Deck) -> Result<ExportBundle, serde_json::Error>
     let mut files: Vec<(String, Vec<u8>)> = vec![
         ("index.html".to_string(), INDEX_HTML.as_bytes().to_vec()),
         ("player.css".to_string(), PLAYER_CSS.as_bytes().to_vec()),
+        ("morph.js".to_string(), MORPH_JS.as_bytes().to_vec()),
         ("player.js".to_string(), PLAYER_JS.as_bytes().to_vec()),
         ("deck.js".to_string(), deck_js.into_bytes()),
     ];
@@ -169,7 +181,13 @@ mod tests {
     fn export_contains_player_and_data_and_assets() {
         let deck = Deck::sample();
         let bundle = build_html_export(&deck).unwrap();
-        for name in ["index.html", "player.css", "player.js", "deck.js"] {
+        for name in [
+            "index.html",
+            "player.css",
+            "morph.js",
+            "player.js",
+            "deck.js",
+        ] {
             assert!(file(&bundle, name).is_some(), "missing {name}");
         }
         let deck_js = std::str::from_utf8(file(&bundle, "deck.js").unwrap()).unwrap();
@@ -194,5 +212,25 @@ mod tests {
                 entry.path
             );
         }
+    }
+
+    #[test]
+    fn export_substitutes_slide_tokens() {
+        use crate::deck::builders::{group_element, text_element};
+        let mut deck = Deck::sample();
+        let sid = deck.slide_order[0].clone();
+        // Replace the first child of slide 0 with a token text element.
+        let root = group_element(
+            "root",
+            vec![text_element("tk", "${slideNumber}/${slideCount}")],
+        );
+        deck.slides.get_mut(&sid).unwrap().root = root;
+        let bundle = build_html_export(&deck).unwrap();
+        let deck_js = String::from_utf8(file(&bundle, "deck.js").unwrap().to_vec()).unwrap();
+        assert!(
+            deck_js.contains("1/"),
+            "slide 1 number substituted: {}",
+            &deck_js[..200.min(deck_js.len())]
+        );
     }
 }

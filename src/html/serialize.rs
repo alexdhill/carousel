@@ -51,6 +51,23 @@ pub const ANIMATION_KEYFRAMES_CSS: &str = r#"
 [data-element-type="table"] > table { width: 100%; height: 100%; border-collapse: collapse; table-layout: fixed; }
 [data-element-type="table"] th, [data-element-type="table"] td { border: 1px solid var(--theme-muted, #bbb); padding: 6px 10px; text-align: left; vertical-align: top; color: inherit; font: inherit; overflow: hidden; }
 [data-element-type="table"] th { font-weight: 600; background: color-mix(in srgb, var(--theme-foreground, #000) 8%, transparent); }
+/* Scope compositing (mix-blend-mode, backdrop-filter, isolation) to the slide
+   so it blends against the slide's own backdrop, not whatever page the slide is
+   mounted on. Without this an element's blend reaches the page background, which
+   differs between the light canvas and the black presentation body — the same
+   element then renders differently in each. Isolating here (the inert base
+   injected into every shadow root: canvas, present, thumbnails, export) makes
+   all surfaces render identically. */
+.slide { isolation: isolate; }
+/* Slides are never transparent: a white floor under any theme/inline fill.
+   :where() keeps this at zero specificity so a theme's `.slide { background }`
+   rule and a per-slide inline fill both still override it; it only shows
+   through when nothing else sets a slide background. */
+:where(.slide) { background: #fff; }
+/* Untouched layout placeholders read as click-to-edit. This base is injected
+   into every shadow root, but playback (present/export/pdf/thumbnail) omits
+   placeholder elements entirely, so the rule only ever shows in the editor. */
+[data-placeholder="true"] { opacity: 0.45; }
 "#;
 
 // AnimMap: element id → its animation entry ids (in timeline order). Built
@@ -58,6 +75,113 @@ pub const ANIMATION_KEYFRAMES_CSS: &str = r#"
 // animated element gets a `data-anim-ids` targeting tag (a forward-looking
 // hook for a future runtime; inert now, dropped by the parser on read).
 type AnimMap<'a> = BTreeMap<&'a str, Vec<&'a str>>;
+
+// RenderCtx
+// Per-render values substituted into text tokens: the slide's 1-based number,
+// the deck's slide count, and today's date (YYYY-MM-DD). Passed as
+// Option<&RenderCtx> through the serializer — None on the persisted bundle path
+// (no substitution), Some on display mounts (editor / present / export / thumb).
+pub struct RenderCtx {
+    pub number: usize,
+    pub count: usize,
+    pub date: String,
+}
+
+// RenderOpts
+// Bundles the per-render knobs threaded through the serializer: the optional
+// token context (`ctx`) and whether untouched layout placeholders are omitted
+// (`hide_placeholders`). Playback surfaces (present / export / pdf / thumbnail)
+// set `hide_placeholders = true`; editor surfaces set it false and keep the
+// placeholders (emitting `data-placeholder="true"` for styling). The persisted
+// bundle path uses the default (no ctx, placeholders kept) so nothing is lost.
+#[derive(Default)]
+pub struct RenderOpts {
+    pub ctx: Option<RenderCtx>,
+    pub hide_placeholders: bool,
+}
+
+// resolve_tokens
+// Inputs: raw text and a render context.
+// Output: the text with every known ${…} token replaced by its context value;
+// unknown or unclosed tokens are copied verbatim.
+// Control flow: single left-to-right scan bounded by the input length; on `${`
+// it reads to the next `}` and maps the name, else copies the byte.
+pub fn resolve_tokens(raw: &str, ctx: &RenderCtx) -> String {
+    assert!(
+        raw.len() < usize::MAX,
+        "resolve_tokens: absurd input length"
+    );
+    let bytes: &[u8] = raw.as_bytes();
+    let mut out: String = String::with_capacity(raw.len());
+    let mut i: usize = 0;
+    let n: usize = bytes.len();
+    while i < n {
+        if bytes[i] == b'$' && i + 1 < n && bytes[i + 1] == b'{' {
+            match raw[i + 2..].find('}') {
+                Some(rel) => {
+                    let name: &str = &raw[i + 2..i + 2 + rel];
+                    let value: Option<String> = match name {
+                        "slideNumber" => Some(ctx.number.to_string()),
+                        "slideCount" => Some(ctx.count.to_string()),
+                        "date" => Some(ctx.date.clone()),
+                        _ => None,
+                    };
+                    match value {
+                        Some(v) => {
+                            out.push_str(&v);
+                            i = i + 2 + rel + 1;
+                        }
+                        None => {
+                            out.push_str(&raw[i..i + 2 + rel + 1]);
+                            i = i + 2 + rel + 1;
+                        }
+                    }
+                }
+                None => {
+                    out.push_str(&raw[i..]);
+                    i = n;
+                }
+            }
+        } else {
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    out
+}
+
+// civil_from_days
+// Inputs: days since the Unix epoch (1970-01-01 = 0).
+// Output: the (year, month, day) civil date. Branch-free algorithm (Hinnant),
+// no recursion, constant work.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z: i64 = days + 719_468;
+    let era: i64 = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe: i64 = z - era * 146_097;
+    let yoe: i64 = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y: i64 = yoe + era * 400;
+    let doy: i64 = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp: i64 = (5 * doy + 2) / 153;
+    let d: u32 = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m: u32 = if mp < 10 {
+        (mp + 3) as u32
+    } else {
+        (mp - 9) as u32
+    };
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+// today_ymd
+// Output: today's date as a YYYY-MM-DD string in UTC. Clock-before-epoch
+// collapses to day 0 rather than erroring — display text must never panic.
+pub fn today_ymd() -> String {
+    let secs: u64 = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let (y, m, d): (i64, u32, u32) = civil_from_days((secs / 86_400) as i64);
+    format!("{:04}-{:02}-{:02}", y, m, d)
+}
 
 // serialize_element
 // Inputs: a reference to a tree-rooted ElementNode.
@@ -75,7 +199,7 @@ pub fn serialize_element(node: &ElementNode) -> String {
     // animation context, so they carry no targeting tag; the element picks
     // one up on the next full slide mount.
     let anim: AnimMap = AnimMap::new();
-    write_node(node, None, &anim, &mut out);
+    write_node(node, None, &anim, &RenderOpts::default(), &mut out);
     out
 }
 
@@ -91,7 +215,7 @@ pub fn serialize_element(node: &ElementNode) -> String {
 // group receives a z-index equal to its sibling index — z is therefore
 // app-determined by tree position, not by any stored z_order field.
 pub fn serialize_slide(slide: &SlideNode) -> String {
-    serialize_slide_themed(slide, None, None)
+    serialize_slide_themed(slide, None, None, &RenderOpts::default())
 }
 
 // serialize_slide_themed
@@ -103,6 +227,7 @@ pub fn serialize_slide_themed(
     slide: &SlideNode,
     fb_fill: Option<&str>,
     fb_img: Option<&str>,
+    opts: &RenderOpts,
 ) -> String {
     assert!(
         slide.root.is_consistent(),
@@ -159,7 +284,10 @@ pub fn serialize_slide_themed(
     }
     out.push_str("><div class=\"slide__content\">");
     for (idx, child) in slide.root.children.iter().enumerate() {
-        write_node(child, Some(idx as i32), &anim, &mut out);
+        if opts.hide_placeholders && child.placeholder {
+            continue;
+        }
+        write_node(child, Some(idx as i32), &anim, opts, &mut out);
     }
     out.push_str("</div></section>");
     out
@@ -172,11 +300,17 @@ pub fn serialize_slide_themed(
 // Output: side-effect; appends `<div …>content</div>` to out.
 // Dataflow: attributes (with computed z-index in the style attr) →
 // content → recurse for groups, threading per-child sibling indices.
-fn write_node(node: &ElementNode, sibling_index: Option<i32>, anim: &AnimMap, out: &mut String) {
+fn write_node(
+    node: &ElementNode,
+    sibling_index: Option<i32>,
+    anim: &AnimMap,
+    opts: &RenderOpts,
+    out: &mut String,
+) {
     out.push_str("<div");
-    write_attributes(node, sibling_index, anim, out);
+    write_attributes(node, sibling_index, anim, opts, out);
     out.push('>');
-    write_content(node, anim, out);
+    write_content(node, anim, opts, out);
     out.push_str("</div>");
 }
 
@@ -189,6 +323,7 @@ fn write_attributes(
     node: &ElementNode,
     sibling_index: Option<i32>,
     anim: &AnimMap,
+    opts: &RenderOpts,
     out: &mut String,
 ) {
     let mut attrs: BTreeMap<String, String> = node.attributes.clone();
@@ -222,6 +357,21 @@ fn write_attributes(
         out.push_str("=\"");
         out.push_str(&escape_attr(v));
         out.push('"');
+    }
+    let token_raw: Option<&str> = match (&node.content, &opts.ctx) {
+        (ElementContent::Text(rt), Some(_)) if rt.plain.contains("${") => Some(rt.plain.as_str()),
+        _ => None,
+    };
+    if let Some(raw) = token_raw {
+        out.push_str(" data-src=\"");
+        out.push_str(&escape_attr(raw));
+        out.push('"');
+    }
+    // Untouched layout placeholder: tag it so the editor can style it as
+    // click-to-edit. Reaching here means the element is being rendered (playback
+    // skips placeholders before write_node), so no mode check is needed.
+    if node.placeholder {
+        out.push_str(" data-placeholder=\"true\"");
     }
 }
 
@@ -302,16 +452,22 @@ fn group_align_token(a: crate::deck::style::GroupAlignment) -> &'static str {
 // Text → escaped plain text; Group → recursive children threaded with
 // per-child sibling indices for z-index; Embed → raw HTML; other variants
 // emit nothing (content sits in data-* attributes).
-fn write_content(node: &ElementNode, anim: &AnimMap, out: &mut String) {
+fn write_content(node: &ElementNode, anim: &AnimMap, opts: &RenderOpts, out: &mut String) {
     match &node.content {
-        ElementContent::Text(rt) => out.push_str(&escape_text(&rt.plain)),
+        ElementContent::Text(rt) => match &opts.ctx {
+            Some(c) => out.push_str(&escape_text(&resolve_tokens(&rt.plain, c))),
+            None => out.push_str(&escape_text(&rt.plain)),
+        },
         ElementContent::Group => {
             for (idx, child) in node.children.iter().enumerate() {
-                write_node(child, Some(idx as i32), anim, out);
+                if opts.hide_placeholders && child.placeholder {
+                    continue;
+                }
+                write_node(child, Some(idx as i32), anim, opts, out);
             }
         }
         ElementContent::Embed(html) => out.push_str(html),
-        ElementContent::Table(td) => write_table(td, out),
+        ElementContent::Table(td) => write_table(td, opts, out),
         ElementContent::Image(_) | ElementContent::Media(_) | ElementContent::Shape(_) => {}
     }
 }
@@ -323,7 +479,7 @@ fn write_content(node: &ElementNode, anim: &AnimMap, out: &mut String) {
 // header row/column range emit `<th>`, the rest `<td>`; each cell writes its
 // style_overrides as an inline style and its escaped plain text. The grid is
 // clamped to rows×columns so a malformed model still serializes a rectangle.
-fn write_table(td: &crate::deck::element::TableData, out: &mut String) {
+fn write_table(td: &crate::deck::element::TableData, opts: &RenderOpts, out: &mut String) {
     out.push_str("<table data-rows=\"");
     out.push_str(&td.rows.to_string());
     out.push_str("\" data-columns=\"");
@@ -352,7 +508,10 @@ fn write_table(td: &crate::deck::element::TableData, out: &mut String) {
                     out.push('"');
                 }
                 out.push('>');
-                out.push_str(&escape_text(&cell.content.plain));
+                match &opts.ctx {
+                    Some(c) => out.push_str(&escape_text(&resolve_tokens(&cell.content.plain, c))),
+                    None => out.push_str(&escape_text(&cell.content.plain)),
+                }
             } else {
                 out.push('>');
             }
@@ -696,6 +855,20 @@ mod tests {
     }
 
     #[test]
+    fn base_css_isolates_slide_for_consistent_blend_modes() {
+        // Compositing props must blend against the slide, not the host page,
+        // so canvas / present / export render identically. See the rule comment.
+        assert!(ANIMATION_KEYFRAMES_CSS.contains(".slide { isolation: isolate; }"));
+    }
+
+    #[test]
+    fn base_css_gives_slides_a_white_floor_overridable_by_theme() {
+        // Zero-specificity so theme `.slide` rules / inline fills win; only the
+        // floor when nothing else sets a background — slides are never transparent.
+        assert!(ANIMATION_KEYFRAMES_CSS.contains(":where(.slide) { background: #fff; }"));
+    }
+
+    #[test]
     fn slide_wraps_children_in_section_and_content_div() {
         use crate::deck::slide::SlideNode;
         let root = group_element("rt", vec![text_element("c1", "x")]);
@@ -781,6 +954,100 @@ mod tests {
         assert!(n.inline_styles.is_empty());
         let html = serialize_element(&n);
         assert!(!html.contains("background-color"));
+    }
+
+    #[test]
+    fn resolve_tokens_substitutes_known_vars() {
+        let ctx = RenderCtx {
+            number: 3,
+            count: 12,
+            date: "2026-07-08".into(),
+        };
+        assert_eq!(
+            resolve_tokens("Slide ${slideNumber} of ${slideCount}", &ctx),
+            "Slide 3 of 12"
+        );
+        assert_eq!(resolve_tokens("${date}", &ctx), "2026-07-08");
+    }
+
+    #[test]
+    fn resolve_tokens_leaves_unknown_and_unclosed_literal() {
+        let ctx = RenderCtx {
+            number: 1,
+            count: 1,
+            date: "2026-07-08".into(),
+        };
+        assert_eq!(resolve_tokens("${foo}", &ctx), "${foo}");
+        assert_eq!(resolve_tokens("a ${date", &ctx), "a ${date");
+        assert_eq!(resolve_tokens("plain", &ctx), "plain");
+    }
+
+    #[test]
+    fn civil_from_days_matches_known_epochs() {
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        assert_eq!(civil_from_days(59), (1970, 3, 1));
+        assert_eq!(civil_from_days(20_642), (2026, 7, 8));
+    }
+
+    #[test]
+    fn serialize_with_ctx_substitutes_and_emits_data_src() {
+        use crate::deck::builders::{group_element, text_element};
+        let child = text_element("t1", "Slide ${slideNumber}");
+        let root = group_element("root", vec![child]);
+        let slide = SlideNode::new("s1".into(), "blank".into(), root);
+        let opts = RenderOpts {
+            ctx: Some(RenderCtx {
+                number: 4,
+                count: 9,
+                date: "2026-07-08".into(),
+            }),
+            hide_placeholders: false,
+        };
+        let html = serialize_slide_themed(&slide, None, None, &opts);
+        assert!(html.contains(">Slide 4<"), "value shown: {html}");
+        assert!(
+            html.contains("data-src=\"Slide ${slideNumber}\""),
+            "raw carried: {html}"
+        );
+    }
+
+    #[test]
+    fn serialize_without_ctx_leaves_raw_and_no_data_src() {
+        use crate::deck::builders::{group_element, text_element};
+        let child = text_element("t1", "Slide ${slideNumber}");
+        let root = group_element("root", vec![child]);
+        let slide = SlideNode::new("s1".into(), "blank".into(), root);
+        let html = serialize_slide_themed(&slide, None, None, &RenderOpts::default());
+        assert!(html.contains(">Slide ${slideNumber}<"), "raw shown: {html}");
+        assert!(!html.contains("data-src"), "no data-src: {html}");
+    }
+
+    #[test]
+    fn placeholder_hidden_in_playback_shown_in_editor() {
+        use crate::deck::builders::{group_element, text_element};
+        let mut ph = text_element("layout_text_title", "Title");
+        ph.placeholder = true;
+        let root = group_element("root", vec![ph]);
+        let slide = SlideNode::new("s1".into(), "title".into(), root);
+        let editor = serialize_slide_themed(&slide, None, None, &RenderOpts::default());
+        assert!(
+            editor.contains("data-placeholder=\"true\""),
+            "editor shows: {editor}"
+        );
+        assert!(editor.contains(">Title<"));
+        let playback = serialize_slide_themed(
+            &slide,
+            None,
+            None,
+            &RenderOpts {
+                ctx: None,
+                hide_placeholders: true,
+            },
+        );
+        assert!(
+            !playback.contains("layout_text_title"),
+            "playback hides: {playback}"
+        );
     }
 }
 

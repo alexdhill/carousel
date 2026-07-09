@@ -71,16 +71,18 @@ impl PresentCursor {
             return PresentStep::Reveal(forward_reveal(&sid, &timeline, step));
         }
         if self.slide_index + 1 < deck.slide_order.len() {
-            // Outgoing slide owns the transition; carry it forward (None-kind and
-            // missing both mean cut). Backward never animates, so only this path.
-            let outgoing: Option<crate::deck::SlideTransition> = deck
+            // Outgoing slide owns the transition; always carry it on a forward
+            // cross-slide so the frontend knows this is a forward move (a
+            // None-kind transition is a cut, but still enables element morphs).
+            // Backward never animates, so it alone passes None.
+            let outgoing: crate::deck::SlideTransition = deck
                 .slides
                 .get(&sid)
                 .and_then(|s| s.metadata.transition.clone())
-                .filter(|t| t.kind != crate::deck::TransitionKind::None);
+                .unwrap_or_default();
             self.slide_index += 1;
             self.cursor.reset();
-            return self.snapped_slide_change(deck, 0, outgoing);
+            return self.snapped_slide_change(deck, 0, Some(outgoing));
         }
         PresentStep::Unchanged
     }
@@ -125,7 +127,12 @@ impl PresentCursor {
     // Output: the mount payload for the current slide. None if out of range.
     pub fn current_slide_payload(&self, deck: &Deck) -> Option<PresentSlidePayload> {
         let sid: &SlideId = deck.slide_order.get(self.slide_index)?;
-        Some(slide_payload(deck, sid))
+        Some(slide_payload(
+            deck,
+            sid,
+            self.slide_index + 1,
+            deck.slide_order.len(),
+        ))
     }
 
     // snapped_slide_change
@@ -140,7 +147,8 @@ impl PresentCursor {
     ) -> PresentStep {
         let sid: SlideId = deck.slide_order[self.slide_index].clone();
         let timeline = self.timeline(deck, &sid);
-        let mut slide: PresentSlidePayload = slide_payload(deck, &sid);
+        let mut slide: PresentSlidePayload =
+            slide_payload(deck, &sid, self.slide_index + 1, deck.slide_order.len());
         slide.transition = transition;
         PresentStep::SlideChanged {
             slide,
@@ -162,14 +170,22 @@ impl PresentCursor {
 // Output: the PresentSlidePayload (serialized HTML + theme/globals CSS). A
 // missing slide yields empty HTML rather than panicking — the caller guards
 // membership, so this is defensive only.
-fn slide_payload(deck: &Deck, sid: &str) -> PresentSlidePayload {
+fn slide_payload(deck: &Deck, sid: &str, number: usize, count: usize) -> PresentSlidePayload {
     assert!(!sid.is_empty(), "slide_payload: empty slide id");
+    let opts: crate::html::serialize::RenderOpts = crate::html::serialize::RenderOpts {
+        ctx: Some(crate::html::serialize::RenderCtx {
+            number,
+            count,
+            date: crate::html::serialize::today_ymd(),
+        }),
+        hide_placeholders: true,
+    };
     let slide_html: String = deck
         .slides
         .get(sid)
         .map(|s| {
             let (fill, img) = deck.effective_slide_bg(s);
-            serialize_slide_themed(s, fill.as_deref(), img.as_deref())
+            serialize_slide_themed(s, fill.as_deref(), img.as_deref(), &opts)
         })
         .unwrap_or_default();
     PresentSlidePayload {
@@ -381,19 +397,19 @@ mod tests {
     }
 
     #[test]
-    fn forward_cross_none_kind_carries_no_transition() {
-        use crate::deck::{SlideTransition, TransitionKind};
-        let mut deck = deck_with(vec![("s1", vec![]), ("s2", vec![])]);
-        // Explicit None-kind is a cut: filtered out, payload transition is None.
-        deck.slides.get_mut("s1").unwrap().metadata.transition = Some(SlideTransition {
-            kind: TransitionKind::None,
-            duration_ms: 400,
-            easing: "ease".into(),
-        });
+    fn forward_cross_cut_carries_none_kind_transition() {
+        use crate::deck::TransitionKind;
+        // No authored transition: forward cross still carries a cut (None-kind)
+        // so the frontend can tell a forward move from a backward one (and run
+        // element morphs). It is a cut, not a panel animation.
+        let deck = deck_with(vec![("s1", vec![]), ("s2", vec![])]);
         let mut cur = PresentCursor::new(0);
         match cur.advance(&deck) {
             PresentStep::SlideChanged { slide, .. } => {
-                assert!(slide.transition.is_none());
+                let t = slide
+                    .transition
+                    .expect("forward cross carries a transition");
+                assert_eq!(t.kind, TransitionKind::None);
             }
             other => panic!("expected SlideChanged, got {other:?}"),
         }

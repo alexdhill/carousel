@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Carousel
+Comment=Slide deck editor
+Exec=Carousel %f
+Icon=carousel
+Terminal=false
+Categories=Office;Presentation;
+MimeType=application/x-carousel-deck;

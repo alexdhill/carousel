@@ -64,14 +64,20 @@
     // Active canvas tool: "select" (default) or "hand" (drag pans, no select).
     let activeTool = "select";
     let panSession = null;
-    // Rulers & guides (editor-only overlay; never serialized / presented /
-    // exported). Guides are session-ephemeral, keyed by slide id. A guide is
-    // { id, orient: "h"|"v", pos } where pos is in slide pixels (0 at the
-    // slide's top-left corner). Horizontal guides come from the top ruler and
-    // move in Y; vertical guides from the left ruler, move in X.
+    // Rulers & guides. Guides are saveable (persisted per slide/layout on the
+    // Rust side) and editor-only — they live outside the element tree, so they
+    // never appear in presentation/export. The active canvas's guides arrive via
+    // GuidesUpdate: `guideOwn` are this canvas's editable guides, `guideInherited`
+    // are its layout's guides (read-only on a slide; empty when editing a layout).
+    // A guide is { id, index, orient: "h"|"v", pos } where pos is in slide pixels
+    // (0 at the slide's top-left). `id` is "g"+index (own) / "gi"+index
+    // (inherited): stable across the post-commit re-hydration so a selection
+    // survives a move. Horizontal guides come from the top ruler (move in Y),
+    // vertical from the left ruler (move in X).
     let rulersOn = false;
     const RULER = 18;
-    let guidesBySlide = Object.create(null);
+    let guideOwn = [];
+    let guideInherited = [];
     let selectedGuideId = null;
     let guideDragSession = null;
     let guideSeq = 0;
@@ -167,6 +173,7 @@
     // div whose shadow root contains theme CSS + slide HTML. Caches the
     // shadow root and host for the selection overlay + patch applier.
     function mountSlide(slideId, slideHtml, themeCss, globalsCss) {
+        const prevSlideId = currentSlideHost ? currentSlideHost.dataset.slideId : null;
         if (typeof globalsCss === "string") {
             currentGlobalsCss = globalsCss;
         }
@@ -205,9 +212,15 @@
         currentSlideHost = host;
         assetVarStyleEl = shadow.getElementById("asset-vars");
         refreshAssetVarStyle();
-        // Selection from the previous slide does not transfer.
-        currentSelectionIds = [];
-        clearSelectionOverlay();
+        // A remount of the SAME slide (e.g. toggling a morph transition) keeps
+        // the selection and redraws its overlay on the fresh nodes. Only a
+        // switch to a different slide drops the selection.
+        if (prevSlideId === slideId && currentSelectionIds.length > 0) {
+            updateSelectionOverlay();
+        } else {
+            currentSelectionIds = [];
+            clearSelectionOverlay();
+        }
         // Re-apply the current zoom to the fresh host (fit recomputes for the
         // new slide's dimensions).
         applyZoom();
@@ -546,6 +559,11 @@
                 break;
             case "SetText":
                 el.textContent = patch.text;
+                if (typeof patch.src === "string") {
+                    el.dataset.src = patch.src;
+                } else if (el.dataset) {
+                    delete el.dataset.src;
+                }
                 break;
             case "SetInnerHtml":
                 el.innerHTML = patch.html;
@@ -1139,6 +1157,7 @@
         rulersOn = !rulersOn;
         ensureRulers();
         refreshRulers();
+        renderRulerGuides();
     }
 
     // refreshRulers — show/draw or hide the rulers for the current zoom/slide.
@@ -1249,39 +1268,48 @@
         return layer;
     }
 
+    // currentGuides — the active canvas's own (editable) guides.
     function currentGuides() {
-        const sid = activeSlideId;
-        if (!sid) {
-            return [];
-        }
-        if (!guidesBySlide[sid]) {
-            guidesBySlide[sid] = [];
-        }
-        return guidesBySlide[sid];
+        return guideOwn;
     }
 
-    // renderRulerGuides — redraw all ruler-pulled guides for the active slide
-    // at the current zoom. (Distinct from the snap engine's renderGuides.)
+    // sendGuideEvent — dispatch one guide interaction to Rust (which owns the
+    // saveable guide state and echoes a GuidesUpdate that re-hydrates the
+    // overlay). `kind` is GuideAdded / GuideMoved / GuideRemoved.
+    function sendGuideEvent(payload) {
+        window.__deck.send("Interaction", payload);
+    }
+
+    // renderRulerGuides — redraw the active canvas's guides at the current
+    // zoom: inherited (layout) guides first, read-only and beneath the editable
+    // own guides. (Distinct from the snap engine's renderGuides.)
     function renderRulerGuides() {
         const layer = ensureGuideOverlay();
         if (!layer) {
             return;
         }
         layer.replaceChildren();
+        if (!rulersOn) {
+            return;
+        }
         const m = canvasMetrics();
         if (!m) {
             return;
         }
-        const guides = currentGuides();
-        for (let i = 0; i < guides.length && i < 512; i++) {
-            layer.appendChild(buildGuideLine(guides[i], m));
+        for (let i = 0; i < guideInherited.length && i < 512; i++) {
+            layer.appendChild(buildGuideLine(guideInherited[i], m, true));
+        }
+        for (let i = 0; i < guideOwn.length && i < 512; i++) {
+            layer.appendChild(buildGuideLine(guideOwn[i], m, false));
         }
     }
 
-    function buildGuideLine(g, m) {
+    function buildGuideLine(g, m, readOnly) {
         const line = document.createElement("div");
         line.className = "guide";
-        if (g.id === selectedGuideId) {
+        if (readOnly) {
+            line.classList.add("guide--inherited");
+        } else if (g.id === selectedGuideId) {
             line.classList.add("guide--selected");
         }
         line.dataset.guideId = g.id;
@@ -1296,7 +1324,11 @@
             line.style.top = m.oy + "px";
             line.style.height = (m.slideH * m.scale) + "px";
         }
-        line.addEventListener("mousedown", function (e) { startGuideDrag(e, g); });
+        // Inherited guides are read-only (edit them on the layout); only own
+        // guides take the drag/select gesture.
+        if (!readOnly) {
+            line.addEventListener("mousedown", function (e) { startGuideDrag(e, g); });
+        }
         return line;
     }
 
@@ -1336,8 +1368,11 @@
         }
         e.preventDefault();
         e.stopPropagation();
-        const g = { id: "g" + (++guideSeq), orient: orient, pos: clampGuidePos(orient, pointerToSlide(e, orient, m), m) };
-        currentGuides().push(g);
+        // A local, server-less temp guide rendered live during the drag; on
+        // drop GuideAdded is dispatched and the GuidesUpdate echo replaces it
+        // with the authoritative guide. Released back on the ruler: discarded.
+        const g = { id: "gtmp", index: -1, orient: orient, pos: clampGuidePos(orient, pointerToSlide(e, orient, m), m) };
+        guideOwn.push(g);
         selectedGuideId = g.id;
         renderRulerGuides();
         showGuideInspector();
@@ -1356,7 +1391,10 @@
     }
 
     // beginGuideSession — shared move loop for create + drag, with its own
-    // listeners so it never tangles with element dragging.
+    // listeners so it never tangles with element dragging. Positions update
+    // locally for a smooth drag; the authoritative change is dispatched to Rust
+    // once on drop (GuideAdded / GuideMoved), or the guide is removed
+    // (GuideRemoved / discarded) when dropped back over its ruler.
     function beginGuideSession(g, orient, isCreate) {
         guideDragSession = { g: g, orient: orient, isCreate: isCreate };
         const move = function (ev) {
@@ -1372,8 +1410,23 @@
             window.removeEventListener("mousemove", move);
             window.removeEventListener("mouseup", up);
             guideDragSession = null;
-            if (overRuler(ev, orient)) {
-                deleteGuide(g.id);
+            const onRuler = overRuler(ev, orient);
+            if (isCreate) {
+                // Temp guide: commit it as a new guide, or drop it silently.
+                guideOwn = guideOwn.filter(function (x) { return x !== g; });
+                if (selectedGuideId === g.id) {
+                    selectedGuideId = null;
+                }
+                if (!onRuler) {
+                    sendGuideEvent({ kind: "GuideAdded", axis: orient, pos: g.pos });
+                } else {
+                    renderRulerGuides();
+                    hideGuideInspector();
+                }
+            } else if (onRuler) {
+                sendGuideEvent({ kind: "GuideRemoved", index: g.index });
+            } else {
+                sendGuideEvent({ kind: "GuideMoved", index: g.index, pos: g.pos });
             }
         };
         window.addEventListener("mousemove", move);
@@ -1401,17 +1454,19 @@
         hideGuideInspector();
     }
 
+    // deleteGuide — dispatch a removal for the own guide with this id. Rust
+    // applies it and echoes GuidesUpdate, which re-hydrates the overlay (so the
+    // local splice and re-render happen there, not here).
     function deleteGuide(id) {
-        const guides = currentGuides();
-        const idx = guides.findIndex(function (x) { return x.id === id; });
-        if (idx >= 0) {
-            guides.splice(idx, 1);
+        const g = guideOwn.find(function (x) { return x.id === id; });
+        if (!g || g.index < 0) {
+            return;
         }
         if (selectedGuideId === id) {
             selectedGuideId = null;
             hideGuideInspector();
         }
-        renderRulerGuides();
+        sendGuideEvent({ kind: "GuideRemoved", index: g.index });
     }
 
     // showGuideInspector / hideGuideInspector — the selected guide's only
@@ -1458,7 +1513,7 @@
         }
         input.addEventListener("change", function () {
             const g = currentGuides().find(function (x) { return x.id === selectedGuideId; });
-            if (!g) {
+            if (!g || g.index < 0) {
                 return;
             }
             const m = canvasMetrics();
@@ -1466,9 +1521,10 @@
             if (!isFinite(v)) {
                 v = g.pos;
             }
-            g.pos = m ? clampGuidePos(g.orient, v, m) : Math.max(0, v);
-            input.value = String(g.pos);
-            renderRulerGuides();
+            const pos = m ? clampGuidePos(g.orient, v, m) : Math.max(0, v);
+            input.value = String(pos);
+            // Commit via Rust; the GuidesUpdate echo re-renders the overlay.
+            sendGuideEvent({ kind: "GuideMoved", index: g.index, pos: pos });
         });
     }
 
@@ -1723,9 +1779,10 @@
             }
         }
         const targets = window.__snap.__build_targets(rects);
-        // Ruler guides are snap targets too: vertical guides add an x line,
-        // horizontal guides add a y line.
-        const guides = currentGuides();
+        // Ruler guides are snap targets too — both the canvas's own and the
+        // inherited layout guides: vertical guides add an x line, horizontal a
+        // y line.
+        const guides = guideOwn.concat(guideInherited);
         for (let g = 0; g < guides.length; g++) {
             if (guides[g].orient === "v") {
                 targets.xLines.push({ pos: guides[g].pos, source: "guide" });
@@ -2464,6 +2521,10 @@
             onKeydown: onKeydown,
             onBlur: onBlur,
         };
+        // Tokened text renders its resolved value; edit the raw ${…} source.
+        if (target.dataset && typeof target.dataset.src === "string") {
+            target.textContent = target.dataset.src;
+        }
         target.setAttribute("contenteditable", "true");
         target.spellcheck = false;
         target.addEventListener("keydown", onKeydown);
@@ -3156,6 +3217,35 @@
             refreshAnimationsSection();
             renderSlideAnimations();
         },
+        GuidesUpdate: function (payload) {
+            // Re-hydrate the active canvas's guides from authoritative state.
+            // ids are index-based so a selection survives the post-commit echo
+            // (a moved guide keeps its index). Inherited guides are read-only.
+            const own = (payload && payload.own) || [];
+            const inh = (payload && payload.inherited) || [];
+            guideOwn = own.map(function (g, i) {
+                return { id: "g" + i, index: i, orient: g.axis, pos: g.pos };
+            });
+            guideInherited = inh.map(function (g, i) {
+                return { id: "gi" + i, index: i, orient: g.axis, pos: g.pos };
+            });
+            if (selectedGuideId !== null
+                    && !guideOwn.some(function (x) { return x.id === selectedGuideId; })) {
+                selectedGuideId = null;
+                hideGuideInspector();
+            }
+            renderRulerGuides();
+            showGuideInspector();
+        },
+        SaveStateUpdate: function (payload) {
+            const meta = document.querySelector(".doc-meta");
+            if (meta) {
+                meta.classList.toggle("doc-meta--dirty", payload === true);
+            }
+        },
+        ShowQuitDialog: function () {
+            showQuitDialog();
+        },
         SlideInspectorUpdate: function (payload) {
             slideInspectorData = payload || null;
             // Refresh the Slide box if it is the visible state (no selection,
@@ -3771,6 +3861,14 @@
 
     const INSPECTOR_SECTIONS = [
         {
+            id: "presets",
+            label: "Presets",
+            appliesTo: ALL_TYPES,
+            fields: [
+                { prop: "preset", label: "Style preset", kind: "presets", full: true, composite: true },
+            ],
+        },
+        {
             id: "transform",
             label: "Transform",
             appliesTo: NON_GROUP_TYPES,
@@ -3778,16 +3876,8 @@
                 { prop: "x", label: "X", kind: "number", suffix: "px" },
                 { prop: "y", label: "Y", kind: "number", suffix: "px" },
                 { prop: "size", label: "Size", kind: "size-row", full: true, composite: true },
-                { prop: "rotation", label: "Rotation", kind: "rotation-deg", suffix: "°" },
-                { prop: "opacity", label: "Opacity", kind: "number", suffix: "" },
-            ],
-        },
-        {
-            id: "presets",
-            label: "Presets",
-            appliesTo: ALL_TYPES,
-            fields: [
-                { prop: "preset", label: "Style preset", kind: "presets", full: true, composite: true },
+                { prop: "rotation", label: "Rotation", kind: "rotation-deg", suffix: "°", icon: "rotation" },
+                { prop: "opacity", label: "Opacity", kind: "number", suffix: "%", percent: true, icon: "opacity" },
             ],
         },
         {
@@ -3816,7 +3906,7 @@
             label: "Shadow",
             appliesTo: BOXY_TYPES,
             fields: [
-                { prop: "box-shadow", label: "Shadow", kind: "shadow", full: true, composite: true },
+                { prop: "box-shadow", label: "Shadow", kind: "shadow", full: true, composite: true, noLabel: true },
             ],
         },
         {
@@ -3825,10 +3915,10 @@
             appliesTo: TEXT_TYPES,
             fields: [
                 { prop: "font-family", label: "Font", kind: "font-combo", full: true, composite: true },
-                { prop: "font-size", label: "Size", kind: "number", suffix: "px" },
-                { prop: "font-weight", label: "Weight", kind: "number", suffix: "" },
-                { prop: "line-height", label: "Line Height", kind: "number", suffix: "" },
-                { prop: "letter-spacing", label: "Letter Spacing", kind: "number", suffix: "px" },
+                { prop: "font-size", label: "Size", kind: "number", unit: "px", unitSelect: true, icon: "fontSize" },
+                { prop: "font-weight", label: "Weight", kind: "number", suffix: "", icon: "fontWeight" },
+                { prop: "line-height", label: "Line Height", kind: "number", suffix: "", icon: "lineHeight" },
+                { prop: "letter-spacing", label: "Letter Spacing", kind: "number", unit: "px", unitSelect: true, icon: "letterSpacing" },
                 {
                     prop: "text-align", label: "Alignment", kind: "segment", full: true,
                     options: [
@@ -3911,6 +4001,9 @@
 
     // Cluster cell specs: the four longhand props (in cell order) plus the short
     // label each cell shows. `parse` reads the live values off a decl map.
+    // Length units offered by the inspector unit chips (px is the default).
+    const UNITS = ["px", "em", "rem", "pt", "in", "pc", "cm", "mm"];
+
     const CLUSTER_SPECS = {
         width: {
             cells: [
@@ -3926,10 +4019,10 @@
         },
         radius: {
             cells: [
-                { prop: "border-top-left-radius", label: "TL", tip: "Top-left" },
-                { prop: "border-top-right-radius", label: "TR", tip: "Top-right" },
-                { prop: "border-bottom-right-radius", label: "BR", tip: "Bottom-right" },
-                { prop: "border-bottom-left-radius", label: "BL", tip: "Bottom-left" },
+                { prop: "border-top-left-radius", label: "TL", tip: "Top-left", icon: "cornerTL" },
+                { prop: "border-top-right-radius", label: "TR", tip: "Top-right", icon: "cornerTR" },
+                { prop: "border-bottom-right-radius", label: "BR", tip: "Bottom-right", icon: "cornerBR" },
+                { prop: "border-bottom-left-radius", label: "BL", tip: "Bottom-left", icon: "cornerBL" },
             ],
             parse: function (decls) {
                 const r = window.__style.parseRadius(decls);
@@ -4047,10 +4140,29 @@
         }
         const label = document.createElement("label");
         label.className = "inspector__field-label";
-        label.textContent = field.label + (field.suffix ? " (" + field.suffix.trim() + ")" : "");
+        label.textContent = field.label
+            + (field.suffix && !field.icon ? " (" + field.suffix.trim() + ")" : "");
         const control = buildFieldControl(field);
         control.dataset.prop = field.prop;
         control.dataset.kind = field.kind;
+        // noLabel fields carry their own per-input labels (e.g. the shadow grid),
+        // so suppress the redundant row label.
+        if (field.noLabel) {
+            const id = "inspector-input-" + field.prop.replace(/[^a-z0-9]/gi, "-");
+            control.id = id;
+            inspectorInputs[field.prop] = control;
+            wrap.appendChild(control);
+            return wrap;
+        }
+        // CSS number fields carry a unit (e.g. "px") the bare value must be
+        // suffixed with on commit; geometry number fields (x/y/w/h) have no
+        // unit and stay bare floats for the Rust geometry path.
+        if (field.unit) {
+            control.dataset.unit = field.unit;
+        }
+        if (field.percent) {
+            control.dataset.percent = "1";
+        }
         // Composite controls (swatch/cluster/shadow/border-style/size-row) wire
         // their own commits internally, so skip the single-prop change handler
         // that would double-post.
@@ -4066,23 +4178,239 @@
         return wrap;
     }
 
+    // UNIT_CHEVRON: the small down-caret drawn inside a unit chip.
+    const UNIT_CHEVRON = '<svg width="9" height="9" viewBox="0 0 24 24" fill="none"'
+        + ' stroke="currentColor" stroke-width="3" stroke-linecap="round"'
+        + ' stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
+
+    // FIELD_ICONS: inner SVG markup for each inspector field icon (wrapped by
+    // makeFieldIcon in a 24-box, 1.8-stroke svg). The design-doc icons plus
+    // three matched additions (rotation / font size / font weight).
+    const FIELD_ICONS = {
+        opacity: '<circle cx="12" cy="12" r="8"/>'
+            + '<path d="M12 4a8 8 0 0 0 0 16z" fill="currentColor" stroke="none"/>',
+        rotation: '<path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v5h-5"/>',
+        lineHeight: '<path d="M6 4v16M4 6l2-2 2 2M4 18l2 2 2-2M12 6h8M12 12h8M12 18h8"/>',
+        letterSpacing: '<path d="M4 5v14M20 5v14M9 9l-2 3 2 3M15 9l2 3-2 3"/>',
+        fontSize: '<path d="M3 19l4.5-12 4.5 12M4.6 15h5.8"/>'
+            + '<path d="M14 19l3-8 3 8M15 16h4"/>',
+        fontWeight: '<path d="M7 5h6a3.5 3.5 0 0 1 0 7H7zM7 12h7a3.5 3.5 0 0 1 0 7H7z"/>',
+        cornerTL: '<path d="M19 5h-8a6 6 0 0 0-6 6v8"/>',
+        cornerTR: '<path d="M5 5h8a6 6 0 0 1 6 6v8"/>',
+        cornerBR: '<path d="M5 19h8a6 6 0 0 0 6-6V5"/>',
+        cornerBL: '<path d="M19 19h-8a6 6 0 0 1-6-6V5"/>',
+    };
+
+    // Per-icon stroke overrides (default 1.8); the weight "B" reads bolder.
+    const FIELD_ICON_STROKE = { fontWeight: 3 };
+
+    // fieldIconSvg — the 14px svg markup for a field icon key ("" if unknown).
+    function fieldIconSvg(key) {
+        const inner = FIELD_ICONS[key];
+        if (!inner) {
+            return "";
+        }
+        const sw = FIELD_ICON_STROKE[key] || 1.8;
+        return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none"'
+            + ' stroke="currentColor" stroke-width="' + sw + '" stroke-linecap="round"'
+            + ' stroke-linejoin="round">' + inner + '</svg>';
+    }
+
+    // makeFieldIcon — a leading icon span for a number field.
+    function makeFieldIcon(key) {
+        const span = document.createElement("span");
+        span.className = "inspector__field-icon";
+        span.innerHTML = fieldIconSvg(key);
+        return span;
+    }
+
+    // makeDropdown
+    // Inputs: { label, options:[{value,label}], value, placeholder, variant,
+    //   className, onChange }. Output: a trigger element (button for "field",
+    //   span chip for "chip") styled like the Add-Animation menu. It owns a
+    //   fixed-position popover (single header = `label`, then the options) built
+    //   lazily on open; click-off / Esc close it. Exposes `.value` get/set,
+    //   `.setOptions()`, and fires `change` on selection (drop-in for a native
+    //   <select>). See docs/… unified-dropdown spec.
+    function makeDropdown(opts) {
+        const variant = opts.variant === "chip" ? "chip" : "field";
+        const label = opts.label || "";
+        let placeholder = opts.placeholder || "";
+        let options = (opts.options || []).slice();
+        let value = opts.value == null ? "" : String(opts.value);
+        const trigger = document.createElement(variant === "chip" ? "span" : "button");
+        if (variant === "chip") {
+            trigger.className = "inspector__unitchip tt";
+            trigger.setAttribute("data-tip", label);
+            trigger.setAttribute("data-key", "");
+        } else {
+            trigger.type = "button";
+            trigger.className = "inspector__dropdown";
+        }
+        if (opts.className) { trigger.classList.add(opts.className); }
+        const lab = document.createElement("span");
+        lab.className = variant === "chip"
+            ? "inspector__unitchip-label" : "inspector__dropdown-label";
+        const caret = document.createElement("span");
+        caret.className = variant === "chip"
+            ? "inspector__unitchip-caret" : "inspector__dropdown-caret";
+        caret.innerHTML = UNIT_CHEVRON;
+        trigger.appendChild(lab);
+        trigger.appendChild(caret);
+        const menu = document.createElement("div");
+        menu.className = "dropdown-menu";
+
+        function labelFor(v) {
+            for (let i = 0; i < options.length; i++) {
+                if (options[i].value === v) { return options[i].label; }
+            }
+            return "";
+        }
+        function relabel() {
+            const t = labelFor(value);
+            lab.textContent = t !== "" ? t : placeholder;
+        }
+        function buildMenu() {
+            menu.replaceChildren();
+            const h = document.createElement("div");
+            h.className = "anim-menu__cat";
+            h.textContent = label;
+            menu.appendChild(h);
+            for (let i = 0; i < options.length; i++) {
+                const o = options[i];
+                const b = document.createElement("button");
+                b.type = "button";
+                b.className = "anim-menu__item";
+                b.textContent = o.label;
+                b.setAttribute("aria-selected", o.value === value ? "true" : "false");
+                (function (v) {
+                    b.addEventListener("click", function () { select(v); close(); });
+                }(o.value));
+                menu.appendChild(b);
+            }
+        }
+        function select(v) {
+            value = String(v);
+            relabel();
+            if (opts.onChange) { opts.onChange(value); }
+            trigger.dispatchEvent(new Event("change"));
+        }
+        function open() {
+            buildMenu();
+            document.body.appendChild(menu);
+            menu.style.minWidth = trigger.getBoundingClientRect().width + "px";
+            menu.classList.add("dropdown-menu--open");
+            positionColorPopover(menu, trigger);
+            document.addEventListener("pointerdown", onOutside, true);
+            document.addEventListener("keydown", onEsc, true);
+        }
+        function close() {
+            menu.classList.remove("dropdown-menu--open");
+            menu.remove();
+            document.removeEventListener("pointerdown", onOutside, true);
+            document.removeEventListener("keydown", onEsc, true);
+        }
+        function onOutside(e) {
+            if (!menu.contains(e.target) && !trigger.contains(e.target)) { close(); }
+        }
+        function onEsc(e) {
+            if (e.key === "Escape") { e.preventDefault(); close(); }
+        }
+        trigger.addEventListener("click", function (e) {
+            e.stopPropagation();
+            if (menu.classList.contains("dropdown-menu--open")) { close(); } else { open(); }
+        });
+        Object.defineProperty(trigger, "value", {
+            get: function () { return value; },
+            set: function (v) { value = v == null ? "" : String(v); relabel(); },
+        });
+        trigger.setOptions = function (newOptions) {
+            options = (newOptions || []).slice();
+            relabel();
+        };
+        trigger.setPlaceholder = function (p) {
+            placeholder = p || "";
+            relabel();
+        };
+        relabel();
+        return trigger;
+    }
+
+    // makeUnitChip
+    // Inputs: getUnit() → current unit string, setUnit(u) → commit a new unit.
+    // Output: the "px ▾" chip (a chip-variant dropdown of UNITS). `.sync()`
+    // relabels from getUnit(). Errors: asserts both callbacks are functions.
+    function makeUnitChip(getUnit, setUnit) {
+        console.assert(typeof getUnit === "function" && typeof setUnit === "function",
+            "unit chip needs get/set");
+        const chip = makeDropdown({
+            label: "Unit",
+            variant: "chip",
+            options: UNITS.map(function (u) { return { value: u, label: u }; }),
+            value: getUnit() || "px",
+            onChange: function (u) { setUnit(u); },
+        });
+        chip.sync = function () { chip.value = getUnit() || "px"; };
+        return chip;
+    }
+
+    // makeNumberField
+    // Inputs: a number / rotation-deg field carrying `icon` and/or `unitSelect`
+    // (else `suffix`). Output: a box laid out `[icon][input][chip | suffix]`.
+    // Exposes `.value` (proxying the input); unit fields also carry a live
+    // `dataset.unit` + `setUnit()`. Fires `change` on number commit and (unit
+    // fields) on unit change. Reused for opacity/rotation/line-height/weight and
+    // the unit-select fields (font-size / letter-spacing).
+    function makeNumberField(field) {
+        const box = document.createElement("div");
+        box.className = "inspector__unitfield";
+        const input = document.createElement("input");
+        input.className = "inspector__input";
+        input.spellcheck = false;
+        if (field.icon) {
+            box.appendChild(makeFieldIcon(field.icon));
+        }
+        input.addEventListener("change", function () { box.dispatchEvent(new Event("change")); });
+        input.addEventListener("keydown", function (e) {
+            if (e.key === "Enter") { e.preventDefault(); input.blur(); }
+        });
+        box.appendChild(input);
+        if (field.unitSelect) {
+            let unit = field.unit || "px";
+            box.dataset.unit = unit;
+            const chip = makeUnitChip(function () { return unit; }, function (u) {
+                unit = u;
+                box.dataset.unit = u;
+                box.dispatchEvent(new Event("change"));
+            });
+            box.appendChild(chip);
+            box.setUnit = function (u) {
+                unit = u || "px";
+                box.dataset.unit = unit;
+                chip.sync();
+            };
+        } else if (field.suffix) {
+            const sfx = document.createElement("span");
+            sfx.className = "inspector__field-suffix";
+            sfx.textContent = field.suffix;
+            box.appendChild(sfx);
+        }
+        Object.defineProperty(box, "value", {
+            get: function () { return input.value; },
+            set: function (v) { input.value = v; },
+        });
+        return box;
+    }
+
     // buildFieldControl
     // Inputs: a field definition.
     // Output: the bare control element for the field's kind — a <select> for
     // "select", a color swatch for "color", otherwise a text <input> (the
     // Enter-to-blur affordance is wired for text inputs only).
     function buildFieldControl(field) {
-        if (field.kind === "select") {
-            const sel = document.createElement("select");
-            sel.className = "inspector__input inspector__select";
-            const opts = field.options || [];
-            for (let i = 0; i < opts.length; i++) {
-                const o = document.createElement("option");
-                o.value = opts[i].value;
-                o.textContent = opts[i].label;
-                sel.appendChild(o);
-            }
-            return sel;
+        if ((field.kind === "number" || field.kind === "rotation-deg")
+                && (field.icon || field.unitSelect)) {
+            return makeNumberField(field);
         }
         if (field.kind === "segment") {
             return makeSegmentControl(field.options || []);
@@ -4178,45 +4506,402 @@
         return box;
     }
 
+    // makeColorSlider
+    // Inputs: label text, max value, and onInput / onCommit callbacks.
+    // Output: { row, input, readout } — a labelled range slider row used for
+    // the H/S/L/A axes of the colour popover. `input` fires onInput live and
+    // onCommit on release (commit-on-change, preview-on-input).
+    function makeColorSlider(label, max, onInput, onCommit) {
+        const row = document.createElement("div");
+        row.className = "colorpop__slider";
+        const lab = document.createElement("span");
+        lab.className = "colorpop__slider-label";
+        lab.textContent = label;
+        const input = document.createElement("input");
+        input.type = "range";
+        input.min = "0";
+        input.max = String(max);
+        input.step = "1";
+        const readout = document.createElement("span");
+        readout.className = "colorpop__slider-val";
+        input.addEventListener("input", onInput);
+        input.addEventListener("change", onCommit);
+        row.appendChild(lab);
+        row.appendChild(input);
+        row.appendChild(readout);
+        return { row: row, input: input, readout: readout };
+    }
+
+    // positionColorPopover
+    // Inputs: the popover element and its anchor (the inline swatch). Output:
+    // side-effect; pins the popover (position:fixed) just below the anchor,
+    // clamped into the viewport so it never spills off-screen.
+    function positionColorPopover(pop, anchor) {
+        const r = anchor.getBoundingClientRect();
+        const pw = pop.offsetWidth || 240;
+        const ph = pop.offsetHeight || 300;
+        let left = r.left;
+        let top = r.bottom + 8;
+        left = Math.max(8, Math.min(left, window.innerWidth - pw - 8));
+        let above = false;
+        if (top + ph > window.innerHeight - 8) {
+            top = Math.max(8, r.top - ph - 8);
+            above = true;
+        }
+        pop.style.left = left + "px";
+        pop.style.top = top + "px";
+        pop.classList.toggle("colorpop--above", above);
+        const cx = r.left + r.width / 2 - left;
+        pop.style.setProperty("--arrow-x", Math.max(10, Math.min(cx, pw - 10)) + "px");
+    }
+
     // makeColorControl
-    // Output: a swatch + hex readout that behaves like a color input. A
-    // chromeless <input type=color> is the swatch; a span shows the hex.
-    // `.value` proxies the swatch; picking a color updates the hex and
-    // dispatches `change`. ponytail: non-hex incoming values (rgb/named)
-    // show as text — the native swatch can't render them.
+    // Output: an inline swatch trigger whose `.value` round-trips a full
+    // hex-or-rgba() colour string and which dispatches `change` on commit
+    // (unchanged public contract). Clicking the swatch opens a popover with an
+    // HS wheel and H/S/L/A sliders; HSL is the edit model, rgba() the stored
+    // value. See docs/superpowers/specs/2026-06-27-color-picker-design.md.
     function makeColorControl() {
         const box = document.createElement("div");
         box.className = "inspector__color";
-        const swatch = document.createElement("input");
-        swatch.type = "color";
+        const swatch = document.createElement("button");
+        swatch.type = "button";
         swatch.className = "inspector__color-swatch";
-        const hex = document.createElement("span");
-        hex.className = "inspector__color-hex";
-        hex.textContent = "—";
+        const fill = document.createElement("span");
+        fill.className = "inspector__color-fill";
+        swatch.appendChild(fill);
+        const hexInput = document.createElement("input");
+        hexInput.className = "inspector__color-hex";
+        hexInput.spellcheck = false;
+        // Growing gap between the hex text and the percentage: clicking here
+        // opens the picker (only the hex text itself edits).
+        const gap = document.createElement("span");
+        gap.className = "inspector__color-gap";
+        const pct = document.createElement("span");
+        pct.className = "inspector__color-pct";
+        pct.textContent = "100%";
         box.appendChild(swatch);
-        box.appendChild(hex);
-        box.addEventListener("click", function (e) {
-            if (e.target !== swatch) { swatch.click(); }
-        });
-        swatch.addEventListener("input", function () {
-            hex.textContent = swatch.value.toUpperCase();
-        });
-        swatch.addEventListener("change", function () {
-            box.dispatchEvent(new Event("change"));
-        });
-        Object.defineProperty(box, "value", {
-            get: function () { return swatch.value; },
-            set: function (v) {
-                const s = (v === null || v === undefined) ? "" : String(v).trim();
-                if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(s)) {
-                    swatch.value = s;
-                    hex.textContent = s.toUpperCase();
-                } else {
-                    hex.textContent = (s === "") ? "—" : s;
+        box.appendChild(hexInput);
+        box.appendChild(gap);
+        box.appendChild(pct);
+
+        const state = { h: 0, s: 0, l: 0, a: 100, none: false };
+        const pop = buildColorPopover(state, render, commit, setNone);
+        const alphaPop = buildAlphaPopover(state, render, commit);
+        document.body.appendChild(pop.el);
+        document.body.appendChild(alphaPop.el);
+
+        function stateHex() {
+            const rgb = window.__style.hslToRgb(state.h, state.s, state.l);
+            return window.__style.rgbToHex(rgb.r, rgb.g, rgb.b);
+        }
+        // render: repaint the inline row + popovers from state. No commit
+        // (callers commit explicitly). Skips inputs the user is editing.
+        function render() {
+            const hex = stateHex();
+            const css = window.__style.composeRgba(hex, state.a);
+            if (state.none) {
+                box.classList.add("inspector__color--none");
+                fill.style.background = "";
+                if (document.activeElement !== hexInput) { hexInput.value = "None"; }
+                pct.textContent = "";
+            } else {
+                box.classList.remove("inspector__color--none");
+                fill.style.background = css;
+                if (document.activeElement !== hexInput) {
+                    hexInput.value = hex.toUpperCase();
                 }
+                pct.textContent = Math.round(state.a) + "%";
+            }
+            hexInput.size = Math.max(hexInput.value.length, 1);
+            pop.render(state, hex, css);
+            alphaPop.render(state, hex);
+        }
+        function commit() {
+            box.dispatchEvent(new Event("change"));
+        }
+        function setNone() {
+            state.none = true;
+            closePop();
+            render();
+            commit();
+        }
+        // Apply a parsed { hex, alpha } to state, keeping hue on achromatic
+        // colours so the wheel doesn't snap to red on grey/black/white.
+        function applyColor(hex, alpha, setAlpha) {
+            const rgb = window.__style.hexToRgb(hex);
+            const hsl = window.__style.rgbToHsl(rgb.r, rgb.g, rgb.b);
+            if (hsl.s > 0) { state.h = hsl.h; }
+            state.s = hsl.s;
+            state.l = hsl.l;
+            if (setAlpha) { state.a = alpha; }
+            state.none = false;
+        }
+        function currentCss() {
+            if (state.none) { return ""; }
+            return window.__style.composeRgba(stateHex(), state.a);
+        }
+
+        function openPop() {
+            closeAlpha();
+            positionColorPopover(pop.el, swatch);
+            pop.el.classList.add("colorpop--open");
+            render();
+            document.addEventListener("pointerdown", onOutside, true);
+            document.addEventListener("keydown", onEsc, true);
+        }
+        function closePop() {
+            pop.el.classList.remove("colorpop--open");
+            document.removeEventListener("pointerdown", onOutside, true);
+            document.removeEventListener("keydown", onEsc, true);
+        }
+        function onOutside(e) {
+            if (!pop.el.contains(e.target) && e.target !== swatch
+                    && !swatch.contains(e.target) && e.target !== gap) {
+                closePop();
+            }
+        }
+        function onEsc(e) {
+            if (e.key === "Escape") { e.preventDefault(); closePop(); closeAlpha(); }
+        }
+        function openAlpha() {
+            if (state.none) { return; }
+            closePop();
+            positionColorPopover(alphaPop.el, pct);
+            alphaPop.el.classList.add("colorpop--open");
+            render();
+            document.addEventListener("pointerdown", onAlphaOutside, true);
+            document.addEventListener("keydown", onEsc, true);
+        }
+        function closeAlpha() {
+            alphaPop.el.classList.remove("colorpop--open");
+            document.removeEventListener("pointerdown", onAlphaOutside, true);
+        }
+        function onAlphaOutside(e) {
+            if (!alphaPop.el.contains(e.target) && e.target !== pct) {
+                closeAlpha();
+            }
+        }
+
+        // Zone 1: swatch (and the gap after the hex text) → colour popover.
+        function togglePop(e) {
+            e.stopPropagation();
+            if (pop.el.classList.contains("colorpop--open")) { closePop(); } else { openPop(); }
+        }
+        swatch.addEventListener("click", togglePop);
+        gap.addEventListener("click", togglePop);
+        // Zone 3: percentage → opacity popover.
+        pct.addEventListener("click", function (e) {
+            e.stopPropagation();
+            if (alphaPop.el.classList.contains("colorpop--open")) { closeAlpha(); } else { openAlpha(); }
+        });
+        // Zone 2: hex text → inline edit. 8-digit hex sets colour + alpha;
+        // "none"/empty clears; invalid reverts on blur.
+        hexInput.addEventListener("change", function () {
+            const raw = hexInput.value.trim().toLowerCase();
+            if (raw === "" || raw === "none") { setNone(); return; }
+            const m8 = /^#?([0-9a-f]{6})([0-9a-f]{2})$/.exec(raw);
+            if (m8) {
+                const alpha = Math.round(parseInt(m8[2], 16) / 255 * 100);
+                applyColor("#" + m8[1], alpha, true);
+                render();
+                commit();
+                return;
+            }
+            const hexed = raw[0] === "#" ? raw : "#" + raw;
+            if (!/^#([0-9a-f]{3}|[0-9a-f]{6})$/.test(hexed)) {
+                render();
+                return;
+            }
+            const parsed = window.__style.parseRgba(hexed);
+            applyColor(parsed.hex, parsed.alpha, false);
+            render();
+            commit();
+        });
+        hexInput.addEventListener("keydown", function (e) {
+            if (e.key === "Enter") { e.preventDefault(); hexInput.blur(); }
+        });
+
+        Object.defineProperty(box, "value", {
+            get: currentCss,
+            set: function (v) {
+                // While a popover is open the user is editing — ignore the echo
+                // from the committed round-trip so it can't reset live edits.
+                if (pop.el.classList.contains("colorpop--open")
+                    || alphaPop.el.classList.contains("colorpop--open")) {
+                    return;
+                }
+                const s = String(v == null ? "" : v).trim().toLowerCase();
+                if (s === "" || s === "none" || s === "transparent") {
+                    state.none = true;
+                    render();
+                    return;
+                }
+                const parsed = window.__style.parseRgba(v);
+                applyColor(parsed.hex, parsed.alpha, true);
+                render();
             },
         });
+        render();
         return box;
+    }
+
+    // buildColorPopover
+    // Inputs: shared `state` ({h,s,l,a}), a render() that repaints from state,
+    // and a commit() that fires the control's `change`. Output: { el, render }
+    // — the popover DOM (an HS wheel + H/S/L/A sliders + hex field) wired to
+    // mutate state then render/commit. `render(state, hex, css)` syncs the
+    // popover's own controls (called by the parent's render).
+    function buildColorPopover(state, render, commit, setNone) {
+        const el = document.createElement("div");
+        el.className = "colorpop";
+        const noneBtn = document.createElement("button");
+        noneBtn.type = "button";
+        noneBtn.className = "colorpop__none";
+        noneBtn.textContent = "None";
+        noneBtn.addEventListener("click", function () { setNone(); });
+        el.appendChild(noneBtn);
+        const wheel = document.createElement("div");
+        wheel.className = "colorpop__wheel";
+        // Lightness wash over the hue/sat disc: white above L=50, black below,
+        // opacity tracking distance from 50 so the wheel reads at the actual
+        // lightness (WYSIWYG). Sits under the dot.
+        const lum = document.createElement("span");
+        lum.className = "colorpop__wheel-lum";
+        const dot = document.createElement("span");
+        dot.className = "colorpop__dot";
+        wheel.appendChild(lum);
+        wheel.appendChild(dot);
+        el.appendChild(wheel);
+        wireColorWheel(wheel, state, render, commit);
+
+        function onAxis(key, scale) {
+            return function (e) {
+                state[key] = Number(e.target.value) * scale;
+                state.none = false;
+                render();
+            };
+        }
+        const h = makeColorSlider("H", 360, onAxis("h", 1), commit);
+        const s = makeColorSlider("S", 100, onAxis("s", 1), commit);
+        const l = makeColorSlider("L", 100, onAxis("l", 1), commit);
+        const a = makeColorSlider("A", 100, onAxis("a", 1), commit);
+        el.appendChild(h.row);
+        el.appendChild(s.row);
+        el.appendChild(l.row);
+        el.appendChild(a.row);
+
+        const hexRow = document.createElement("div");
+        hexRow.className = "colorpop__hexrow";
+        const hexInput = document.createElement("input");
+        hexInput.className = "colorpop__hex";
+        hexInput.spellcheck = false;
+        hexRow.appendChild(hexInput);
+        el.appendChild(hexRow);
+        hexInput.addEventListener("change", function () {
+            const parsed = window.__style.parseRgba(hexInput.value);
+            const rgb = window.__style.hexToRgb(parsed.hex);
+            const hsl = window.__style.rgbToHsl(rgb.r, rgb.g, rgb.b);
+            state.h = hsl.h;
+            state.s = hsl.s;
+            state.l = hsl.l;
+            state.none = false;
+            render();
+            commit();
+        });
+        hexInput.addEventListener("keydown", function (e) {
+            if (e.key === "Enter") { e.preventDefault(); hexInput.blur(); }
+        });
+
+        function renderPopover(st, hex, css) {
+            setColorAxis(h, st.h, Math.round(st.h));
+            setColorAxis(s, st.s, Math.round(st.s));
+            setColorAxis(l, st.l, Math.round(st.l));
+            setColorAxis(a, st.a, Math.round(st.a));
+            h.input.style.background = "linear-gradient(to right,"
+                + " #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)";
+            s.input.style.background = "linear-gradient(to right, hsl("
+                + st.h + ", 0%, 50%), hsl(" + st.h + ", 100%, 50%))";
+            l.input.style.background = "linear-gradient(to right, #000, hsl("
+                + st.h + ", " + st.s + "%, 50%), #fff)";
+            a.input.style.background = "linear-gradient(to right,"
+                + " transparent, " + hex + ")";
+            lum.style.background = st.l >= 50 ? "#fff" : "#000";
+            lum.style.opacity = String(Math.abs(st.l - 50) / 50);
+            const R = wheel.offsetWidth / 2 || 100;
+            const rad = (st.s / 100) * R;
+            const theta = st.h * Math.PI / 180;
+            dot.style.left = (R + rad * Math.sin(theta)) + "px";
+            dot.style.top = (R - rad * Math.cos(theta)) + "px";
+            dot.style.background = css;
+            if (document.activeElement !== hexInput) {
+                hexInput.value = hex.toUpperCase();
+            }
+        }
+        return { el: el, render: renderPopover };
+    }
+
+    // buildAlphaPopover
+    // Inputs: shared `state`, render(), commit(). Output: { el, render } — a
+    // small popover holding one 0..100 alpha slider + readout. Drag mutates
+    // state.a then render()s live; release commits. Opened from the row's
+    // percentage span; positioned by positionColorPopover.
+    function buildAlphaPopover(state, render, commit) {
+        const el = document.createElement("div");
+        el.className = "colorpop colorpop--alpha";
+        const slider = makeColorSlider("A", 100, function (e) {
+            state.a = Number(e.target.value);
+            render();
+        }, commit);
+        el.appendChild(slider.row);
+        function renderAlpha(st, hex) {
+            setColorAxis(slider, st.a, Math.round(st.a));
+            slider.input.style.background = "linear-gradient(to right,"
+                + " transparent, " + hex + ")";
+        }
+        return { el: el, render: renderAlpha };
+    }
+
+    // setColorAxis: set a slider's value (unless the user is dragging it) and
+    // its numeric readout. Keeps live drags from being clobbered by render.
+    function setColorAxis(slider, value, shown) {
+        if (document.activeElement !== slider.input) {
+            slider.input.value = String(Math.round(value));
+        }
+        slider.readout.textContent = String(shown);
+    }
+
+    // wireColorWheel
+    // Inputs: the wheel element, shared state, render(), commit(). Output:
+    // side-effect; pointer drag on the wheel sets hue (angle) + saturation
+    // (radius), rendering live and committing on release. Angle is measured
+    // clockwise from top to match the conic hue gradient.
+    function wireColorWheel(wheel, state, render, commit) {
+        function fromPointer(e) {
+            const r = wheel.getBoundingClientRect();
+            const R = r.width / 2;
+            const dx = e.clientX - r.left - R;
+            const dy = e.clientY - r.top - R;
+            const dist = Math.min(Math.sqrt(dx * dx + dy * dy), R);
+            let deg = Math.atan2(dx, -dy) * 180 / Math.PI;
+            if (deg < 0) { deg += 360; }
+            state.h = deg;
+            state.s = R > 0 ? (dist / R) * 100 : 0;
+            state.none = false;
+            render();
+        }
+        function onMove(e) { fromPointer(e); }
+        function onUp() {
+            document.removeEventListener("pointermove", onMove, true);
+            document.removeEventListener("pointerup", onUp, true);
+            commit();
+        }
+        wheel.addEventListener("pointerdown", function (e) {
+            e.preventDefault();
+            fromPointer(e);
+            document.addEventListener("pointermove", onMove, true);
+            document.addEventListener("pointerup", onUp, true);
+        });
     }
 
     // Chain glyph shared by the cluster link toggle and the ratio lock.
@@ -4226,18 +4911,10 @@
         + ' 0-5.6-5.6L11 7"/><path d="M14 11a4 4 0 0 0-5.6-.5L5.9 13a4 4 0 0 0 5.6'
         + ' 5.6L13 17"/></svg>';
 
-    // numOr0 / clampPct: coerce an inspector input string to a finite number
-    // (0 fallback) and to an integer percent in 0..100 (100 fallback).
+    // numOr0: coerce an inspector input string to a finite number (0 fallback).
     function numOr0(v) {
         const n = Number(String(v == null ? "" : v).replace(/px$/i, "").trim());
         return isFinite(n) ? n : 0;
-    }
-    function clampPct(v) {
-        const n = Math.round(Number(String(v == null ? "" : v).replace(/%$/, "").trim()));
-        if (!isFinite(n)) {
-            return 100;
-        }
-        return Math.max(0, Math.min(100, n));
     }
     function setIfIdle(input, value) {
         if (input && document.activeElement !== input) {
@@ -4247,37 +4924,22 @@
 
     // makeSwatchOpacityControl
     // Inputs: the CSS property the control owns (background-color / border-color).
-    // Output: a composite control — a colour swatch (native picker) plus an
-    // opacity % field — that commits `prop: rgba(...)` on either change and
-    // re-syncs from the declaration map via syncDecls. Registered in
-    // compositeControls. Errors: asserts a non-empty prop.
+    // Output: a composite control wrapping the colour picker — alpha now lives
+    // inside the picker, so the standalone opacity field is gone. Commits the
+    // picker's full hex/rgba() value on change and re-syncs via syncDecls.
+    // Registered in compositeControls. Errors: asserts a non-empty prop.
     function makeSwatchOpacityControl(prop) {
         console.assert(typeof prop === "string" && prop !== "", "swatch prop required");
         const box = document.createElement("div");
         box.className = "inspector__swatchrow";
         const color = makeColorControl();
         color.classList.add("inspector__swatchrow-color");
-        const op = document.createElement("input");
-        op.className = "inspector__swatchrow-opacity";
-        op.spellcheck = false;
-        const pct = document.createElement("span");
-        pct.className = "inspector__swatchrow-pct";
-        pct.textContent = "%";
         box.appendChild(color);
-        box.appendChild(op);
-        box.appendChild(pct);
-        function commit() {
-            sendPropertyChanged(prop, window.__style.composeRgba(color.value, clampPct(op.value)));
-        }
-        color.addEventListener("change", commit);
-        op.addEventListener("change", commit);
-        op.addEventListener("keydown", function (e) {
-            if (e.key === "Enter") { e.preventDefault(); op.blur(); }
+        color.addEventListener("change", function () {
+            sendPropertyChanged(prop, color.value);
         });
         box.syncDecls = function (decls) {
-            const c = window.__style.parseRgba(decls[prop] || "");
-            color.value = c.hex;
-            setIfIdle(op, String(c.alpha));
+            color.value = decls[prop] || "";
         };
         Object.defineProperty(box, "value", { get: function () { return ""; }, set: function () {} });
         compositeControls.push(box);
@@ -4311,7 +4973,29 @@
         wrap.setAttribute("data-key", "");
         const lab = document.createElement("span");
         lab.className = "inspector__cluster-cell-label";
-        lab.textContent = cell.label;
+        if (cell.icon) {
+            lab.innerHTML = fieldIconSvg(cell.icon);
+        } else {
+            lab.textContent = cell.label;
+        }
+        const input = document.createElement("input");
+        input.className = "inspector__cluster-input";
+        input.spellcheck = false;
+        wrap.appendChild(lab);
+        wrap.appendChild(input);
+        return { wrap: wrap, input: input };
+    }
+
+    // makeShadowCell
+    // Inputs: a label string. Output: { wrap, input } — a number field with its
+    // label stacked ABOVE the input (vs. the cluster cell's inline single-char
+    // label), so multi-char names like "Blur"/"Spread" don't crowd the value.
+    function makeShadowCell(label) {
+        const wrap = document.createElement("div");
+        wrap.className = "inspector__shadow-cell";
+        const lab = document.createElement("span");
+        lab.className = "inspector__shadow-cell-label";
+        lab.textContent = label;
         const input = document.createElement("input");
         input.className = "inspector__cluster-input";
         input.spellcheck = false;
@@ -4332,6 +5016,7 @@
         const box = document.createElement("div");
         box.className = "inspector__cluster";
         let linked = true;
+        let unit = "px";
         const inputs = [];
         const link = document.createElement("button");
         link.type = "button";
@@ -4341,10 +5026,21 @@
         link.innerHTML = LINK_ICON;
         const grid = document.createElement("div");
         grid.className = "inspector__cluster-grid";
+        const chip = makeUnitChip(function () { return unit; }, function (u) {
+            unit = u;
+            recommitAll();
+        });
         function emitAll(v) {
             for (let j = 0; j < inputs.length; j++) {
                 inputs[j].value = String(v);
-                sendPropertyChanged(spec.cells[j].prop, v + "px");
+                sendPropertyChanged(spec.cells[j].prop, v + unit);
+            }
+        }
+        // Re-post every cell with its own current number (used on unit switch —
+        // reinterpret, so per-side values are kept).
+        function recommitAll() {
+            for (let j = 0; j < inputs.length; j++) {
+                sendPropertyChanged(spec.cells[j].prop, numOr0(inputs[j].value) + unit);
             }
         }
         for (let i = 0; i < spec.cells.length; i++) {
@@ -4357,7 +5053,7 @@
                     if (linked) {
                         emitAll(v);
                     } else {
-                        sendPropertyChanged(spec.cells[idx].prop, v + "px");
+                        sendPropertyChanged(spec.cells[idx].prop, v + unit);
                     }
                 });
                 input.addEventListener("keydown", function (e) {
@@ -4374,6 +5070,7 @@
         });
         box.appendChild(link);
         box.appendChild(grid);
+        box.appendChild(chip);
         box.syncDecls = function (decls) {
             const vals = spec.parse(decls);
             let uniform = true;
@@ -4385,6 +5082,13 @@
             }
             linked = uniform;
             box.dataset.linked = linked ? "true" : "false";
+            // Reflect the stored unit from the first present longhand (else px).
+            let found = "";
+            for (let j = 0; j < spec.cells.length && found === ""; j++) {
+                found = window.__style.splitLength(decls[spec.cells[j].prop] || "").unit;
+            }
+            unit = found || "px";
+            chip.sync();
         };
         box.dataset.linked = "true";
         Object.defineProperty(box, "value", { get: function () { return ""; }, set: function () {} });
@@ -4417,7 +5121,7 @@
             }));
         }
         for (let i = 0; i < order.length; i++) {
-            const cell = makeClusterCell({ label: order[i].label, tip: order[i].label });
+            const cell = makeShadowCell(order[i].label);
             inputs[order[i].key] = cell.input;
             grid.appendChild(cell.wrap);
             cell.input.addEventListener("change", commit);
@@ -4436,7 +5140,7 @@
             setIfIdle(inputs.y, s.y);
             setIfIdle(inputs.blur, s.blur);
             setIfIdle(inputs.spread, s.spread);
-            color.value = window.__style.parseRgba(s.color).hex;
+            color.value = s.color;
         };
         Object.defineProperty(box, "value", { get: function () { return ""; }, set: function () {} });
         compositeControls.push(box);
@@ -4793,8 +5497,19 @@
         const box = document.createElement("div");
         box.className = "inspector__presets";
         let currentType = "";
-        const select = document.createElement("select");
-        select.className = "inspector__input inspector__select inspector__presets-apply";
+        const select = makeDropdown({
+            label: "Preset",
+            className: "inspector__presets-apply",
+            placeholder: "Apply preset…",
+            options: [],
+            value: "",
+            onChange: function (cls) {
+                if (cls !== "" && currentType !== "") {
+                    applyPreset(currentType, cls);
+                }
+                select.value = "";
+            },
+        });
         const saveRow = document.createElement("div");
         saveRow.className = "inspector__presets-save";
         const nameInput = document.createElement("input");
@@ -4812,26 +5527,12 @@
         function rebuild() {
             const presets = window.__preset.parsePresets(currentGlobalsCss)
                 .filter(function (p) { return p.type === currentType; });
-            select.replaceChildren();
-            const ph = document.createElement("option");
-            ph.value = "";
-            ph.textContent = presets.length ? "Apply preset…" : "No presets for this type";
-            select.appendChild(ph);
-            for (let i = 0; i < presets.length; i++) {
-                const o = document.createElement("option");
-                o.value = presets[i].className;
-                o.textContent = presets[i].className;
-                select.appendChild(o);
-            }
+            select.setPlaceholder(presets.length ? "Apply preset…" : "No presets for this type");
+            select.setOptions(presets.map(function (p) {
+                return { value: p.className, label: p.className };
+            }));
             select.value = "";
         }
-        select.addEventListener("change", function () {
-            const cls = select.value;
-            select.value = "";
-            if (cls !== "" && currentType !== "") {
-                applyPreset(currentType, cls);
-            }
-        });
         saveBtn.addEventListener("click", function () { onSavePreset(nameInput); });
         nameInput.addEventListener("keydown", function (e) {
             if (e.key === "Enter") {
@@ -5051,7 +5752,16 @@
         const prop = input.dataset.prop;
         const kind = input.dataset.kind || "css";
         const raw = input.value;
-        const wire = encodeForWire(kind, raw);
+        let wire = encodeForWire(kind, raw);
+        // Append the CSS unit so a typed "16" lands as "16px" inline; empty
+        // (clear) and null (invalid) pass through untouched.
+        if (kind === "number" && input.dataset.unit && wire !== null && wire !== "") {
+            wire = wire + input.dataset.unit;
+        }
+        // Percent fields show 0..100 but store the CSS fraction 0..1.
+        if (kind === "number" && input.dataset.percent && wire !== null && wire !== "") {
+            wire = String(Number(wire) / 100);
+        }
         if (wire === null) {
             // Invalid input — restore the displayed value from DOM and bail.
             refreshInspector();
@@ -5118,7 +5828,7 @@
         }
         // Strip optional unit suffixes ("px", "°") so the user can type
         // "200px" or "45°" and it still parses.
-        const numeric = trimmed.replace(/(px|deg|rad|°|%)\s*$/i, "").trim();
+        const numeric = trimmed.replace(/(px|em|rem|pt|in|pc|cm|mm|deg|rad|°|%)\s*$/i, "").trim();
         const n = Number(numeric);
         if (!isFinite(n)) {
             return null;
@@ -5333,8 +6043,12 @@
         if (bg && document.activeElement !== bg) {
             bg.value = isHexColor((data && data.background) || "") ? data.background : "#000000";
         }
+        const titleLabel = document.getElementById("slide-title-label");
+        if (titleLabel) {
+            titleLabel.textContent = layoutMode ? "Name" : "Title";
+        }
         if (title && document.activeElement !== title) {
-            title.value = (data && data.title) || "";
+            title.value = (data && (layoutMode ? data.name : data.title)) || "";
         }
         if (notes && document.activeElement !== notes) {
             notes.value = (data && data.notes) || "";
@@ -5361,15 +6075,11 @@
                 bgImgClear.hidden = !url;
             }
         }
-        if (layout && document.activeElement !== layout) {
+        if (layout) {
             const layouts = (data && data.layouts) || [];
-            layout.replaceChildren();
-            for (let i = 0; i < layouts.length; i++) {
-                const o = document.createElement("option");
-                o.value = layouts[i].id;
-                o.textContent = layouts[i].name || layouts[i].id;
-                layout.appendChild(o);
-            }
+            layout.setOptions(layouts.map(function (l) {
+                return { value: l.id, label: l.name || l.id };
+            }));
             layout.value = (data && data.layout_id) || "";
         }
         // Transition controls (slide-only): dropdown + duration/easing, the
@@ -5388,6 +6098,7 @@
     // Output: side-effect; reflects data.transition into the dropdown + the
     // duration/easing controls, hiding the timing row for a None (cut).
     function renderSlideTransition(data) {
+        wireSlideTransition();
         const sel = document.getElementById("slide-transition");
         const timing = document.getElementById("slide-transition-timing");
         const dur = document.getElementById("slide-transition-dur");
@@ -5440,6 +6151,12 @@
             mount.appendChild(bg);
         }
         bg.addEventListener("change", function () {
+            if (bg.value === "") {
+                showToast("Slide background can't be None",
+                    "Pick a colour or set a background image");
+                renderSlideBox();
+                return;
+            }
             window.__deck.send("Interaction", {
                 kind: "SetSlideBackgroundRequested", background: bg.value,
             });
@@ -5466,8 +6183,12 @@
                 window.__deck.send("Interaction", { kind: "SetSlideBackgroundImageCleared" });
             });
         }
-        const layout = document.getElementById("slide-layout");
-        if (layout) {
+        const layoutMount = document.getElementById("slide-layout-mount");
+        if (layoutMount && !layoutMount.dataset.wired) {
+            layoutMount.dataset.wired = "1";
+            const layout = makeDropdown({ label: "Layout", options: [], value: "" });
+            layout.id = "slide-layout";
+            layoutMount.appendChild(layout);
             layout.addEventListener("change", function () {
                 window.__deck.send("Interaction", {
                     kind: "SetSlideLayoutRequested", layout_id: layout.value,
@@ -5477,6 +6198,17 @@
         const title = document.getElementById("slide-title");
         if (title) {
             title.addEventListener("blur", function () {
+                if (currentMode === "layout") {
+                    if (!layoutBgData || !layoutBgData.layout_id) {
+                        return;
+                    }
+                    window.__deck.send("Interaction", {
+                        kind: "LayoutNameEditRequested",
+                        layout_id: layoutBgData.layout_id,
+                        new_name: title.value,
+                    });
+                    return;
+                }
                 if (!slideInspectorData) {
                     return;
                 }
@@ -5529,8 +6261,16 @@
             mount.appendChild(seg);
             seg.addEventListener("change", sendSlideTransition);
         }
-        const sel = document.getElementById("slide-transition");
-        if (sel) {
+        const selMount = document.getElementById("slide-transition-mount");
+        if (selMount && !selMount.dataset.wired) {
+            selMount.dataset.wired = "1";
+            const sel = makeDropdown({
+                label: "Transition",
+                options: SLIDE_TRANSITIONS.map(function (t) { return { value: t, label: t }; }),
+                value: "None",
+            });
+            sel.id = "slide-transition";
+            selMount.appendChild(sel);
             sel.addEventListener("change", function () {
                 const timing = document.getElementById("slide-transition-timing");
                 if (timing) {
@@ -5625,7 +6365,7 @@
         setIfNotPending("y", stripPx(decls.top));
         setIfNotPending("width", stripPx(decls.width));
         setIfNotPending("height", stripPx(decls.height));
-        setIfNotPending("opacity", decls.opacity || "");
+        setPercentNumber("opacity", decls.opacity, 100);
         setIfNotPending("rotation", radiansToDegreesStr(extractRotationRad(decls.transform)));
         setIfNotPending("z-index", decls["z-index"] || "");
         const cssOnly = [
@@ -5641,9 +6381,10 @@
             const key = cssOnly[i];
             setIfNotPending(key, decls[key] || "");
         }
-        // Typography numeric-with-px fields strip the unit for the number input.
-        setIfNotPending("font-size", stripPx(decls["font-size"]));
-        setIfNotPending("letter-spacing", stripPx(decls["letter-spacing"]));
+        // Typography length fields split the stored value into the number input
+        // and the unit chip.
+        setUnitNumber("font-size", decls["font-size"]);
+        setUnitNumber("letter-spacing", decls["letter-spacing"], "0");
         // Composite controls + the Custom CSS declarations list.
         for (let i = 0; i < textStyleControls.length; i++) {
             textStyleControls[i].syncDecls(decls);
@@ -5652,6 +6393,41 @@
             compositeControls[i].syncDecls(decls);
         }
         renderCustomDeclarations(decls);
+    }
+
+    // setUnitNumber: populate a unit-number control (font-size / letter-spacing)
+    // from its raw CSS value — the bare number into the input, the unit into the
+    // chip. Respects the same pending / active-edit guards as setIfNotPending.
+    function setUnitNumber(prop, raw, defNum) {
+        const box = inspectorInputs[prop];
+        if (!box || inspectorPending.has(prop)) {
+            return;
+        }
+        const parts = window.__style.splitLength(raw);
+        if (box.setUnit) {
+            box.setUnit(parts.unit || "px");
+        }
+        const input = box.querySelector(".inspector__input");
+        if (document.activeElement === input) {
+            return;
+        }
+        box.value = parts.num !== "" ? parts.num : (defNum || "");
+    }
+
+    // setPercentNumber: populate a percent field (opacity) — the CSS fraction
+    // 0..1 shows as 0..100; an absent value falls back to `def`.
+    function setPercentNumber(prop, raw, def) {
+        const box = inspectorInputs[prop];
+        if (!box || inspectorPending.has(prop)) {
+            return;
+        }
+        const input = box.querySelector(".inspector__input") || box;
+        if (document.activeElement === input) {
+            return;
+        }
+        const n = (raw === "" || raw == null)
+            ? def : Math.round(parseFloat(raw) * 100);
+        box.value = isFinite(n) ? String(n) : String(def);
     }
 
     function setIfNotPending(prop, value) {
@@ -6481,6 +7257,37 @@
         }
     }
 
+    // showQuitDialog — raise the unsaved-changes quit confirmation. Cancel
+    // dismisses locally; the other two buttons reply with QuitConfirmed and let
+    // Rust drive the save (if any) and the exit. Idempotent: re-raising while
+    // already open is a no-op.
+    function showQuitDialog() {
+        if (document.getElementById("quit-dialog")) {
+            return;
+        }
+        const box = document.createElement("div");
+        box.id = "quit-dialog";
+        box.className = "quit-dlg";
+        box.innerHTML = '<div class="quit-dlg__panel" role="dialog" aria-modal="true">'
+            + '<h2 class="quit-dlg__title">Unsaved changes</h2>'
+            + '<p class="quit-dlg__sub">Save your work before exiting?</p>'
+            + '<div class="quit-dlg__row">'
+            + '<button type="button" class="quit-dlg__btn quit-dlg__btn--cancel">Cancel</button>'
+            + '<button type="button" class="quit-dlg__btn quit-dlg__btn--discard">Exit without saving</button>'
+            + '<button type="button" class="quit-dlg__btn quit-dlg__btn--save">Save and exit</button>'
+            + '</div></div>';
+        box.querySelector(".quit-dlg__btn--cancel").addEventListener("click", function () {
+            box.remove();
+        });
+        box.querySelector(".quit-dlg__btn--discard").addEventListener("click", function () {
+            window.__deck.send("Interaction", { kind: "QuitConfirmed", save: false });
+        });
+        box.querySelector(".quit-dlg__btn--save").addEventListener("click", function () {
+            window.__deck.send("Interaction", { kind: "QuitConfirmed", save: true });
+        });
+        document.body.appendChild(box);
+    }
+
     // ---------- thumbnail row ----------
     // Slide dimensions sent by the last SlideListUpdate. Thumbnails
     // are rendered by mounting a copy of the slide HTML inside a small
@@ -7277,6 +8084,8 @@
 
     // ---------- animations panel ----------
 
+    const SLIDE_TRANSITIONS = ["None", "Fade", "Push", "Dissolve", "Wipe", "Flip", "Cube"];
+
     const ANIM_TRIGGERS = [
         { value: "on_click", label: "On click" },
         { value: "with_previous", label: "With previous" },
@@ -7385,15 +8194,91 @@
         return animEffectLabel(entry) + (dir ? " (" + dir + ")" : "");
     }
 
+    // morphStateFromAttrs
+    // Inputs: element id.
+    // Output: {enabled, duration_ms, easing} read from the element's
+    // data-morph-* attributes. Returns defaults when attributes are absent.
+    function morphStateFromAttrs(elId) {
+        const el = currentShadow ? currentShadow.querySelector('[data-element-id="' + String(elId).replace(/"/g, '\\"') + '"]') : null;
+        if (!el) {
+            return { enabled: false, duration_ms: 300, easing: "ease-in-out" };
+        }
+        const enabled = el.hasAttribute("data-morph-next");
+        const duration_ms = parseInt(el.getAttribute("data-morph-dur") || "300", 10);
+        const easing = el.getAttribute("data-morph-ease") || "ease-in-out";
+        return { enabled, duration_ms, easing };
+    }
+
+    // renderMorphControl
+    // Inputs: element id.
+    // Output: a <div> with a checkbox, duration input, and easing select,
+    // showing the current morph transition state. Duration/easing are hidden
+    // unless the checkbox is checked.
+    function renderMorphControl(elId) {
+        const state = morphStateFromAttrs(elId);
+        const wrapper = document.createElement("div");
+        wrapper.className = "morph-control";
+        const checkboxLabel = document.createElement("label");
+        checkboxLabel.className = "morph-check-label";
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.className = "morph-enabled";
+        checkbox.checked = state.enabled;
+        checkbox.dataset.elementId = elId;
+        checkboxLabel.appendChild(checkbox);
+        checkboxLabel.appendChild(document.createTextNode("Transition to next slide"));
+        wrapper.appendChild(checkboxLabel);
+
+        const row1 = document.createElement("div");
+        row1.className = "morph-row";
+        if (!state.enabled) {
+            row1.hidden = true;
+        }
+        const durationLabel = document.createElement("label");
+        durationLabel.textContent = "Duration (ms):";
+        const durationInput = document.createElement("input");
+        durationInput.type = "number";
+        durationInput.className = "morph-duration";
+        durationInput.min = "1";
+        durationInput.value = state.duration_ms;
+        durationInput.dataset.elementId = elId;
+        row1.appendChild(durationLabel);
+        row1.appendChild(durationInput);
+        wrapper.appendChild(row1);
+
+        const row2 = document.createElement("div");
+        row2.className = "morph-row";
+        if (!state.enabled) {
+            row2.hidden = true;
+        }
+        const easingLabel = document.createElement("label");
+        easingLabel.textContent = "Easing:";
+        const easings = ["linear", "ease-in", "ease-out", "ease-in-out", "cubic-bezier(0.34, 1.56, 0.64, 1)"];
+        const easingSelect = makeDropdown({
+            label: "Easing",
+            className: "morph-easing",
+            options: easings.map(function (e) { return { value: e, label: e }; }),
+            value: state.easing,
+        });
+        easingSelect.dataset.elementId = elId;
+        row2.appendChild(easingLabel);
+        row2.appendChild(easingSelect);
+        wrapper.appendChild(row2);
+
+        return wrapper;
+    }
+
     // refreshAnimationsSection
     // Inputs: none (reads currentSelectionIds + slideAnimations).
     // Output: side-effect; shows the panel only for a single selection and
     // rebuilds the bar stack (one bar per entry of the selected element, in
-    // timeline order) plus the count badge.
+    // timeline order) plus the count badge. Also renders the morph control
+    // for the selected element.
     function refreshAnimationsSection() {
         const single = currentSelectionIds.length === 1;
         document.body.classList.toggle("has-single-selection", single);
         const bars = document.getElementById("anim-bars");
+        const morphContainer = document.getElementById("morph-control-container");
         const count = document.getElementById("anim-count");
         if (!bars) {
             return;
@@ -7408,6 +8293,22 @@
         }
         if (count) {
             count.textContent = String(mine.length);
+        }
+        let container = morphContainer;
+        if (!container) {
+            const animSection = document.getElementById("animations-section");
+            if (animSection) {
+                container = document.createElement("div");
+                container.id = "morph-control-container";
+                animSection.appendChild(container);
+            }
+        }
+        if (container && el) {
+            container.replaceChildren();
+            container.appendChild(renderMorphControl(el));
+            wireMorphControl(el);
+        } else if (container) {
+            container.replaceChildren();
         }
     }
 
@@ -7480,7 +8381,11 @@
         trig.textContent = animTriggerLabel(entry);
         const chev = document.createElement("span");
         chev.className = "anim-bar__btn";
-        chev.textContent = animExpanded[entry.animation_id] ? "▾" : "▸";
+        chev.innerHTML = UNIT_CHEVRON;
+        chev.classList.add("anim-bar__chev");
+        if (!animExpanded[entry.animation_id]) {
+            chev.classList.add("anim-bar__chev--collapsed");
+        }
         const rm = document.createElement("button");
         rm.type = "button";
         rm.className = "anim-bar__btn";
@@ -7611,27 +8516,21 @@
         };
     }
 
-    // flexSelect — a labelled <select> that posts SetGroupLayout on change.
+    // flexSelect — a labelled dropdown that posts SetGroupLayout on change.
     function flexSelect(label, opts, current, field) {
-        const row = document.createElement("label");
-        row.className = "anim-bar__field";
-        const span = document.createElement("span");
-        span.textContent = label;
-        const sel = document.createElement("select");
-        opts.forEach(function (o) {
-            const opt = document.createElement("option");
-            opt.value = o.v; opt.textContent = o.t; opt.selected = o.v === current;
-            sel.appendChild(opt);
+        const dd = makeDropdown({
+            label: label,
+            options: opts.map(function (o) { return { value: o.v, label: o.t }; }),
+            value: current,
+            onChange: function (v) {
+                if (currentSelectionIds.length !== 1) { return; }
+                const body = { kind: "SetGroupLayout", element_id: currentSelectionIds[0],
+                    direction: null, distribution: null, alignment: null };
+                body[field] = v;
+                window.__deck.send("Interaction", body);
+            },
         });
-        sel.addEventListener("change", function () {
-            if (currentSelectionIds.length !== 1) { return; }
-            const body = { kind: "SetGroupLayout", element_id: currentSelectionIds[0],
-                direction: null, distribution: null, alignment: null };
-            body[field] = sel.value;
-            window.__deck.send("Interaction", body);
-        });
-        row.append(span, sel);
-        return row;
+        return animField(label, dd);
     }
 
     // refreshGroupFlexSection — rebuild #flex-controls from the selected group.
@@ -7676,7 +8575,11 @@
         const chev = document.createElement("button");
         chev.type = "button";
         chev.className = "anim-bar__btn";
-        chev.textContent = animExpanded[entry.animation_id] ? "▾" : "▸";
+        chev.innerHTML = UNIT_CHEVRON;
+        chev.classList.add("anim-bar__chev");
+        if (!animExpanded[entry.animation_id]) {
+            chev.classList.add("anim-bar__chev--collapsed");
+        }
         chev.addEventListener("click", function () {
             animExpanded[entry.animation_id] = !animExpanded[entry.animation_id];
             refreshAnimationsSection();
@@ -7712,9 +8615,10 @@
         return body;
     }
 
-    // animField — a labelled control row wrapper.
+    // animField — a labelled control row wrapper. A div (not a <label>) so a
+    // dropdown-trigger button inside isn't double-toggled by label forwarding.
     function animField(labelText, control) {
-        const row = document.createElement("label");
+        const row = document.createElement("div");
         row.className = "anim-bar__field";
         const span = document.createElement("span");
         span.textContent = labelText;
@@ -7724,58 +8628,50 @@
 
     // buildAnimEffectRow — swap the effect within its category (remove + add).
     function buildAnimEffectRow(entry) {
-        const sel = document.createElement("select");
         const current = catalogForEntry(entry);
-        animationCatalog.filter(function (i) {
+        const options = animationCatalog.filter(function (i) {
             return i.category === entry.category && i.kind === "named";
-        }).forEach(function (item) {
-            const o = document.createElement("option");
-            o.value = item.id;
-            o.textContent = item.label;
-            o.selected = current && item.id === current.id;
-            sel.appendChild(o);
+        }).map(function (item) {
+            return { value: item.id, label: item.label };
         });
-        sel.addEventListener("change", function () {
-            const item = animationCatalog.find(function (i) { return i.id === sel.value; });
-            const dir = item && item.directional ? (animDirectionOf(entry) || "top") : null;
-            animReplace(entry.animation_id, sel.value, dir, entry.element_id);
+        const dd = makeDropdown({
+            label: "Effect",
+            options: options,
+            value: current ? current.id : "",
+            onChange: function (v) {
+                const item = animationCatalog.find(function (i) { return i.id === v; });
+                const dir = item && item.directional ? (animDirectionOf(entry) || "top") : null;
+                animReplace(entry.animation_id, v, dir, entry.element_id);
+            },
         });
-        return animField("Effect", sel);
+        return animField("Effect", dd);
     }
 
     // buildAnimDirectionRow — direction picker for a directional effect.
     function buildAnimDirectionRow(entry, dir) {
         const item = catalogForEntry(entry);
-        const sel = document.createElement("select");
-        ANIM_DIRECTIONS.forEach(function (d) {
-            const o = document.createElement("option");
-            o.value = d.value;
-            o.textContent = d.label;
-            o.selected = d.value === dir;
-            sel.appendChild(o);
+        const dd = makeDropdown({
+            label: "Direction",
+            options: ANIM_DIRECTIONS.map(function (d) { return { value: d.value, label: d.label }; }),
+            value: dir,
+            onChange: function (v) {
+                if (item) {
+                    animReplace(entry.animation_id, item.id, v, entry.element_id);
+                }
+            },
         });
-        sel.addEventListener("change", function () {
-            if (item) {
-                animReplace(entry.animation_id, item.id, sel.value, entry.element_id);
-            }
-        });
-        return animField("Direction", sel);
+        return animField("Direction", dd);
     }
 
     // buildAnimTriggerRow — On click / With previous / After previous.
     function buildAnimTriggerRow(entry) {
-        const sel = document.createElement("select");
-        ANIM_TRIGGERS.forEach(function (t) {
-            const o = document.createElement("option");
-            o.value = t.value;
-            o.textContent = t.label;
-            o.selected = t.value === entry.trigger;
-            sel.appendChild(o);
+        const dd = makeDropdown({
+            label: "Trigger",
+            options: ANIM_TRIGGERS.map(function (t) { return { value: t.value, label: t.label }; }),
+            value: entry.trigger,
+            onChange: function (v) { animUpdate(entry.animation_id, { trigger: v }); },
         });
-        sel.addEventListener("change", function () {
-            animUpdate(entry.animation_id, { trigger: sel.value });
-        });
-        return animField("Trigger", sel);
+        return animField("Trigger", dd);
     }
 
     // buildAnimTimingRow — duration + delay (ms), committed on change.
@@ -7809,18 +8705,13 @@
 
     // buildAnimEasingRow — the 4 easing presets as a dropdown of CSS tokens.
     function buildAnimEasingRow(entry) {
-        const sel = document.createElement("select");
-        ANIM_EASINGS.forEach(function (e) {
-            const o = document.createElement("option");
-            o.value = e.token;
-            o.textContent = e.label;
-            o.selected = e.token === entry.easing;
-            sel.appendChild(o);
+        const dd = makeDropdown({
+            label: "Easing",
+            options: ANIM_EASINGS.map(function (e) { return { value: e.token, label: e.label }; }),
+            value: entry.easing,
+            onChange: function (v) { animUpdate(entry.animation_id, { easing: v }); },
         });
-        sel.addEventListener("change", function () {
-            animUpdate(entry.animation_id, { easing: sel.value });
-        });
-        return animField("Easing", sel);
+        return animField("Easing", dd);
     }
 
     // buildAnimIterationsRow — emphasis count, or ∞ toggle (Infinite).
@@ -7917,6 +8808,72 @@
         });
         row.append(prop, val, rm);
         return row;
+    }
+
+    // wireMorphControl
+    // Inputs: element id.
+    // Output: side-effect; wires change handlers on the checkbox, duration,
+    // and easing inputs to dispatch SetMorphTransitionRequested and toggle
+    // row visibility.
+    function wireMorphControl(elId) {
+        const container = document.getElementById("morph-control-container");
+        if (!container) {
+            return;
+        }
+        const checkbox = container.querySelector(".morph-enabled");
+        const durationInput = container.querySelector(".morph-duration");
+        const easingSelect = container.querySelector(".morph-easing");
+        const row1 = container.querySelector(".morph-row:nth-of-type(1)");
+        const row2 = container.querySelector(".morph-row:nth-of-type(2)");
+
+        if (checkbox) {
+            checkbox.addEventListener("change", function (e) {
+                const enabled = this.checked;
+                if (row1) row1.hidden = !enabled;
+                if (row2) row2.hidden = !enabled;
+                const duration_ms = parseInt(durationInput ? durationInput.value : "300", 10);
+                const easing = easingSelect ? easingSelect.value : "ease-in-out";
+                window.__deck.send("Interaction", {
+                    kind: "SetMorphTransitionRequested",
+                    element_id: elId,
+                    enabled: enabled,
+                    duration_ms: duration_ms,
+                    easing: easing,
+                });
+            });
+        }
+        if (durationInput) {
+            durationInput.addEventListener("change", function (e) {
+                const enabled = checkbox ? checkbox.checked : false;
+                const duration_ms = parseInt(this.value || "300", 10);
+                const easing = easingSelect ? easingSelect.value : "ease-in-out";
+                if (enabled) {
+                    window.__deck.send("Interaction", {
+                        kind: "SetMorphTransitionRequested",
+                        element_id: elId,
+                        enabled: enabled,
+                        duration_ms: duration_ms,
+                        easing: easing,
+                    });
+                }
+            });
+        }
+        if (easingSelect) {
+            easingSelect.addEventListener("change", function (e) {
+                const enabled = checkbox ? checkbox.checked : false;
+                const duration_ms = parseInt(durationInput ? durationInput.value : "300", 10);
+                const easing = this.value;
+                if (enabled) {
+                    window.__deck.send("Interaction", {
+                        kind: "SetMorphTransitionRequested",
+                        element_id: elId,
+                        enabled: enabled,
+                        duration_ms: duration_ms,
+                        easing: easing,
+                    });
+                }
+            });
+        }
     }
 
     // wireAnimationsSection

@@ -26,9 +26,9 @@ use crate::commands::{
     ReparentElement, ResizeElement, SetAnimationProperty, SetCellStyles, SetCellText, SetDeckTitle,
     SetElementId, SetElementsTransform, SetEmbedHtml, SetGeometryProperty, SetGlobalsCss,
     SetGroupLayout, SetGroupScale, SetInlineStyle, SetLayoutBackground, SetLayoutBackgroundImage,
-    SetLayoutName, SetSlideBackground, SetSlideBackgroundImage, SetSlideLayout, SetSlideNotes,
-    SetSlideTitle, SetSlideTransition, SetTableHeaderColumns, SetTableHeaderRows, SetTextContent,
-    SwapTheme, TransactionSnapshot,
+    SetLayoutName, SetMorphTransition, SetSlideBackground, SetSlideBackgroundImage, SetSlideLayout,
+    SetSlideNotes, SetSlideTitle, SetSlideTransition, SetTableHeaderColumns, SetTableHeaderRows,
+    SetTextContent, SwapTheme, TransactionSnapshot,
 };
 use crate::deck::animation::{
     AnimationCategory, AnimationEffect, AnimationEntry, AnimationTiming, AnimationTrigger,
@@ -47,10 +47,10 @@ use crate::html::serialize::{ANIMATION_KEYFRAMES_CSS, serialize_slide, serialize
 use crate::ipc::bridge::WebviewSender;
 use crate::ipc::present::{PresentInbound, PresentInitPayload};
 use crate::ipc::{
-    AssetPayload, AssetsBundle, EditorConfig, InteractionEvent, IpcMessage, LayoutListData,
-    LayoutListEntry, MessageKind, MountSlideArgs, ObjectTreeData, ObjectTreeNode, Patch, Point,
-    SelectionState, Size, SlideAnimationEntry, SlideAnimationsData, SlideInspectorData,
-    SlideInspectorLayout, SlideListData, SlideListEntry,
+    AssetPayload, AssetsBundle, EditorConfig, GuideDto, GuidesData, InteractionEvent, IpcMessage,
+    LayoutListData, LayoutListEntry, MessageKind, MountSlideArgs, ObjectTreeData, ObjectTreeNode,
+    Patch, Point, SelectionState, Size, SlideAnimationEntry, SlideAnimationsData,
+    SlideInspectorData, SlideInspectorLayout, SlideListData, SlideListEntry,
 };
 use crate::present::session::{PresentStep, PresentationSession};
 use base64::Engine;
@@ -103,7 +103,7 @@ const EXPORT_HTML_KEY: &str = "export_html";
 const EXPORT_PDF_KEY: &str = "export_pdf";
 // Synthetic accelerator the JS host posts for ⌘↩ / the toolbar Play button.
 const PRESENT_KEY: &str = "present";
-const BUNDLE_FILE_EXTENSION: &str = "slidedeck";
+const BUNDLE_FILE_EXTENSION: &str = "deck";
 const THEME_FILE_EXTENSION: &str = "slidetheme";
 // Keys forwarded by the JS host that should trigger element deletion.
 // Both names cover the two physical keys users reach for: macOS users
@@ -196,6 +196,13 @@ pub struct ApplicationCore {
     // True only when launched as a new deck from a layout; consumed once by the
     // Ready handler to tell the client to focus the title field, then cleared.
     focus_title: bool,
+    // Set when the user chose "Save and exit" in the quit dialog; consumed by
+    // handle_io_response on IoResponse::Saved to arm quit_requested (the save is
+    // async). Cleared if a fall-through Save-As is cancelled.
+    pending_quit: bool,
+    // Raised when the app should exit after the current handler returns. main.rs
+    // drains it via take_quit_requested and sets ControlFlow::Exit.
+    quit_requested: bool,
 }
 
 impl ApplicationCore {
@@ -268,6 +275,8 @@ impl ApplicationCore {
             pending_export_after_chrome: false,
             font_families: None,
             focus_title,
+            pending_quit: false,
+            quit_requested: false,
         }
     }
 
@@ -340,7 +349,9 @@ impl ApplicationCore {
                 self.send_assets_bundle()?;
                 self.send_font_list()?;
                 self.send_active_slide()?;
-                self.send_slide_animations()
+                self.send_slide_animations()?;
+                self.send_guides()?;
+                self.send_save_state()
             }
             MessageKind::Interaction(event) => self.handle_interaction(event),
             other => {
@@ -512,9 +523,23 @@ impl ApplicationCore {
                 let deck = self.dispatcher.deck();
                 let slide = deck.slides.get(id)?;
                 let (fill, img) = deck.effective_slide_bg(slide);
+                let number: usize = deck
+                    .slide_order
+                    .iter()
+                    .position(|s| s == id)
+                    .map(|p| p + 1)
+                    .unwrap_or(1);
+                let opts: crate::html::serialize::RenderOpts = crate::html::serialize::RenderOpts {
+                    ctx: Some(crate::html::serialize::RenderCtx {
+                        number,
+                        count: deck.slide_order.len(),
+                        date: crate::html::serialize::today_ymd(),
+                    }),
+                    hide_placeholders: false,
+                };
                 Some((
                     id.clone(),
-                    serialize_slide_themed(slide, fill.as_deref(), img.as_deref()),
+                    serialize_slide_themed(slide, fill.as_deref(), img.as_deref(), &opts),
                     build_object_tree(slide),
                 ))
             }
@@ -547,6 +572,38 @@ impl ApplicationCore {
             None => return Ok(()),
         };
         self.sender.send(MessageKind::ObjectTreeUpdate(tree))
+    }
+
+    // send_save_state
+    // Inputs: none. Output: Ok(()) after shipping one SaveStateUpdate with
+    // the deck's current unsaved-changes flag so JS toggles the title dot.
+    fn send_save_state(&self) -> AppResult<()> {
+        let dirty: bool = self.dispatcher.deck().has_unsaved_changes();
+        self.sender.send(MessageKind::SaveStateUpdate(dirty))
+    }
+
+    // wants_quit_confirmation
+    // Inputs: none. Output: true when a close should raise the quit dialog
+    // (the deck has unsaved changes) rather than exiting immediately. Read by
+    // main.rs on WindowEvent::CloseRequested for the editor window.
+    pub fn wants_quit_confirmation(&self) -> bool {
+        self.dispatcher.deck().has_unsaved_changes()
+    }
+
+    // show_quit_dialog
+    // Inputs: none. Output: Ok(()) after asking the webview to raise the
+    // unsaved-changes confirmation. Errors: IPC send failure.
+    pub fn show_quit_dialog(&self) -> AppResult<()> {
+        self.sender.send(MessageKind::ShowQuitDialog)
+    }
+
+    // take_quit_requested
+    // Inputs: none. Output: the quit_requested flag, cleared to false. main.rs
+    // calls this after each ipc / io handler and exits when it returns true.
+    pub fn take_quit_requested(&mut self) -> bool {
+        let requested: bool = self.quit_requested;
+        self.quit_requested = false;
+        requested
     }
 
     // send_slide_list
@@ -660,6 +717,36 @@ impl ApplicationCore {
             }))
     }
 
+    // send_guides
+    // Inputs: none.
+    // Output: Ok(()) after sending one GuidesUpdate carrying the active
+    // canvas's own guides plus the guides it inherits from its layout (empty
+    // when editing a layout). The editor redraws the ruler overlay from this.
+    // No-op when there is no active canvas.
+    fn send_guides(&self) -> AppResult<()> {
+        let target: CanvasTarget = match self.active_canvas() {
+            Some(t) => t,
+            None => return Ok(()),
+        };
+        let deck = self.dispatcher.deck();
+        let own: Vec<GuideDto> = match deck.canvas(&target) {
+            Some(c) => c.guides().iter().map(guide_to_dto).collect(),
+            None => return Ok(()),
+        };
+        let inherited: Vec<GuideDto> = match &target {
+            CanvasTarget::Slide(id) => match deck.slides.get(id) {
+                Some(s) => deck.inherited_guides(s).iter().map(guide_to_dto).collect(),
+                None => Vec::new(),
+            },
+            CanvasTarget::Layout(_) => Vec::new(),
+        };
+        self.sender.send(MessageKind::GuidesUpdate(GuidesData {
+            canvas_id: target.id().to_string(),
+            own,
+            inherited,
+        }))
+    }
+
     // set_active_slide
     // Inputs: the target slide id.
     // Output: Ok(()) on success; Ok(()) (no-op) when the id is empty,
@@ -702,7 +789,8 @@ impl ApplicationCore {
         // the object tree, so the panel resyncs in one shot.
         self.sender
             .send(MessageKind::SetSelection(SelectionState::empty()))?;
-        self.send_active_slide()
+        self.send_active_slide()?;
+        self.send_guides()
     }
 
     // set_editor_mode
@@ -737,7 +825,8 @@ impl ApplicationCore {
             EditorMode::Slide => self.send_slide_list()?,
             EditorMode::Layout => self.send_layout_list()?,
         }
-        self.send_active_slide()
+        self.send_active_slide()?;
+        self.send_guides()
     }
 
     // set_active_layout
@@ -768,7 +857,12 @@ impl ApplicationCore {
         self.selection = SelectionState::empty();
         self.sender
             .send(MessageKind::SetSelection(SelectionState::empty()))?;
-        self.send_active_slide()
+        // Re-ship the layout list so JS refreshes the active-layout inspector
+        // data (Name + background) and re-highlights the active thumbnail; the
+        // slide-mode analogue is send_slide_inspector inside send_active_slide.
+        self.send_layout_list()?;
+        self.send_active_slide()?;
+        self.send_guides()
     }
 
     // send_layout_list
@@ -1137,6 +1231,25 @@ impl ApplicationCore {
                 property,
                 value,
             } => interpret_property_changed(self.active_canvas(), element_id, property, value),
+            InteractionEvent::GuideAdded { axis, pos } => {
+                interpret_guide_added(self.active_canvas(), &axis, pos)
+            }
+            InteractionEvent::GuideMoved { index, pos } => match self.active_canvas() {
+                Some(target) => {
+                    InterpretResult::Command(Box::new(crate::commands::guide_commands::MoveGuide {
+                        target,
+                        index,
+                        new_pos: pos,
+                    }))
+                }
+                None => InterpretResult::Nothing,
+            },
+            InteractionEvent::GuideRemoved { index } => match self.active_canvas() {
+                Some(target) => InterpretResult::Command(Box::new(
+                    crate::commands::guide_commands::RemoveGuide { target, index },
+                )),
+                None => InterpretResult::Nothing,
+            },
             InteractionEvent::SetSelectionFromPanel { element_ids } => {
                 let mut sel: SelectionState = SelectionState::empty();
                 sel.slide_id = self.active_canvas_id();
@@ -1394,6 +1507,21 @@ impl ApplicationCore {
                     None => InterpretResult::Nothing,
                 }
             }
+            InteractionEvent::SetMorphTransitionRequested {
+                element_id,
+                enabled,
+                duration_ms,
+                easing,
+            } => match self.active_slide.clone() {
+                Some(sid) => InterpretResult::Command(Box::new(SetMorphTransition {
+                    target: CanvasTarget::Slide(sid),
+                    element_id,
+                    enabled,
+                    duration_ms,
+                    easing,
+                })),
+                None => InterpretResult::Nothing,
+            },
             InteractionEvent::SetDeckTitleRequested { title } => {
                 InterpretResult::Command(Box::new(SetDeckTitle { new_title: title }))
             }
@@ -1455,6 +1583,15 @@ impl ApplicationCore {
                         }))
                     }
                     None => InterpretResult::Nothing,
+                }
+            }
+            InteractionEvent::QuitConfirmed { save } => {
+                if save {
+                    self.pending_quit = true;
+                    InterpretResult::FileAction(FileAction::Save)
+                } else {
+                    self.quit_requested = true;
+                    InterpretResult::Nothing
                 }
             }
             InteractionEvent::KeyPressed { ref key, .. } if key == UNDO_KEY => {
@@ -1790,18 +1927,19 @@ impl ApplicationCore {
     // Inputs: the element's current id and the raw replacement text typed
     // in the object panel.
     // Output: Ok(()). Validates and sanitizes the new id, dispatches
-    // SetElementId (which remounts the slide and rebuilds the object
+    // SetElementId (which remounts the canvas and rebuilds the object
     // tree), then remaps the selection so the renamed element stays
     // selected. No-ops (empty/unchanged id, missing element, collision)
     // re-send the object tree so the panel's edit-in-place input reverts
-    // to the real id.
-    // Dataflow: sanitize -> resolve active slide -> guard empty/unchanged
+    // to the real id. Resolves against the active canvas so the rename
+    // works in both slide and layout modes.
+    // Dataflow: sanitize -> resolve active canvas -> guard empty/unchanged
     // -> guard missing element / id collision -> dispatch -> remap
     // selection -> SetSelection.
     fn handle_element_id_edit(&mut self, old_id: ElementId, raw_new_id: String) -> AppResult<()> {
         let new_id: ElementId = sanitize_element_id(&raw_new_id);
-        let slide_id: SlideId = match &self.active_slide {
-            Some(s) => s.clone(),
+        let target: CanvasTarget = match self.active_canvas() {
+            Some(t) => t,
             None => return Ok(()),
         };
         if new_id.is_empty() || new_id == old_id {
@@ -1809,20 +1947,20 @@ impl ApplicationCore {
             // reverts to the element's real id.
             return self.send_object_tree();
         }
-        let slide = match self.dispatcher.deck().slides.get(&slide_id) {
-            Some(s) => s,
+        let canvas = match self.dispatcher.deck().canvas(&target) {
+            Some(c) => c,
             None => return Ok(()),
         };
-        if slide.find_element(&old_id).is_none() {
+        if canvas.find_element(&old_id).is_none() {
             return Ok(());
         }
-        if slide.find_element(&new_id).is_some() {
-            warn!(new_id = %new_id, "element id already in use on slide; ignoring rename");
+        if canvas.find_element(&new_id).is_some() {
+            warn!(new_id = %new_id, "element id already in use on canvas; ignoring rename");
             return self.send_object_tree();
         }
 
         self.dispatch_and_maybe_flush(Box::new(SetElementId {
-            target: CanvasTarget::Slide(slide_id),
+            target: target.clone(),
             old_id: old_id.clone(),
             new_id: new_id.clone(),
         }));
@@ -1913,6 +2051,14 @@ impl ApplicationCore {
             }
             return;
         }
+        if outcome.affects_guides {
+            // Guides changed; rebroadcast the active canvas's set so the ruler
+            // overlay redraws. No remount (guides are editor overlay only).
+            if let Err(e) = self.send_guides() {
+                warn!("guides broadcast after dispatch failed: {}", e);
+            }
+            return;
+        }
         if outcome.requires_remount {
             if let Err(e) = self.send_active_slide() {
                 warn!("remount after dispatch failed: {}", e);
@@ -1931,6 +2077,10 @@ impl ApplicationCore {
             if let Err(e) = self.sender.send(MessageKind::SetSelection(sel)) {
                 warn!("paste selection broadcast failed: {}", e);
             }
+        }
+        // Any mutation may have changed the unsaved-changes state.
+        if let Err(e) = self.send_save_state() {
+            warn!("save-state broadcast after dispatch failed: {}", e);
         }
     }
 
@@ -2225,7 +2375,8 @@ impl ApplicationCore {
             .send(MessageKind::SetSelection(SelectionState::empty()))?;
         self.send_slide_list()?;
         self.send_assets_bundle()?;
-        self.send_active_slide()
+        self.send_active_slide()?;
+        self.send_guides()
     }
 
     // file_save
@@ -2449,6 +2600,7 @@ private copy (~150 MB).",
             Some(p) => ensure_extension(p, BUNDLE_FILE_EXTENSION),
             None => {
                 debug!("file: save-as cancelled by user");
+                self.pending_quit = false;
                 return Ok(());
             }
         };
@@ -2581,8 +2733,15 @@ private copy (~150 MB).",
                     deck.bundle_path = Some(path);
                     deck.dirty_slides.clear();
                     deck.manifest_dirty = false;
+                    for layout in deck.theme.layouts.values_mut() {
+                        layout.dirty = false;
+                    }
                 }
-                Ok(())
+                if self.pending_quit {
+                    self.pending_quit = false;
+                    self.quit_requested = true;
+                }
+                self.send_save_state()
             }
             IoResponse::Loaded { serialized, path } => {
                 info!(path = %path.display(), "file: load received");
@@ -2594,7 +2753,8 @@ private copy (~150 MB).",
                     .send(MessageKind::SetSelection(SelectionState::empty()))?;
                 self.send_slide_list()?;
                 self.send_assets_bundle()?;
-                self.send_active_slide()
+                self.send_active_slide()?;
+                self.send_save_state()
             }
             IoResponse::ThemeSaved { path } => {
                 info!(path = %path.display(), "theme: save committed");
@@ -2707,7 +2867,7 @@ fn prompt_save_as(current: Option<&std::path::Path>) -> Option<PathBuf> {
 // Output: the user's chosen path, or None on cancel.
 fn prompt_open() -> Option<PathBuf> {
     rfd::FileDialog::new()
-        .add_filter("Slide Deck", &[BUNDLE_FILE_EXTENSION])
+        .add_filter("Slide Deck", &[BUNDLE_FILE_EXTENSION, "slidedeck"])
         .pick_file()
 }
 
@@ -3055,6 +3215,7 @@ fn build_paste_command(
                 duration_hint: None,
                 notes_ref: None,
                 animations: copy.animations.clone(),
+                guides: copy.guides.clone(),
                 background: copy.metadata.background.clone(),
                 background_image: copy.metadata.background_image.clone(),
                 notes: None,
@@ -3163,6 +3324,45 @@ fn interpret_property_changed(
         property,
         new_value: value,
     }))
+}
+
+// interpret_guide_added
+// Inputs: the active canvas target, the wire axis token ("h"|"v"), the new
+// guide's slide-px position.
+// Output: an AddGuide command (appended) for the active canvas, or Nothing when
+// there is no active canvas or the axis token is unrecognised.
+fn interpret_guide_added(active: Option<CanvasTarget>, axis: &str, pos: f64) -> InterpretResult {
+    let target: CanvasTarget = match active {
+        Some(t) => t,
+        None => return InterpretResult::Nothing,
+    };
+    let ax: crate::deck::guide::GuideAxis = match axis {
+        "h" => crate::deck::guide::GuideAxis::Horizontal,
+        "v" => crate::deck::guide::GuideAxis::Vertical,
+        other => {
+            warn!(axis = other, "guide: unrecognised axis token");
+            return InterpretResult::Nothing;
+        }
+    };
+    InterpretResult::Command(Box::new(crate::commands::guide_commands::AddGuide {
+        target,
+        axis: ax,
+        pos,
+        index: None,
+    }))
+}
+
+// guide_to_dto
+// Inputs: a model Guide. Output: its wire form (axis "h"/"v" + slide-px pos).
+fn guide_to_dto(g: &crate::deck::guide::Guide) -> GuideDto {
+    GuideDto {
+        axis: match g.axis {
+            crate::deck::guide::GuideAxis::Horizontal => "h",
+            crate::deck::guide::GuideAxis::Vertical => "v",
+        }
+        .to_string(),
+        pos: g.pos,
+    }
 }
 
 // interpret_delete_selection
@@ -3314,7 +3514,9 @@ fn build_object_tree_node(node: &ElementNode) -> ObjectTreeNode {
 // the manifest title is empty.
 fn build_slide_list_data(deck: &Deck, active_slide: Option<&SlideId>) -> SlideListData {
     let mut slides: Vec<SlideListEntry> = Vec::with_capacity(deck.slide_order.len());
-    for sid in &deck.slide_order {
+    let count: usize = deck.slide_order.len();
+    let date: String = crate::html::serialize::today_ymd();
+    for (idx, sid) in deck.slide_order.iter().enumerate() {
         let slide = match deck.slides.get(sid) {
             Some(s) => s,
             None => {
@@ -3327,7 +3529,15 @@ fn build_slide_list_data(deck: &Deck, active_slide: Option<&SlideId>) -> SlideLi
             _ => sid.clone(),
         };
         let (fill, img) = deck.effective_slide_bg(slide);
-        let html: String = serialize_slide_themed(slide, fill.as_deref(), img.as_deref());
+        let opts: crate::html::serialize::RenderOpts = crate::html::serialize::RenderOpts {
+            ctx: Some(crate::html::serialize::RenderCtx {
+                number: idx + 1,
+                count,
+                date: date.clone(),
+            }),
+            hide_placeholders: false,
+        };
+        let html: String = serialize_slide_themed(slide, fill.as_deref(), img.as_deref(), &opts);
         slides.push(SlideListEntry {
             slide_id: sid.clone(),
             title,
@@ -3473,6 +3683,7 @@ fn build_image_element_from_asset(
         }),
         children: vec![],
         placeholder_fill: None,
+        placeholder: false,
         name: None,
         link: None,
         attributes: BTreeMap::new(),
@@ -4145,6 +4356,7 @@ fn build_insert_slide_after_active(
         duration_hint: None,
         notes_ref: None,
         animations: Vec::new(),
+        guides: Vec::new(),
         background: None,
         background_image: None,
         notes: None,
@@ -4285,6 +4497,7 @@ fn default_text_element() -> ElementNode {
         content: ElementContent::Text(RichText::new("New Text")),
         children: vec![],
         placeholder_fill: None,
+        placeholder: false,
         name: None,
         link: None,
         attributes: BTreeMap::new(),
@@ -4308,6 +4521,7 @@ fn default_shape_element() -> ElementNode {
         content: ElementContent::Shape(ShapeGeometry::Rectangle),
         children: vec![],
         placeholder_fill: None,
+        placeholder: false,
         name: None,
         link: None,
         attributes: BTreeMap::new(),
@@ -4340,6 +4554,7 @@ fn default_group_element() -> ElementNode {
         content: ElementContent::Group,
         children: vec![],
         placeholder_fill: None,
+        placeholder: false,
         name: None,
         link: None,
         attributes: BTreeMap::new(),
@@ -4396,6 +4611,7 @@ fn default_table_element() -> ElementNode {
         content: ElementContent::Table(data),
         children: vec![],
         placeholder_fill: None,
+        placeholder: false,
         name: None,
         link: None,
         attributes: BTreeMap::new(),
@@ -4425,6 +4641,7 @@ padding:12px;\">&lt;!-- HTML block: double-click to edit --&gt;</div>";
         content: ElementContent::Embed(placeholder.to_string()),
         children: vec![],
         placeholder_fill: None,
+        placeholder: false,
         name: None,
         link: None,
         attributes: BTreeMap::new(),
@@ -6361,6 +6578,7 @@ mod tests {
                 duration_hint: None,
                 notes_ref: None,
                 animations: Vec::new(),
+                guides: Vec::new(),
                 background: None,
                 background_image: None,
                 notes: None,

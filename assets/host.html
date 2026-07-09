@@ -1,375 +1,968 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
-<head>
-    <meta charset="utf-8">
-    <title>carousel</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&display=swap" rel="stylesheet">
-    <style>__HOST_CSS__</style>
-</head>
-<body data-mode="slide">
-
-    <!-- ============================ TOP BAR ============================ -->
-    <!-- Functional: .objects__add[data-element-type] (text/shape/group),
+    <head>
+        <meta charset="utf-8" />
+        <title>Carousel</title>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link
+            href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&display=swap"
+            rel="stylesheet"
+        />
+        <style>
+            __HOST_CSS__
+        </style>
+    </head>
+    <body data-mode="slide">
+        <!-- ============================ TOP BAR ============================ -->
+        <!-- Functional: .objects__add[data-element-type] (text/shape/group),
          #grid-toggle, #mode-toggle, #present-btn. Everything marked
          data-stub is built but intentionally unwired. -->
-    <header id="top-bar" class="top-bar">
-
-        <!-- left cluster -->
-        <div class="top-bar__left">
-            <button type="button" class="icon-btn" data-stub title="Menu" aria-label="Menu">
-                <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="5" r="2"/><circle cx="12" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="12" cy="19" r="2"/><circle cx="19" cy="19" r="2"/></svg>
-            </button>
-            <span class="tbar-divider"></span>
-            <div class="doc-meta">
-                <input type="text" id="deck-title" class="doc-meta__title doc-meta__title--edit"
-                       spellcheck="false" placeholder="Untitled deck" aria-label="Deck title">
-                <span class="doc-meta__sub" data-stub>Edited just now</span>
-            </div>
-        </div>
-
-        <!-- center cluster: tools -->
-        <div class="top-bar__center">
-            <div class="tbar-group">
-                <button type="button" id="tool-select" class="tbar-btn is-on tt" data-tip="Select" data-key="V" aria-label="Select">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M5.5 3.2 12 19.5l2.3-6.5 6.5-2.3L5.5 3.2z"/></svg>
+        <header id="top-bar" class="top-bar">
+            <!-- left cluster -->
+            <div class="top-bar__left">
+                <button
+                    type="button"
+                    class="icon-btn"
+                    data-stub
+                    title="Menu"
+                    aria-label="Menu"
+                >
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor">
+                        <circle cx="5" cy="5" r="2" />
+                        <circle cx="12" cy="5" r="2" />
+                        <circle cx="19" cy="5" r="2" />
+                        <circle cx="5" cy="12" r="2" />
+                        <circle cx="12" cy="12" r="2" />
+                        <circle cx="19" cy="12" r="2" />
+                        <circle cx="5" cy="19" r="2" />
+                        <circle cx="12" cy="19" r="2" />
+                        <circle cx="19" cy="19" r="2" />
+                    </svg>
                 </button>
-                <button type="button" id="tool-hand" class="tbar-btn tt" data-tip="Hand / pan" data-key="H" aria-label="Hand">
-                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 11V5.5a1.5 1.5 0 0 1 3 0V11m0-1V4.5a1.5 1.5 0 0 1 3 0V11m0-.5V6a1.5 1.5 0 0 1 3 0v7c0 3.3-2.2 6-6 6-2.2 0-3.5-.8-4.7-2.3L5 14c-.7-1-.2-2.2 1-2.4.7-.1 1.4.2 1.9.8L8 13"/></svg>
-                </button>
-            </div>
-
-            <span class="tbar-divider"></span>
-
-            <div class="tbar-group">
-                <button type="button" class="tbar-btn objects__add tt" data-element-type="text" data-tip="Add text" data-key="T" aria-label="Add text">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 6h14M12 6v13"/></svg>
-                </button>
-                <button type="button" class="tbar-btn objects__add tt" data-element-type="shape" data-tip="Add shape" data-key="⇧ S" aria-label="Add shape">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="3.5"/></svg>
-                </button>
-                <button type="button" class="tbar-btn objects__add tt" data-element-type="group" data-tip="Add group" data-key="⌘ G" aria-label="Add group">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="6" width="9" height="9" rx="2"/><rect x="11" y="11" width="9" height="9" rx="2" fill="#fff"/></svg>
-                </button>
-                <button type="button" id="tool-add-image" class="tbar-btn tt" data-tip="Add image" data-key="⇧ I" aria-label="Add image">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="M5.5 17.5 10 13l3 3 2.5-2.5 3 3"/></svg>
-                </button>
-                <button type="button" class="tbar-btn objects__add tt" data-element-type="embed" data-tip="Add code" data-key="⇧ C" aria-label="Add code block">
-                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 8 5 12l4 4M15 8l4 4-4 4"/></svg>
-                </button>
-                <button type="button" class="tbar-btn objects__add tt" data-element-type="table" data-tip="Add table" data-key="⇧ T" aria-label="Add table">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="5" width="16" height="14" rx="2.5"/><path d="M4 10h16M4 14.5h16M10 5v14"/></svg>
-                </button>
-            </div>
-
-            <span class="tbar-divider"></span>
-
-            <button type="button" id="grid-toggle" class="icon-btn tt" aria-pressed="false" data-tip="Pixel grid" data-key="⌘ '" aria-label="Toggle pixel grid">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg>
-            </button>
-        </div>
-
-        <!-- right cluster -->
-        <div class="top-bar__right">
-            <button type="button" id="undo-btn" class="icon-btn tt" data-tip="Undo" data-key="⌘ Z" aria-label="Undo">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7 4 11l4 4M4 11h10a5 5 0 0 1 0 10h-2"/></svg>
-            </button>
-            <button type="button" id="redo-btn" class="icon-btn tt" data-tip="Redo" data-key="⌘ ⇧ Z" aria-label="Redo">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 7l4 4-4 4M20 11H10a5 5 0 0 0 0 10h2"/></svg>
-            </button>
-            <span class="tbar-divider"></span>
-            <button type="button" id="mode-toggle" class="seg mode-toggle" title="Toggle slide / layout editor">
-                <span class="mode-toggle__label mode-toggle__label--slide">Slides</span>
-                <span class="mode-toggle__label mode-toggle__label--layout">Layouts</span>
-            </button>
-            <button type="button" id="share-btn" class="btn--ghost tt" data-tip="Share" data-key="" aria-label="Share" aria-haspopup="true" aria-expanded="false">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="12" r="2.4"/><circle cx="17" cy="6" r="2.4"/><circle cx="17" cy="18" r="2.4"/><path d="M8.2 10.8 14.8 7.2M8.2 13.2l6.6 3.6"/></svg>
-                <span>Share</span>
-            </button>
-            <button type="button" id="present-btn" class="btn--accent present-btn" title="Present (⌘↩)">
-                <span class="present-btn__glyph" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5 19 12 7 19.5z"/></svg></span>
-                <span>Present</span>
-            </button>
-        </div>
-    </header>
-
-    <!-- ============================ MIDDLE ROW ============================ -->
-    <div class="middle-row">
-
-        <!-- ---------- Layers (left) ---------- -->
-        <aside id="object-panel" class="panel panel--objects">
-            <div class="panel-head">
-                <h2 class="panel-head__title">Layers</h2>
-                <div class="panel-head__tools">
-                    <button type="button" id="objects-collapse-all" class="icon-btn icon-btn--sm tt" data-tip="Collapse / expand all" data-key="" aria-label="Collapse or expand all groups">
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M8 9l4-4 4 4M8 15l4 4 4-4"/></svg>
-                    </button>
-                    <button type="button" class="icon-btn icon-btn--sm tt" data-stub data-tip="Search layers" data-key="" aria-label="Search layers">
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="6"/><path d="m20 20-3.2-3.2"/></svg>
-                    </button>
+                <span class="tbar-divider"></span>
+                <div class="doc-meta">
+                    <span
+                        id="unsaved-dot"
+                        class="doc-meta__dot"
+                        title="Unsaved changes"
+                        aria-hidden="true"
+                    ></span>
+                    <input
+                        type="text"
+                        id="deck-title"
+                        class="doc-meta__title doc-meta__title--edit"
+                        spellcheck="false"
+                        placeholder="Untitled deck"
+                        aria-label="Deck title"
+                    />
+                    <span class="doc-meta__sub" data-stub>Edited just now</span>
                 </div>
             </div>
-            <div class="objects__scroll" id="objects-tree" role="tree"></div>
-        </aside>
 
-        <!-- ---------- Canvas (center) ---------- -->
-        <div class="panel panel--canvas">
-            <div class="canvas-head">
-                <div class="canvas-head__crumb">
-                    <span class="canvas-head__slide">Slide</span>
-                    <span class="canvas-head__dot">·</span>
-                    <span>Title</span>
+            <!-- center cluster: tools -->
+            <div class="top-bar__center">
+                <div class="tbar-group">
+                    <button
+                        type="button"
+                        id="tool-select"
+                        class="tbar-btn is-on tt"
+                        data-tip="Select"
+                        data-key="V"
+                        aria-label="Select"
+                    >
+                        <svg
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="currentColor"
+                        >
+                            <path d="M5.5 3.2 12 19.5l2.3-6.5 6.5-2.3L5.5 3.2z" />
+                        </svg>
+                    </button>
+                    <button
+                        type="button"
+                        id="tool-hand"
+                        class="tbar-btn tt"
+                        data-tip="Hand / pan"
+                        data-key="H"
+                        aria-label="Hand"
+                    >
+                        <svg
+                            width="17"
+                            height="17"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.8"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                        >
+                            <path
+                                d="M8 11V5.5a1.5 1.5 0 0 1 3 0V11m0-1V4.5a1.5 1.5 0 0 1 3 0V11m0-.5V6a1.5 1.5 0 0 1 3 0v7c0 3.3-2.2 6-6 6-2.2 0-3.5-.8-4.7-2.3L5 14c-.7-1-.2-2.2 1-2.4.7-.1 1.4.2 1.9.8L8 13"
+                            />
+                        </svg>
+                    </button>
                 </div>
-                <div class="canvas-head__zoom">
-                    <button type="button" id="zoom-out" class="icon-btn icon-btn--sm tt" data-tip="Zoom out" data-key="⌘ −" aria-label="Zoom out">
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 12h12"/></svg>
-                    </button>
-                    <span id="zoom-pct" class="canvas-head__pct">Fit</span>
-                    <button type="button" id="zoom-in" class="icon-btn icon-btn--sm tt" data-tip="Zoom in" data-key="⌘ +" aria-label="Zoom in">
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 6v12M6 12h12"/></svg>
-                    </button>
-                    <span class="tbar-divider tbar-divider--sm"></span>
-                    <button type="button" id="zoom-fit" class="icon-btn icon-btn--sm tt" data-tip="Fit to pane" data-key="⌘ 0" aria-label="Fit to pane">
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4H5a1 1 0 0 0-1 1v3m12-4h3a1 1 0 0 1 1 1v3M8 20H5a1 1 0 0 1-1-1v-3m12 4h3a1 1 0 0 0 1-1v-3"/></svg>
-                    </button>
-                </div>
-            </div>
-            <div id="viewport-container" class="canvas-stage">
-                <div id="viewport"></div>
-                <div id="selection-overlay"></div>
-            </div>
-        </div>
 
-        <!-- ---------- Inspector (right) ---------- -->
-        <aside id="inspector-panel" class="panel panel--inspector">
-            <div class="insp-head">
-                <span class="insp-head__icon" aria-hidden="true">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M6 7h12M12 7v11"/></svg>
-                </span>
-                <div class="insp-head__text">
-                    <h2 class="insp-head__title">Inspector</h2>
-                    <p class="insp-head__sub" id="inspector-target">No selection</p>
+                <span class="tbar-divider"></span>
+
+                <div class="tbar-group">
+                    <button
+                        type="button"
+                        class="tbar-btn objects__add tt"
+                        data-element-type="text"
+                        data-tip="Add text"
+                        data-key="T"
+                        aria-label="Add text"
+                    >
+                        <svg
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                        >
+                            <path d="M5 6h14M12 6v13" />
+                        </svg>
+                    </button>
+                    <button
+                        type="button"
+                        class="tbar-btn objects__add tt"
+                        data-element-type="shape"
+                        data-tip="Add shape"
+                        data-key="⇧ S"
+                        aria-label="Add shape"
+                    >
+                        <svg
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.8"
+                        >
+                            <rect x="4" y="4" width="16" height="16" rx="3.5" />
+                        </svg>
+                    </button>
+                    <button
+                        type="button"
+                        class="tbar-btn objects__add tt"
+                        data-element-type="group"
+                        data-tip="Add group"
+                        data-key="⌘ G"
+                        aria-label="Add group"
+                    >
+                        <svg
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.7"
+                        >
+                            <rect x="4" y="6" width="9" height="9" rx="2" />
+                            <rect x="11" y="11" width="9" height="9" rx="2" fill="#fff" />
+                        </svg>
+                    </button>
+                    <button
+                        type="button"
+                        id="tool-add-image"
+                        class="tbar-btn tt"
+                        data-tip="Add image"
+                        data-key="⇧ I"
+                        aria-label="Add image"
+                    >
+                        <svg
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.8"
+                            stroke-linejoin="round"
+                        >
+                            <rect x="4" y="5" width="16" height="14" rx="2.5" />
+                            <circle cx="9" cy="10" r="1.6" />
+                            <path d="M5.5 17.5 10 13l3 3 2.5-2.5 3 3" />
+                        </svg>
+                    </button>
+                    <button
+                        type="button"
+                        class="tbar-btn objects__add tt"
+                        data-element-type="embed"
+                        data-tip="Add code"
+                        data-key="⇧ C"
+                        aria-label="Add code block"
+                    >
+                        <svg
+                            width="17"
+                            height="17"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.9"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                        >
+                            <path d="M9 8 5 12l4 4M15 8l4 4-4 4" />
+                        </svg>
+                    </button>
+                    <button
+                        type="button"
+                        class="tbar-btn objects__add tt"
+                        data-element-type="table"
+                        data-tip="Add table"
+                        data-key="⇧ T"
+                        aria-label="Add table"
+                    >
+                        <svg
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.7"
+                        >
+                            <rect x="4" y="5" width="16" height="14" rx="2.5" />
+                            <path d="M4 10h16M4 14.5h16M10 5v14" />
+                        </svg>
+                    </button>
                 </div>
-                <button type="button" class="icon-btn icon-btn--sm tt" data-stub data-tip="More" data-key="" aria-label="More">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+
+                <span class="tbar-divider"></span>
+
+                <button
+                    type="button"
+                    id="grid-toggle"
+                    class="icon-btn tt"
+                    aria-pressed="false"
+                    data-tip="Pixel grid"
+                    data-key="⌘ '"
+                    aria-label="Toggle pixel grid"
+                >
+                    <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.8"
+                    >
+                        <rect x="4" y="4" width="7" height="7" rx="1.5" />
+                        <rect x="13" y="4" width="7" height="7" rx="1.5" />
+                        <rect x="4" y="13" width="7" height="7" rx="1.5" />
+                        <rect x="13" y="13" width="7" height="7" rx="1.5" />
+                    </svg>
                 </button>
             </div>
 
-            <section id="slide-box" class="inspector__section slide-box">
-                <button type="button" class="inspector__section-header" id="slide-box-header">
-                    Slide
-                    <span class="inspector__chevron" aria-hidden="true"></span>
+            <!-- right cluster -->
+            <div class="top-bar__right">
+                <button
+                    type="button"
+                    id="undo-btn"
+                    class="icon-btn tt"
+                    data-tip="Undo"
+                    data-key="⌘ Z"
+                    aria-label="Undo"
+                >
+                    <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.8"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                    >
+                        <path d="M8 7 4 11l4 4M4 11h10a5 5 0 0 1 0 10h-2" />
+                    </svg>
                 </button>
-                <div class="inspector__section-body">
-                    <div class="inspector__field inspector__field--full" data-slide-only>
-                        <label class="inspector__field-label" for="slide-title">Title</label>
-                        <input type="text" id="slide-title" class="inspector__input" spellcheck="false">
+                <button
+                    type="button"
+                    id="redo-btn"
+                    class="icon-btn tt"
+                    data-tip="Redo"
+                    data-key="⌘ ⇧ Z"
+                    aria-label="Redo"
+                >
+                    <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.8"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                    >
+                        <path d="M16 7l4 4-4 4M20 11H10a5 5 0 0 0 0 10h2" />
+                    </svg>
+                </button>
+                <span class="tbar-divider"></span>
+                <button
+                    type="button"
+                    id="mode-toggle"
+                    class="seg mode-toggle"
+                    title="Toggle slide / layout editor"
+                >
+                    <span class="mode-toggle__label mode-toggle__label--slide"
+                        >Slides</span
+                    >
+                    <span class="mode-toggle__label mode-toggle__label--layout"
+                        >Layouts</span
+                    >
+                </button>
+                <button
+                    type="button"
+                    id="share-btn"
+                    class="btn--ghost tt"
+                    data-tip="Share"
+                    data-key=""
+                    aria-label="Share"
+                    aria-haspopup="true"
+                    aria-expanded="false"
+                >
+                    <svg
+                        width="15"
+                        height="15"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.8"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                    >
+                        <circle cx="6" cy="12" r="2.4" />
+                        <circle cx="17" cy="6" r="2.4" />
+                        <circle cx="17" cy="18" r="2.4" />
+                        <path d="M8.2 10.8 14.8 7.2M8.2 13.2l6.6 3.6" />
+                    </svg>
+                    <span>Export</span>
+                </button>
+                <button
+                    type="button"
+                    id="present-btn"
+                    class="btn--accent present-btn"
+                    title="Present (⌘↩)"
+                >
+                    <span class="present-btn__glyph" aria-hidden="true"
+                        ><svg
+                            width="13"
+                            height="13"
+                            viewBox="0 0 24 24"
+                            fill="currentColor"
+                        >
+                            <path d="M7 4.5 19 12 7 19.5z" /></svg
+                    ></span>
+                    <span>Present</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- ============================ MIDDLE ROW ============================ -->
+        <div class="middle-row">
+            <!-- ---------- Layers (left) ---------- -->
+            <aside id="object-panel" class="panel panel--objects">
+                <div class="panel-head">
+                    <h2 class="panel-head__title">Layers</h2>
+                    <div class="panel-head__tools">
+                        <button
+                            type="button"
+                            id="objects-collapse-all"
+                            class="icon-btn icon-btn--sm tt"
+                            data-tip="Collapse / expand all"
+                            data-key=""
+                            aria-label="Collapse or expand all groups"
+                        >
+                            <svg
+                                width="15"
+                                height="15"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="1.9"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                            >
+                                <path d="M8 9l4-4 4 4M8 15l4 4 4-4" />
+                            </svg>
+                        </button>
+                        <button
+                            type="button"
+                            class="icon-btn icon-btn--sm tt"
+                            data-stub
+                            data-tip="Search layers"
+                            data-key=""
+                            aria-label="Search layers"
+                        >
+                            <svg
+                                width="15"
+                                height="15"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="1.9"
+                                stroke-linecap="round"
+                            >
+                                <circle cx="11" cy="11" r="6" />
+                                <path d="m20 20-3.2-3.2" />
+                            </svg>
+                        </button>
                     </div>
-                    <div class="inspector__field inspector__field--full" data-slide-only>
-                        <label class="inspector__field-label" for="slide-layout">Layout</label>
-                        <select id="slide-layout" class="inspector__input inspector__select"></select>
+                </div>
+                <div class="objects__scroll" id="objects-tree" role="tree"></div>
+            </aside>
+
+            <!-- ---------- Canvas (center) ---------- -->
+            <div class="panel panel--canvas">
+                <div class="canvas-head">
+                    <div class="canvas-head__crumb">
+                        <span class="canvas-head__slide">Slide</span>
+                        <span class="canvas-head__dot">·</span>
+                        <span>Title</span>
                     </div>
-                    <div class="inspector__field inspector__field--full">
-                        <label class="inspector__field-label">Fill</label>
-                        <div id="slide-bg-mount"></div>
+                    <div class="canvas-head__zoom">
+                        <button
+                            type="button"
+                            id="zoom-out"
+                            class="icon-btn icon-btn--sm tt"
+                            data-tip="Zoom out"
+                            data-key="⌘ −"
+                            aria-label="Zoom out"
+                        >
+                            <svg
+                                width="15"
+                                height="15"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                stroke-linecap="round"
+                            >
+                                <path d="M6 12h12" />
+                            </svg>
+                        </button>
+                        <span id="zoom-pct" class="canvas-head__pct">Fit</span>
+                        <button
+                            type="button"
+                            id="zoom-in"
+                            class="icon-btn icon-btn--sm tt"
+                            data-tip="Zoom in"
+                            data-key="⌘ +"
+                            aria-label="Zoom in"
+                        >
+                            <svg
+                                width="15"
+                                height="15"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                stroke-linecap="round"
+                            >
+                                <path d="M12 6v12M6 12h12" />
+                            </svg>
+                        </button>
+                        <span class="tbar-divider tbar-divider--sm"></span>
+                        <button
+                            type="button"
+                            id="zoom-fit"
+                            class="icon-btn icon-btn--sm tt"
+                            data-tip="Fit to pane"
+                            data-key="⌘ 0"
+                            aria-label="Fit to pane"
+                        >
+                            <svg
+                                width="15"
+                                height="15"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="1.8"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                            >
+                                <path
+                                    d="M8 4H5a1 1 0 0 0-1 1v3m12-4h3a1 1 0 0 1 1 1v3M8 20H5a1 1 0 0 1-1-1v-3m12 4h3a1 1 0 0 0 1-1v-3"
+                                />
+                            </svg>
+                        </button>
                     </div>
-                    <div class="inspector__field inspector__field--full">
-                        <label class="inspector__field-label">Image</label>
-                        <div class="slide-bg-well">
-                            <button type="button" id="slide-bg-image" class="slide-bg-well__pick"
-                                    title="Choose a background image">Choose…</button>
-                            <button type="button" id="slide-bg-image-clear" class="slide-bg-well__clear"
-                                    title="Remove background image" hidden>✕</button>
-                            <input type="file" id="slide-bg-image-file" accept="image/*" hidden>
+                </div>
+                <div id="viewport-container" class="canvas-stage">
+                    <div id="viewport"></div>
+                    <div id="selection-overlay"></div>
+                </div>
+            </div>
+
+            <!-- ---------- Inspector (right) ---------- -->
+            <aside id="inspector-panel" class="panel panel--inspector">
+                <div class="insp-head">
+                    <span class="insp-head__icon" aria-hidden="true">
+                        <svg
+                            width="15"
+                            height="15"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.9"
+                            stroke-linecap="round"
+                        >
+                            <path d="M6 7h12M12 7v11" />
+                        </svg>
+                    </span>
+                    <div class="insp-head__text">
+                        <h2 class="insp-head__title">Inspector</h2>
+                        <p class="insp-head__sub" id="inspector-target">No selection</p>
+                    </div>
+                    <button
+                        type="button"
+                        class="icon-btn icon-btn--sm tt"
+                        data-stub
+                        data-tip="More"
+                        data-key=""
+                        aria-label="More"
+                    >
+                        <svg
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="currentColor"
+                        >
+                            <circle cx="5" cy="12" r="1.8" />
+                            <circle cx="12" cy="12" r="1.8" />
+                            <circle cx="19" cy="12" r="1.8" />
+                        </svg>
+                    </button>
+                </div>
+
+                <div class="inspector__body" id="inspector-body">
+                    <section id="slide-box" class="inspector__section slide-box">
+                        <button
+                            type="button"
+                            class="inspector__section-header"
+                            id="slide-box-header"
+                        >
+                            Slide
+                            <span class="inspector__chevron" aria-hidden="true"></span>
+                        </button>
+                        <div class="inspector__section-body">
+                            <div class="inspector__field inspector__field--full">
+                                <label
+                                    class="inspector__field-label"
+                                    for="slide-title"
+                                    id="slide-title-label"
+                                    >Title</label
+                                >
+                                <input
+                                    type="text"
+                                    id="slide-title"
+                                    class="inspector__input"
+                                    spellcheck="false"
+                                />
+                            </div>
+                            <div
+                                class="inspector__field inspector__field--full"
+                                data-slide-only
+                            >
+                                <label class="inspector__field-label">Layout</label>
+                                <div id="slide-layout-mount"></div>
+                            </div>
+                            <div class="inspector__field inspector__field--full">
+                                <label class="inspector__field-label">Fill</label>
+                                <div id="slide-bg-mount"></div>
+                            </div>
+                            <div class="inspector__field inspector__field--full">
+                                <label class="inspector__field-label">Image</label>
+                                <div class="slide-bg-well">
+                                    <button
+                                        type="button"
+                                        id="slide-bg-image"
+                                        class="slide-bg-well__pick"
+                                        title="Choose a background image"
+                                    >
+                                        Choose…
+                                    </button>
+                                    <button
+                                        type="button"
+                                        id="slide-bg-image-clear"
+                                        class="slide-bg-well__clear"
+                                        title="Remove background image"
+                                        hidden
+                                    >
+                                        ✕
+                                    </button>
+                                    <input
+                                        type="file"
+                                        id="slide-bg-image-file"
+                                        accept="image/*"
+                                        hidden
+                                    />
+                                </div>
+                            </div>
+                            <div
+                                class="inspector__field inspector__field--full"
+                                data-slide-only
+                            >
+                                <label class="inspector__field-label" for="slide-notes"
+                                    >Notes</label
+                                >
+                                <textarea
+                                    id="slide-notes"
+                                    class="inspector__input slide-box__notes"
+                                    spellcheck="false"
+                                    placeholder="Speaker notes…"
+                                ></textarea>
+                            </div>
+                            <div
+                                class="inspector__field inspector__field--full"
+                                data-slide-only
+                            >
+                                <label class="inspector__field-label">Transition</label>
+                                <div id="slide-transition-mount"></div>
+                            </div>
+                            <div
+                                class="inspector__field inspector__field--full slide-transition__timing"
+                                id="slide-transition-timing"
+                                data-slide-only
+                                hidden
+                            >
+                                <div class="inspector__field">
+                                    <label
+                                        class="inspector__field-label"
+                                        for="slide-transition-dur"
+                                        >Duration (ms)</label
+                                    >
+                                    <input
+                                        type="number"
+                                        id="slide-transition-dur"
+                                        class="inspector__input"
+                                        min="0"
+                                        step="50"
+                                    />
+                                </div>
+                                <div class="inspector__field">
+                                    <label class="inspector__field-label">Easing</label>
+                                    <div
+                                        id="slide-transition-easing-mount"
+                                        class="slide-transition__easing"
+                                    ></div>
+                                </div>
+                            </div>
+                            <div
+                                class="inspector__field inspector__field--full"
+                                data-slide-only
+                            >
+                                <label class="inspector__field-label">Animations</label>
+                                <div id="sac-groups" class="sac"></div>
+                            </div>
                         </div>
-                    </div>
-                    <div class="inspector__field inspector__field--full" data-slide-only>
-                        <label class="inspector__field-label" for="slide-notes">Notes</label>
-                        <textarea id="slide-notes" class="inspector__input slide-box__notes" spellcheck="false"
-                                  placeholder="Speaker notes…"></textarea>
-                    </div>
-                    <div class="inspector__field inspector__field--full" data-slide-only>
-                        <label class="inspector__field-label" for="slide-transition">Transition</label>
-                        <select id="slide-transition" class="inspector__input inspector__select">
-                            <option value="None">None</option>
-                            <option value="Fade">Fade</option>
-                            <option value="Push">Push</option>
-                            <option value="Dissolve">Dissolve</option>
-                            <option value="Wipe">Wipe</option>
-                            <option value="Flip">Flip</option>
-                            <option value="Cube">Cube</option>
-                        </select>
-                    </div>
-                    <div class="inspector__field inspector__field--full" id="slide-transition-timing"
-                         data-slide-only hidden>
-                        <label class="inspector__field-label" for="slide-transition-dur">Duration (ms)</label>
-                        <input type="number" id="slide-transition-dur" class="inspector__input"
-                               min="0" step="50">
-                        <div id="slide-transition-easing-mount" class="slide-transition__easing"></div>
-                    </div>
-                    <div class="inspector__field inspector__field--full" data-slide-only>
-                        <label class="inspector__field-label">Animations</label>
-                        <div id="sac-groups" class="sac"></div>
-                    </div>
-                </div>
-            </section>
+                    </section>
 
-            <div class="inspector__scroll" id="inspector-scroll"></div>
+                    <div class="inspector__scroll" id="inspector-scroll"></div>
 
-            <section id="crop-box" class="crop-box" hidden>
-                <h3 class="crop-box__title">Crop</h3>
-                <button type="button" id="crop-enter" class="crop-box__enter">Crop image</button>
-                <label class="crop-box__field">
-                    <span>Zoom %</span>
-                    <input type="number" id="crop-zoom-pct" min="100" step="1">
-                </label>
-                <label class="crop-box__field">
-                    <span>Offset X</span>
-                    <input type="number" id="crop-offset-x" step="1">
-                </label>
-                <label class="crop-box__field">
-                    <span>Offset Y</span>
-                    <input type="number" id="crop-offset-y" step="1">
-                </label>
-                <button type="button" id="crop-reset" class="crop-box__reset">Reset crop</button>
-            </section>
-
-            <section id="table-box" class="inspector__section table-box" hidden>
-                <div class="inspector__section-header inspector__section-header--static">Table</div>
-                <div class="inspector__section-body">
-                    <div class="table-box__grid">
-                        <button type="button" id="table-add-row" class="table-box__btn">+ Row</button>
-                        <button type="button" id="table-del-row" class="table-box__btn">− Row</button>
-                        <button type="button" id="table-add-col" class="table-box__btn">+ Col</button>
-                        <button type="button" id="table-del-col" class="table-box__btn">− Col</button>
-                    </div>
-                    <label class="table-box__toggle">
-                        <input type="checkbox" id="table-header-row"> Header row
-                    </label>
-                    <label class="table-box__toggle">
-                        <input type="checkbox" id="table-header-col"> Header column
-                    </label>
-                    <p class="table-box__hint">Double-click a cell to edit · Shift / ⌘ click to multi-select</p>
-                </div>
-            </section>
-
-            <section id="guide-box" class="inspector__section slide-box">
-                <div class="inspector__section-body">
-                    <div class="inspector__field inspector__field--full">
-                        <label class="inspector__field-label" for="guide-pos">
-                            Position (<span id="guide-pos-label">Y</span>)
+                    <section id="crop-box" class="crop-box" hidden>
+                        <h3 class="crop-box__title">Crop</h3>
+                        <button type="button" id="crop-enter" class="crop-box__enter">
+                            Crop image
+                        </button>
+                        <label class="crop-box__field">
+                            <span>Zoom %</span>
+                            <input type="number" id="crop-zoom-pct" min="100" step="1" />
                         </label>
-                        <input type="number" id="guide-pos" class="inspector__input" step="1">
-                    </div>
+                        <label class="crop-box__field">
+                            <span>Offset X</span>
+                            <input type="number" id="crop-offset-x" step="1" />
+                        </label>
+                        <label class="crop-box__field">
+                            <span>Offset Y</span>
+                            <input type="number" id="crop-offset-y" step="1" />
+                        </label>
+                        <button type="button" id="crop-reset" class="crop-box__reset">
+                            Reset crop
+                        </button>
+                    </section>
+
+                    <section id="table-box" class="inspector__section table-box" hidden>
+                        <div
+                            class="inspector__section-header inspector__section-header--static"
+                        >
+                            Table
+                        </div>
+                        <div class="inspector__section-body">
+                            <div class="table-box__grid">
+                                <button
+                                    type="button"
+                                    id="table-add-row"
+                                    class="table-box__btn"
+                                >
+                                    + Row
+                                </button>
+                                <button
+                                    type="button"
+                                    id="table-del-row"
+                                    class="table-box__btn"
+                                >
+                                    − Row
+                                </button>
+                                <button
+                                    type="button"
+                                    id="table-add-col"
+                                    class="table-box__btn"
+                                >
+                                    + Col
+                                </button>
+                                <button
+                                    type="button"
+                                    id="table-del-col"
+                                    class="table-box__btn"
+                                >
+                                    − Col
+                                </button>
+                            </div>
+                            <label class="table-box__toggle">
+                                <input type="checkbox" id="table-header-row" /> Header row
+                            </label>
+                            <label class="table-box__toggle">
+                                <input type="checkbox" id="table-header-col" /> Header
+                                column
+                            </label>
+                            <p class="table-box__hint">
+                                Double-click a cell to edit · Shift / ⌘ click to
+                                multi-select
+                            </p>
+                        </div>
+                    </section>
+
+                    <section id="guide-box" class="inspector__section slide-box">
+                        <div class="inspector__section-body">
+                            <div class="inspector__field inspector__field--full">
+                                <label class="inspector__field-label" for="guide-pos">
+                                    Position (<span id="guide-pos-label">Y</span>)
+                                </label>
+                                <input
+                                    type="number"
+                                    id="guide-pos"
+                                    class="inspector__input"
+                                    step="1"
+                                />
+                            </div>
+                        </div>
+                    </section>
+
+                    <form
+                        class="inspector__custom"
+                        id="inspector-custom"
+                        autocomplete="off"
+                    >
+                        <p class="inspector__custom-hint">
+                            Add any property not listed above.
+                        </p>
+                        <div id="inspector-custom-list" class="inspector__decls"></div>
+                        <div class="inspector__custom-row">
+                            <input
+                                id="inspector-custom-key"
+                                class="inspector__decl-input"
+                                placeholder="property"
+                                spellcheck="false"
+                                list="css-prop-suggestions"
+                            />
+                            <input
+                                id="inspector-custom-value"
+                                class="inspector__decl-input"
+                                placeholder="value"
+                                spellcheck="false"
+                            />
+                            <button
+                                type="submit"
+                                class="inspector__apply"
+                                title="Add property"
+                            >
+                                <svg
+                                    width="15"
+                                    height="15"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2.4"
+                                    stroke-linecap="round"
+                                >
+                                    <path d="M12 5v14M5 12h14" />
+                                </svg>
+                            </button>
+                        </div>
+                        <datalist id="css-prop-suggestions">
+                            <option value="display"></option>
+                            <option value="position"></option>
+                            <option value="margin"></option>
+                            <option value="padding"></option>
+                            <option value="gap"></option>
+                            <option value="align-items"></option>
+                            <option value="background"></option>
+                            <option value="background-image"></option>
+                            <option value="transition"></option>
+                            <option value="filter"></option>
+                            <option value="backdrop-filter"></option>
+                            <option value="mix-blend-mode"></option>
+                            <option value="overflow"></option>
+                            <option value="text-transform"></option>
+                            <option value="text-shadow"></option>
+                            <option value="white-space"></option>
+                            <option value="cursor"></option>
+                            <option value="outline"></option>
+                            <option value="object-fit"></option>
+                        </datalist>
+                    </form>
+
+                    <section id="animations-section" class="animations">
+                        <header class="animations__header">
+                            <span id="anim-count" class="animations__count">0</span>
+                            <button
+                                type="button"
+                                id="anim-play"
+                                class="animations__play"
+                                title="Preview the slide build"
+                            >
+                                ▶ Play
+                            </button>
+                        </header>
+                        <div id="anim-bars" class="animations__bars"></div>
+                        <div class="animations__add-wrap">
+                            <button
+                                type="button"
+                                id="anim-add-btn"
+                                class="animations__add"
+                            >
+                                + Add animation
+                            </button>
+                            <div
+                                id="anim-add-menu"
+                                class="animations__add-menu"
+                                hidden
+                            ></div>
+                        </div>
+                    </section>
+
+                    <section id="group-flex-section" class="animations">
+                        <div id="flex-controls"></div>
+                    </section>
+
+                    <section id="globals-editor" class="globals">
+                        <label class="globals__label" for="globals-css"
+                            >Globals CSS</label
+                        >
+                        <textarea
+                            id="globals-css"
+                            class="globals__textarea"
+                            spellcheck="false"
+                            placeholder="/* deck-wide CSS: @keyframes, :root custom properties… */"
+                        ></textarea>
+                    </section>
+
+                    <section id="theme-actions" class="theme-actions">
+                        <button
+                            type="button"
+                            id="theme-save-btn"
+                            class="theme-actions__btn"
+                            title="Export this theme (layouts + globals + styling) to a file"
+                        >
+                            Save Theme…
+                        </button>
+                        <button
+                            type="button"
+                            id="theme-load-btn"
+                            class="theme-actions__btn"
+                            title="Load a theme file (replaces layouts + globals + styling; undoable)"
+                        >
+                            Load Theme…
+                        </button>
+                    </section>
                 </div>
-            </section>
-
-            <form class="inspector__custom" id="inspector-custom" autocomplete="off">
-                <p class="inspector__custom-hint">Add any property not listed above.</p>
-                <div id="inspector-custom-list" class="inspector__decls"></div>
-                <div class="inspector__custom-row">
-                    <input id="inspector-custom-key" class="inspector__decl-input"
-                           placeholder="property" spellcheck="false"
-                           list="css-prop-suggestions">
-                    <input id="inspector-custom-value" class="inspector__decl-input"
-                           placeholder="value" spellcheck="false">
-                    <button type="submit" class="inspector__apply" title="Add property">
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-                    </button>
-                </div>
-                <datalist id="css-prop-suggestions">
-                    <option value="display"></option>
-                    <option value="position"></option>
-                    <option value="margin"></option>
-                    <option value="padding"></option>
-                    <option value="gap"></option>
-                    <option value="align-items"></option>
-                    <option value="background"></option>
-                    <option value="background-image"></option>
-                    <option value="transition"></option>
-                    <option value="filter"></option>
-                    <option value="backdrop-filter"></option>
-                    <option value="mix-blend-mode"></option>
-                    <option value="overflow"></option>
-                    <option value="text-transform"></option>
-                    <option value="text-shadow"></option>
-                    <option value="white-space"></option>
-                    <option value="cursor"></option>
-                    <option value="outline"></option>
-                    <option value="object-fit"></option>
-                </datalist>
-            </form>
-
-            <section id="animations-section" class="animations">
-                <header class="animations__header">
-                    <span id="anim-count" class="animations__count">0</span>
-                    <button type="button" id="anim-play" class="animations__play"
-                            title="Preview the slide build">▶ Play</button>
-                </header>
-                <div id="anim-bars" class="animations__bars"></div>
-                <div class="animations__add-wrap">
-                    <button type="button" id="anim-add-btn" class="animations__add">
-                        + Add animation
-                    </button>
-                    <div id="anim-add-menu" class="animations__add-menu" hidden></div>
-                </div>
-            </section>
-
-            <section id="group-flex-section" class="animations">
-                <div id="flex-controls"></div>
-            </section>
-
-            <section id="globals-editor" class="globals">
-                <label class="globals__label" for="globals-css">Globals CSS</label>
-                <textarea id="globals-css" class="globals__textarea" spellcheck="false"
-                          placeholder="/* deck-wide CSS: @keyframes, :root custom properties… */"></textarea>
-            </section>
-
-            <section id="theme-actions" class="theme-actions">
-                <button type="button" id="theme-save-btn" class="theme-actions__btn"
-                        title="Export this theme (layouts + globals + styling) to a file">
-                    Save Theme…
-                </button>
-                <button type="button" id="theme-load-btn" class="theme-actions__btn"
-                        title="Load a theme file (replaces layouts + globals + styling; undoable)">
-                    Load Theme…
-                </button>
-            </section>
-        </aside>
-    </div>
-
-    <!-- ============================ BOTTOM STRIP ============================ -->
-    <div class="panel panel--thumbs">
-        <div class="thumbs-head">
-            <div class="thumbs-head__left">
-                <span class="thumbs-head__title">Slides</span>
-                <span class="thumbs-head__count" id="thumbs-count">—</span>
-            </div>
-            <div class="thumbs-head__tools">
-                <button type="button" class="thumbs-head__add tt tt-up" data-stub data-tip="Add slide" data-key="⌘ ⇧ N" aria-label="Add slide">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-                    <span>Add</span>
-                </button>
-                <button type="button" class="icon-btn icon-btn--sm tt tt-up" data-stub data-tip="Grid view" data-key="" aria-label="Grid view">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg>
-                </button>
-            </div>
+            </aside>
         </div>
-        <nav id="thumbnail-row" class="thumbs-strip" aria-label="Slides"></nav>
-    </div>
 
-    <!-- Pane resize dividers: absolutely positioned over the gutters, placed by
+        <!-- ============================ BOTTOM STRIP ============================ -->
+        <div class="panel panel--thumbs">
+            <div class="thumbs-head">
+                <div class="thumbs-head__left">
+                    <span class="thumbs-head__title">Slides</span>
+                    <span class="thumbs-head__count" id="thumbs-count">—</span>
+                </div>
+                <div class="thumbs-head__tools">
+                    <button
+                        type="button"
+                        class="thumbs-head__add tt tt-up"
+                        data-stub
+                        data-tip="Add slide"
+                        data-key="⌘ ⇧ N"
+                        aria-label="Add slide"
+                    >
+                        <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2.2"
+                            stroke-linecap="round"
+                        >
+                            <path d="M12 5v14M5 12h14" />
+                        </svg>
+                        <span>Add</span>
+                    </button>
+                    <button
+                        type="button"
+                        class="icon-btn icon-btn--sm tt tt-up"
+                        data-stub
+                        data-tip="Grid view"
+                        data-key=""
+                        aria-label="Grid view"
+                    >
+                        <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.8"
+                        >
+                            <rect x="4" y="4" width="7" height="7" rx="1.5" />
+                            <rect x="13" y="4" width="7" height="7" rx="1.5" />
+                            <rect x="4" y="13" width="7" height="7" rx="1.5" />
+                            <rect x="13" y="13" width="7" height="7" rx="1.5" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            <nav id="thumbnail-row" class="thumbs-strip" aria-label="Slides"></nav>
+        </div>
+
+        <!-- Pane resize dividers: absolutely positioned over the gutters, placed by
          JS (positionDividers). Session-only sizing; see resizable-panes spec. -->
-    <div id="divider-objects" class="divider divider--col" aria-hidden="true"></div>
-    <div id="divider-inspector" class="divider divider--col" aria-hidden="true"></div>
-    <div id="divider-thumbs" class="divider divider--row" aria-hidden="true"></div>
+        <div id="divider-objects" class="divider divider--col" aria-hidden="true"></div>
+        <div id="divider-inspector" class="divider divider--col" aria-hidden="true"></div>
+        <div id="divider-thumbs" class="divider divider--row" aria-hidden="true"></div>
 
-    <div id="toast-stack" aria-live="polite"></div>
-    <script>__CROP_JS__</script>
-    <script>__SNAP_JS__</script>
-    <script>__STYLE_PROPS_JS__</script>
-    <script>__PRESET_CSS_JS__</script>
-    <script>__HOST_JS__</script>
-</body>
+        <div id="toast-stack" aria-live="polite"></div>
+        <script>
+            __CROP_JS__;
+        </script>
+        <script>
+            __SNAP_JS__;
+        </script>
+        <script>
+            __STYLE_PROPS_JS__;
+        </script>
+        <script>
+            __PRESET_CSS_JS__;
+        </script>
+        <script>
+            __HOST_JS__;
+        </script>
+    </body>
 </html>

@@ -115,13 +115,13 @@ fn tstyle(size: f64, weight: u16, line_height: f64, color_key: &str) -> TextStyl
 // looks right; the presets serve new text the user adds).
 fn title_layout() -> LayoutNode {
     let title = text_element_styled(
-        "el_title",
+        "layout_text_title",
         "Title",
         geom(160.0, 420.0, 1600.0, 180.0),
         tstyle(96.0, 700, 1.05, "foreground"),
     );
     let subtitle = text_element_styled(
-        "el_subtitle",
+        "layout_text_subtitle",
         "Subtitle",
         geom(160.0, 620.0, 1600.0, 90.0),
         tstyle(32.0, 400, 1.4, "muted"),
@@ -132,19 +132,19 @@ fn title_layout() -> LayoutNode {
 
 fn hero_layout() -> LayoutNode {
     let title = text_element_styled(
-        "el_hero_title",
+        "layout_text_title",
         "Hero headline",
         geom(160.0, 360.0, 1080.0, 360.0),
         tstyle(96.0, 700, 1.05, "foreground"),
     );
     let copy = text_element_styled(
-        "el_hero_copy",
+        "layout_text_body",
         "Supporting copy",
         geom(160.0, 760.0, 1000.0, 160.0),
         tstyle(32.0, 400, 1.4, "foreground"),
     );
     let mut block = shape_element(
-        "el_hero_block",
+        "layout_shape_hero",
         ShapeGeometry::RoundedRect { radius_px: 24 },
     );
     block.geometry = geom(1300.0, 240.0, 460.0, 600.0);
@@ -157,24 +157,18 @@ fn hero_layout() -> LayoutNode {
 
 fn text_layout() -> LayoutNode {
     let header = text_element_styled(
-        "el_header",
+        "layout_text_title",
         "Section header",
         geom(160.0, 140.0, 1600.0, 120.0),
         tstyle(56.0, 600, 1.1, "foreground"),
     );
     let body = text_element_styled(
-        "el_body",
+        "layout_text_body",
         "Body text",
         geom(160.0, 320.0, 1600.0, 560.0),
         tstyle(32.0, 400, 1.4, "foreground"),
     );
-    let footnote = text_element_styled(
-        "el_footnote",
-        "Footnote",
-        geom(160.0, 980.0, 1600.0, 60.0),
-        tstyle(20.0, 400, 1.3, "muted"),
-    );
-    let root = group_element("el_layout_root", vec![header, body, footnote]);
+    let root = group_element("el_layout_root", vec![header, body]);
     LayoutNode::new("text".to_string(), "Text".to_string(), root)
 }
 
@@ -256,7 +250,7 @@ pub fn new_deck(theme: ThemeData, layout_id: &str) -> Deck {
         .theme
         .layouts
         .get(&resolved)
-        .map(|l| l.root.children.clone())
+        .map(|l| l.seeded_children())
         .unwrap_or_default();
     let sid: String = deck.slide_order.first().cloned().unwrap_or_default();
     if let Some(slide) = deck.slides.get_mut(&sid) {
@@ -293,7 +287,7 @@ pub fn new_deck_all_layouts(theme: ThemeData) -> Deck {
             .theme
             .layouts
             .get(&layout_id)
-            .map(|l| l.root.children.clone())
+            .map(|l| l.seeded_children())
             .unwrap_or_default();
         let sid: String = new_slide_id();
         let root = group_element("el_root", children);
@@ -312,6 +306,7 @@ pub fn new_deck_all_layouts(theme: ThemeData) -> Deck {
             duration_hint: None,
             notes_ref: None,
             animations: Vec::new(),
+            guides: Vec::new(),
             background: None,
             background_image: None,
             notes: None,
