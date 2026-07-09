@@ -86,13 +86,11 @@ impl Command for SetMorphTransition {
 
         // Check if enabled and the next slide has the element id.
         let mut warnings: Vec<String> = Vec::new();
-        if self.enabled {
-            if !next_slide_has_id(deck, &self.target, &self.element_id) {
-                warnings.push(format!(
-                    "No element with id '{}' found on the next slide",
-                    self.element_id
-                ));
-            }
+        if self.enabled && !next_slide_has_id(deck, &self.target, &self.element_id) {
+            warnings.push(format!(
+                "No element with id '{}' found on the next slide",
+                self.element_id
+            ));
         }
 
         let inverse = SetMorphTransition {
