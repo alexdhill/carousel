@@ -579,12 +579,20 @@ fn deck_for_open(inbound: &LandingInbound) -> Option<(Deck, Option<PathBuf>)> {
         // swapped out when the load returns.
         LandingInbound::OpenDefault => {
             let path: PathBuf = rfd::FileDialog::new()
-                .add_filter("Slide Deck", &["slidedeck"])
+                .add_filter("Slide Deck", &["deck", "slidedeck"])
                 .pick_file()?;
             Some((new_deck(light_theme(), "title"), Some(path)))
         }
         _ => None,
     }
+}
+
+// initial_open_path
+// Output: the first CLI argument as a path when it names an existing file
+// (a deck double-clicked on Windows / Linux, or a CLI launch), else None.
+fn initial_open_path() -> Option<PathBuf> {
+    let path = PathBuf::from(std::env::args_os().nth(1)?);
+    if path.is_file() { Some(path) } else { None }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -601,9 +609,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // EventLoopWindowTarget, only reachable in the run closure). `ipc_tx` and
     // `proxy` are kept for build_editor.
     let (landing_tx, landing_rx) = std::sync::mpsc::channel::<LandingInbound>();
+    // Kept for injecting file-open requests (launch argv + macOS openURLs) into
+    // the same open flow the landing uses.
+    let landing_tx_startup = landing_tx.clone();
+    let landing_tx_open = landing_tx.clone();
     let (landing_win, landing_wv) = build_landing(&event_loop, proxy.clone(), landing_tx)?;
     let mut landing_window: Option<Window> = Some(landing_win);
     let mut landing_webview: Option<WebView> = Some(landing_wv);
+
+    // A path passed on the command line (double-click on Windows / Linux, or a
+    // CLI launch) opens straight into that deck via the OpenRecent flow.
+    if let Some(path) = initial_open_path() {
+        let _ = landing_tx_startup.send(LandingInbound::OpenRecent {
+            path: path.to_string_lossy().into_owned(),
+        });
+        let _ = proxy.send_event(UserEvent::LandingIpcReceived);
+    }
 
     let schedule_flush: Box<dyn Fn()> = {
         let p = proxy_for_app.clone();
@@ -857,6 +878,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                         }
+                    }
+                }
+            }
+            // macOS delivers Finder double-clicks / "Open with" as file URLs
+            // (application:openURLs:), not argv. Route each into the same open
+            // flow; the open arm ignores it once an editor is already up.
+            Event::Opened { urls } => {
+                for u in &urls {
+                    if let Ok(path) = u.to_file_path() {
+                        let _ = landing_tx_open.send(LandingInbound::OpenRecent {
+                            path: path.to_string_lossy().into_owned(),
+                        });
+                        let _ = proxy.send_event(UserEvent::LandingIpcReceived);
                     }
                 }
             }

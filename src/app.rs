@@ -103,7 +103,7 @@ const EXPORT_HTML_KEY: &str = "export_html";
 const EXPORT_PDF_KEY: &str = "export_pdf";
 // Synthetic accelerator the JS host posts for ⌘↩ / the toolbar Play button.
 const PRESENT_KEY: &str = "present";
-const BUNDLE_FILE_EXTENSION: &str = "slidedeck";
+const BUNDLE_FILE_EXTENSION: &str = "deck";
 const THEME_FILE_EXTENSION: &str = "slidetheme";
 // Keys forwarded by the JS host that should trigger element deletion.
 // Both names cover the two physical keys users reach for: macOS users
@@ -2867,7 +2867,7 @@ fn prompt_save_as(current: Option<&std::path::Path>) -> Option<PathBuf> {
 // Output: the user's chosen path, or None on cancel.
 fn prompt_open() -> Option<PathBuf> {
     rfd::FileDialog::new()
-        .add_filter("Slide Deck", &[BUNDLE_FILE_EXTENSION])
+        .add_filter("Slide Deck", &[BUNDLE_FILE_EXTENSION, "slidedeck"])
         .pick_file()
 }
 
