@@ -30,7 +30,11 @@ impl Command for AddGuide {
         let guides = canvas.guides_mut();
         let at: usize = match self.index {
             Some(i) if i <= guides.len() => i,
-            Some(_) => return Err(CommandError::InvalidOperation("AddGuide: index out of range".into())),
+            Some(_) => {
+                return Err(CommandError::InvalidOperation(
+                    "AddGuide: index out of range".into(),
+                ));
+            }
             None => guides.len(),
         };
         guides.insert(at, Guide::new(self.axis, self.pos));
@@ -78,7 +82,11 @@ impl Command for MoveGuide {
                 g.pos = self.new_pos;
                 old
             }
-            None => return Err(CommandError::InvalidOperation("MoveGuide: index out of range".into())),
+            None => {
+                return Err(CommandError::InvalidOperation(
+                    "MoveGuide: index out of range".into(),
+                ));
+            }
         };
         canvas.mark_dirty();
         Ok(CommandOutput {
@@ -118,7 +126,9 @@ impl Command for RemoveGuide {
         let canvas = resolve_canvas_mut(deck, &self.target)?;
         let guides = canvas.guides_mut();
         if self.index >= guides.len() {
-            return Err(CommandError::InvalidOperation("RemoveGuide: index out of range".into()));
+            return Err(CommandError::InvalidOperation(
+                "RemoveGuide: index out of range".into(),
+            ));
         }
         let removed: Guide = guides.remove(self.index);
         canvas.mark_dirty();
@@ -164,9 +174,14 @@ mod tests {
     #[test]
     fn add_appends_and_inverse_removes() {
         let (mut deck, t) = deck_with_slide();
-        let out = AddGuide { target: t.clone(), axis: GuideAxis::Vertical, pos: 120.0, index: None }
-            .apply(&mut deck)
-            .unwrap();
+        let out = AddGuide {
+            target: t.clone(),
+            axis: GuideAxis::Vertical,
+            pos: 120.0,
+            index: None,
+        }
+        .apply(&mut deck)
+        .unwrap();
         assert_eq!(guides(&deck, &t).len(), 1);
         assert_eq!(guides(&deck, &t)[0].pos, 120.0);
         out.inverse.apply(&mut deck).unwrap();
@@ -176,12 +191,21 @@ mod tests {
     #[test]
     fn move_updates_pos_and_inverse_restores() {
         let (mut deck, t) = deck_with_slide();
-        AddGuide { target: t.clone(), axis: GuideAxis::Horizontal, pos: 10.0, index: None }
-            .apply(&mut deck)
-            .unwrap();
-        let out = MoveGuide { target: t.clone(), index: 0, new_pos: 88.0 }
-            .apply(&mut deck)
-            .unwrap();
+        AddGuide {
+            target: t.clone(),
+            axis: GuideAxis::Horizontal,
+            pos: 10.0,
+            index: None,
+        }
+        .apply(&mut deck)
+        .unwrap();
+        let out = MoveGuide {
+            target: t.clone(),
+            index: 0,
+            new_pos: 88.0,
+        }
+        .apply(&mut deck)
+        .unwrap();
         assert_eq!(guides(&deck, &t)[0].pos, 88.0);
         out.inverse.apply(&mut deck).unwrap();
         assert_eq!(guides(&deck, &t)[0].pos, 10.0);
@@ -191,29 +215,65 @@ mod tests {
     fn remove_inverse_restores_at_same_index() {
         let (mut deck, t) = deck_with_slide();
         for p in [0.0, 50.0, 100.0] {
-            AddGuide { target: t.clone(), axis: GuideAxis::Vertical, pos: p, index: None }
-                .apply(&mut deck)
-                .unwrap();
+            AddGuide {
+                target: t.clone(),
+                axis: GuideAxis::Vertical,
+                pos: p,
+                index: None,
+            }
+            .apply(&mut deck)
+            .unwrap();
         }
-        let out = RemoveGuide { target: t.clone(), index: 1 }.apply(&mut deck).unwrap();
-        assert_eq!(guides(&deck, &t).iter().map(|g| g.pos).collect::<Vec<_>>(), vec![0.0, 100.0]);
+        let out = RemoveGuide {
+            target: t.clone(),
+            index: 1,
+        }
+        .apply(&mut deck)
+        .unwrap();
+        assert_eq!(
+            guides(&deck, &t).iter().map(|g| g.pos).collect::<Vec<_>>(),
+            vec![0.0, 100.0]
+        );
         out.inverse.apply(&mut deck).unwrap();
-        assert_eq!(guides(&deck, &t).iter().map(|g| g.pos).collect::<Vec<_>>(), vec![0.0, 50.0, 100.0]);
+        assert_eq!(
+            guides(&deck, &t).iter().map(|g| g.pos).collect::<Vec<_>>(),
+            vec![0.0, 50.0, 100.0]
+        );
     }
 
     #[test]
     fn out_of_range_index_errors() {
         let (mut deck, t) = deck_with_slide();
-        assert!(MoveGuide { target: t.clone(), index: 0, new_pos: 1.0 }.apply(&mut deck).is_err());
-        assert!(RemoveGuide { target: t.clone(), index: 0 }.apply(&mut deck).is_err());
+        assert!(
+            MoveGuide {
+                target: t.clone(),
+                index: 0,
+                new_pos: 1.0
+            }
+            .apply(&mut deck)
+            .is_err()
+        );
+        assert!(
+            RemoveGuide {
+                target: t.clone(),
+                index: 0
+            }
+            .apply(&mut deck)
+            .is_err()
+        );
     }
 
     #[test]
     fn add_marks_canvas_dirty() {
         let (mut deck, t) = deck_with_slide();
-        AddGuide { target: t.clone(), axis: GuideAxis::Vertical, pos: 5.0, index: None }
-            .apply(&mut deck)
-            .unwrap();
+        AddGuide {
+            target: t.clone(),
+            axis: GuideAxis::Vertical,
+            pos: 5.0,
+            index: None,
+        }
+        .apply(&mut deck)
+        .unwrap();
         match &t {
             CanvasTarget::Slide(id) => assert!(deck.slides[id].dirty),
             CanvasTarget::Layout(_) => unreachable!(),

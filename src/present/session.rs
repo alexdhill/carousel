@@ -127,7 +127,12 @@ impl PresentCursor {
     // Output: the mount payload for the current slide. None if out of range.
     pub fn current_slide_payload(&self, deck: &Deck) -> Option<PresentSlidePayload> {
         let sid: &SlideId = deck.slide_order.get(self.slide_index)?;
-        Some(slide_payload(deck, sid, self.slide_index + 1, deck.slide_order.len()))
+        Some(slide_payload(
+            deck,
+            sid,
+            self.slide_index + 1,
+            deck.slide_order.len(),
+        ))
     }
 
     // snapped_slide_change
@@ -401,7 +406,9 @@ mod tests {
         let mut cur = PresentCursor::new(0);
         match cur.advance(&deck) {
             PresentStep::SlideChanged { slide, .. } => {
-                let t = slide.transition.expect("forward cross carries a transition");
+                let t = slide
+                    .transition
+                    .expect("forward cross carries a transition");
                 assert_eq!(t.kind, TransitionKind::None);
             }
             other => panic!("expected SlideChanged, got {other:?}"),

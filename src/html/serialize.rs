@@ -107,7 +107,10 @@ pub struct RenderOpts {
 // Control flow: single left-to-right scan bounded by the input length; on `${`
 // it reads to the next `}` and maps the name, else copies the byte.
 pub fn resolve_tokens(raw: &str, ctx: &RenderCtx) -> String {
-    assert!(raw.len() < usize::MAX, "resolve_tokens: absurd input length");
+    assert!(
+        raw.len() < usize::MAX,
+        "resolve_tokens: absurd input length"
+    );
     let bytes: &[u8] = raw.as_bytes();
     let mut out: String = String::with_capacity(raw.len());
     let mut i: usize = 0;
@@ -160,7 +163,11 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let doy: i64 = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp: i64 = (5 * doy + 2) / 153;
     let d: u32 = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m: u32 = if mp < 10 { (mp + 3) as u32 } else { (mp - 9) as u32 };
+    let m: u32 = if mp < 10 {
+        (mp + 3) as u32
+    } else {
+        (mp - 9) as u32
+    };
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
@@ -447,12 +454,10 @@ fn group_align_token(a: crate::deck::style::GroupAlignment) -> &'static str {
 // emit nothing (content sits in data-* attributes).
 fn write_content(node: &ElementNode, anim: &AnimMap, opts: &RenderOpts, out: &mut String) {
     match &node.content {
-        ElementContent::Text(rt) => {
-            match &opts.ctx {
-                Some(c) => out.push_str(&escape_text(&resolve_tokens(&rt.plain, c))),
-                None => out.push_str(&escape_text(&rt.plain)),
-            }
-        }
+        ElementContent::Text(rt) => match &opts.ctx {
+            Some(c) => out.push_str(&escape_text(&resolve_tokens(&rt.plain, c))),
+            None => out.push_str(&escape_text(&rt.plain)),
+        },
         ElementContent::Group => {
             for (idx, child) in node.children.iter().enumerate() {
                 if opts.hide_placeholders && child.placeholder {
@@ -953,14 +958,25 @@ mod tests {
 
     #[test]
     fn resolve_tokens_substitutes_known_vars() {
-        let ctx = RenderCtx { number: 3, count: 12, date: "2026-07-08".into() };
-        assert_eq!(resolve_tokens("Slide ${slideNumber} of ${slideCount}", &ctx), "Slide 3 of 12");
+        let ctx = RenderCtx {
+            number: 3,
+            count: 12,
+            date: "2026-07-08".into(),
+        };
+        assert_eq!(
+            resolve_tokens("Slide ${slideNumber} of ${slideCount}", &ctx),
+            "Slide 3 of 12"
+        );
         assert_eq!(resolve_tokens("${date}", &ctx), "2026-07-08");
     }
 
     #[test]
     fn resolve_tokens_leaves_unknown_and_unclosed_literal() {
-        let ctx = RenderCtx { number: 1, count: 1, date: "2026-07-08".into() };
+        let ctx = RenderCtx {
+            number: 1,
+            count: 1,
+            date: "2026-07-08".into(),
+        };
         assert_eq!(resolve_tokens("${foo}", &ctx), "${foo}");
         assert_eq!(resolve_tokens("a ${date", &ctx), "a ${date");
         assert_eq!(resolve_tokens("plain", &ctx), "plain");
@@ -980,12 +996,19 @@ mod tests {
         let root = group_element("root", vec![child]);
         let slide = SlideNode::new("s1".into(), "blank".into(), root);
         let opts = RenderOpts {
-            ctx: Some(RenderCtx { number: 4, count: 9, date: "2026-07-08".into() }),
+            ctx: Some(RenderCtx {
+                number: 4,
+                count: 9,
+                date: "2026-07-08".into(),
+            }),
             hide_placeholders: false,
         };
         let html = serialize_slide_themed(&slide, None, None, &opts);
         assert!(html.contains(">Slide 4<"), "value shown: {html}");
-        assert!(html.contains("data-src=\"Slide ${slideNumber}\""), "raw carried: {html}");
+        assert!(
+            html.contains("data-src=\"Slide ${slideNumber}\""),
+            "raw carried: {html}"
+        );
     }
 
     #[test]
@@ -1007,15 +1030,24 @@ mod tests {
         let root = group_element("root", vec![ph]);
         let slide = SlideNode::new("s1".into(), "title".into(), root);
         let editor = serialize_slide_themed(&slide, None, None, &RenderOpts::default());
-        assert!(editor.contains("data-placeholder=\"true\""), "editor shows: {editor}");
+        assert!(
+            editor.contains("data-placeholder=\"true\""),
+            "editor shows: {editor}"
+        );
         assert!(editor.contains(">Title<"));
         let playback = serialize_slide_themed(
             &slide,
             None,
             None,
-            &RenderOpts { ctx: None, hide_placeholders: true },
+            &RenderOpts {
+                ctx: None,
+                hide_placeholders: true,
+            },
         );
-        assert!(!playback.contains("layout_text_title"), "playback hides: {playback}");
+        assert!(
+            !playback.contains("layout_text_title"),
+            "playback hides: {playback}"
+        );
     }
 }
 

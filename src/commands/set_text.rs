@@ -202,7 +202,9 @@ mod tests {
         let out = cmd.apply(&mut deck).unwrap();
         assert_eq!(out.patches.len(), 1);
         match &out.patches[0] {
-            Patch::SetText { element_id, text, .. } => {
+            Patch::SetText {
+                element_id, text, ..
+            } => {
                 assert_eq!(element_id, &eid);
                 assert_eq!(text, "hi");
             }

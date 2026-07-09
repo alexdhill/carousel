@@ -348,7 +348,8 @@ fn build_presentation(
         .with_title("carousel — presenting")
         .with_fullscreen(Some(Fullscreen::Borderless(None)))
         .build(target)?;
-    let html: String = assemble_present_html(PRESENT_HTML_TEMPLATE, PRESENT_CSS, MORPH_JS, PRESENT_JS);
+    let html: String =
+        assemble_present_html(PRESENT_HTML_TEMPLATE, PRESENT_CSS, MORPH_JS, PRESENT_JS);
     assert!(!html.is_empty(), "assembled present html is empty");
     let webview = WebViewBuilder::new(&window)
         .with_html(html)

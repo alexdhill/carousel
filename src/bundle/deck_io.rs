@@ -449,12 +449,22 @@ mod tests {
         let mut ph = text_element("layout_text_title", "Title");
         ph.placeholder = true;
         let edited = text_element("layout_text_body", "real");
-        deck.slides.get_mut(&sid).unwrap().root =
-            group_element("root", vec![ph, edited]);
+        deck.slides.get_mut(&sid).unwrap().root = group_element("root", vec![ph, edited]);
         let back = deserialize_deck(serialize_deck(&deck).unwrap()).unwrap();
         let kids = &back.slides[&sid].root.children;
-        assert!(kids.iter().find(|c| c.id == "layout_text_title").unwrap().placeholder);
-        assert!(!kids.iter().find(|c| c.id == "layout_text_body").unwrap().placeholder);
+        assert!(
+            kids.iter()
+                .find(|c| c.id == "layout_text_title")
+                .unwrap()
+                .placeholder
+        );
+        assert!(
+            !kids
+                .iter()
+                .find(|c| c.id == "layout_text_body")
+                .unwrap()
+                .placeholder
+        );
     }
 
     #[test]

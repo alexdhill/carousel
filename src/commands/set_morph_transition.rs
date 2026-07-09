@@ -73,7 +73,9 @@ impl Command for SetMorphTransition {
             element
                 .attributes
                 .insert(MORPH_DUR.into(), self.duration_ms.to_string());
-            element.attributes.insert(MORPH_EASE.into(), self.easing.clone());
+            element
+                .attributes
+                .insert(MORPH_EASE.into(), self.easing.clone());
         } else {
             element.attributes.remove(MORPH_NEXT);
             element.attributes.remove(MORPH_DUR);
@@ -185,7 +187,12 @@ mod tests {
     #[test]
     fn clears_morph_attributes_when_disabled() {
         let (mut deck, sid, eid) = fixture();
-        let el = deck.slides.get_mut(&sid).unwrap().find_element_mut(&eid).unwrap();
+        let el = deck
+            .slides
+            .get_mut(&sid)
+            .unwrap()
+            .find_element_mut(&eid)
+            .unwrap();
         el.attributes.insert(MORPH_NEXT.into(), "1".into());
         el.attributes.insert(MORPH_DUR.into(), "300".into());
         el.attributes.insert(MORPH_EASE.into(), "ease-out".into());
@@ -347,9 +354,8 @@ mod tests {
             duration_ms: 0,
             easing: "ease".into(),
         };
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            cmd.apply(&mut deck)
-        }));
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cmd.apply(&mut deck)));
         assert!(result.is_err());
     }
 
@@ -363,9 +369,8 @@ mod tests {
             duration_ms: 300,
             easing: String::new(),
         };
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            cmd.apply(&mut deck)
-        }));
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cmd.apply(&mut deck)));
         assert!(result.is_err());
     }
 }

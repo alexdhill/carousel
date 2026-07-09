@@ -84,8 +84,7 @@ pub fn build_html_export(deck: &Deck) -> Result<ExportBundle, serde_json::Error>
             }),
             hide_placeholders: true,
         };
-        let html: String =
-            serialize_slide_themed(slide, fill.as_deref(), img.as_deref(), &opts);
+        let html: String = serialize_slide_themed(slide, fill.as_deref(), img.as_deref(), &opts);
         slides.push(SlideData {
             html,
             snaps,
@@ -182,7 +181,13 @@ mod tests {
     fn export_contains_player_and_data_and_assets() {
         let deck = Deck::sample();
         let bundle = build_html_export(&deck).unwrap();
-        for name in ["index.html", "player.css", "morph.js", "player.js", "deck.js"] {
+        for name in [
+            "index.html",
+            "player.css",
+            "morph.js",
+            "player.js",
+            "deck.js",
+        ] {
             assert!(file(&bundle, name).is_some(), "missing {name}");
         }
         let deck_js = std::str::from_utf8(file(&bundle, "deck.js").unwrap()).unwrap();
@@ -215,7 +220,10 @@ mod tests {
         let mut deck = Deck::sample();
         let sid = deck.slide_order[0].clone();
         // Replace the first child of slide 0 with a token text element.
-        let root = group_element("root", vec![text_element("tk", "${slideNumber}/${slideCount}")]);
+        let root = group_element(
+            "root",
+            vec![text_element("tk", "${slideNumber}/${slideCount}")],
+        );
         deck.slides.get_mut(&sid).unwrap().root = root;
         let bundle = build_html_export(&deck).unwrap();
         let deck_js = String::from_utf8(file(&bundle, "deck.js").unwrap().to_vec()).unwrap();

@@ -262,7 +262,10 @@ mod tests {
         let mut n = crate::deck::builders::text_element("layout_text_title", "T");
         n.placeholder = true;
         regenerate_ids(&mut n);
-        assert!(!n.placeholder, "a regenerated copy is user content, not a slot");
+        assert!(
+            !n.placeholder,
+            "a regenerated copy is user content, not a slot"
+        );
         assert!(!n.is_layout_element(), "fresh id is not a layout slot");
     }
 

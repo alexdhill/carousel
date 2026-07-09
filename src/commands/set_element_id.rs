@@ -123,7 +123,11 @@ mod tests {
             new_id: "el_lt_renamed".into(),
         };
         cmd.apply(&mut deck).unwrap();
-        assert!(deck.theme.layouts["blank"].find_element("el_lt_renamed").is_some());
+        assert!(
+            deck.theme.layouts["blank"]
+                .find_element("el_lt_renamed")
+                .is_some()
+        );
         assert!(deck.theme.layouts["blank"].find_element("el_lt").is_none());
     }
 

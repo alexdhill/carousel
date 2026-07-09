@@ -157,7 +157,10 @@ fn parse_node(node: &NodeRef) -> Result<ElementNode, ParseError> {
     let name: Option<String> = attrs.get("data-name").map(str::to_string);
     let link: Option<String> = attrs.get("data-link").map(str::to_string);
     let placeholder_fill: Option<String> = attrs.get("data-placeholder-fill").map(str::to_string);
-    let placeholder: bool = attrs.get("data-placeholder").map(|v| v == "true").unwrap_or(false);
+    let placeholder: bool = attrs
+        .get("data-placeholder")
+        .map(|v| v == "true")
+        .unwrap_or(false);
 
     let mut custom: BTreeMap<String, String> = BTreeMap::new();
     for (qn, attr) in attrs.map.iter() {

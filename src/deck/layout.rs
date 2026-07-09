@@ -75,10 +75,7 @@ impl LayoutNode {
         for child in out.iter_mut() {
             child.placeholder = matches!(
                 child.element_type,
-                ElementType::Text
-                    | ElementType::Image
-                    | ElementType::Media
-                    | ElementType::Table
+                ElementType::Text | ElementType::Image | ElementType::Media | ElementType::Table
             );
         }
         out

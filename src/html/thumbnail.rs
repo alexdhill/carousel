@@ -153,7 +153,9 @@ fn downscale(bytes: &[u8]) -> Option<(String, Vec<u8>)> {
     let thumb = img.resize(THUMB_MAX_DIM, THUMB_MAX_DIM, FilterType::Triangle);
     let mut out: Vec<u8> = Vec::new();
     if thumb.color().has_alpha() {
-        thumb.write_to(&mut Cursor::new(&mut out), ImageFormat::Png).ok()?;
+        thumb
+            .write_to(&mut Cursor::new(&mut out), ImageFormat::Png)
+            .ok()?;
         return Some(("image/png".to_string(), out));
     }
     let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
@@ -199,8 +201,14 @@ mod tests {
 
     #[test]
     fn downscale_shrinks_large_keeps_small() {
-        assert!(downscale(&png_bytes(1600, 900)).is_some(), "large image resizes");
-        assert!(downscale(&png_bytes(320, 180)).is_none(), "small image untouched");
+        assert!(
+            downscale(&png_bytes(1600, 900)).is_some(),
+            "large image resizes"
+        );
+        assert!(
+            downscale(&png_bytes(320, 180)).is_none(),
+            "small image untouched"
+        );
     }
 
     #[test]

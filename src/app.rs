@@ -1235,13 +1235,13 @@ impl ApplicationCore {
                 interpret_guide_added(self.active_canvas(), &axis, pos)
             }
             InteractionEvent::GuideMoved { index, pos } => match self.active_canvas() {
-                Some(target) => InterpretResult::Command(Box::new(
-                    crate::commands::guide_commands::MoveGuide {
+                Some(target) => {
+                    InterpretResult::Command(Box::new(crate::commands::guide_commands::MoveGuide {
                         target,
                         index,
                         new_pos: pos,
-                    },
-                )),
+                    }))
+                }
                 None => InterpretResult::Nothing,
             },
             InteractionEvent::GuideRemoved { index } => match self.active_canvas() {
