@@ -133,11 +133,29 @@ jobs:
               if: runner.os == 'Windows'
               shell: pwsh
               run: |
-                  choco install nsis imagemagick -y --no-progress
+                  # Portable NSIS: pinned version, retried download, no package feed.
+                  $nsis_ver = "3.10"
+                  $nsis_zip = "$env:RUNNER_TEMP\nsis.zip"
+                  $nsis_dir = "$env:RUNNER_TEMP\nsis"
+                  $nsis_url = "https://sourceforge.net/projects/nsis/files/NSIS%203/$nsis_ver/nsis-$nsis_ver.zip/download"
+                  $ok = $false
+                  foreach ($i in 1..5) {
+                      try {
+                          Invoke-WebRequest -Uri $nsis_url -OutFile $nsis_zip -MaximumRedirection 10
+                          $ok = $true; break
+                      } catch {
+                          Write-Host "nsis download failed (attempt $i): $_"
+                          Start-Sleep -Seconds 15
+                      }
+                  }
+                  if (-not $ok) { throw "nsis download failed after 5 attempts" }
+                  Expand-Archive -Path $nsis_zip -DestinationPath $nsis_dir -Force
+                  $makensis = "$nsis_dir\nsis-$nsis_ver\makensis.exe"
+
                   magick packaging/icon.png -define icon:auto-resize=256,128,64,48,32,16 packaging/nsis/Carousel.ico
                   Copy-Item "target/${{ matrix.target }}/release/Carousel.exe" packaging/nsis/Carousel.exe
                   $ver = "${{ github.ref_name }}".TrimStart("v")
-                  & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" "/DVERSION=$ver" packaging/nsis/carousel.nsi
+                  & $makensis "/DVERSION=$ver" packaging/nsis/carousel.nsi
                   New-Item -ItemType Directory -Force dist | Out-Null
                   Copy-Item packaging/nsis/Carousel-Setup-x86_64.exe dist/
 
