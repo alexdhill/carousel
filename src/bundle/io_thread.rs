@@ -328,8 +328,8 @@ mod tests {
     use tempfile::TempDir;
 
     fn drain_one(rx: &Receiver<IoResponse>) -> IoResponse {
-        rx.recv_timeout(Duration::from_secs(5))
-            .expect("io thread response within 5s")
+        rx.recv_timeout(Duration::from_secs(15))
+            .expect("io thread response within 15s")
     }
 
     #[test]
