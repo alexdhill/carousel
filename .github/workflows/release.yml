@@ -133,24 +133,16 @@ jobs:
               if: runner.os == 'Windows'
               shell: pwsh
               run: |
-                  # Portable NSIS: pinned version, retried download, no package feed.
-                  $nsis_ver = "3.10"
-                  $nsis_zip = "$env:RUNNER_TEMP\nsis.zip"
-                  $nsis_dir = "$env:RUNNER_TEMP\nsis"
-                  $nsis_url = "https://sourceforge.net/projects/nsis/files/NSIS%203/$nsis_ver/nsis-$nsis_ver.zip/download"
+                  # NSIS via chocolatey; feed 503s intermittently, so retry.
                   $ok = $false
                   foreach ($i in 1..5) {
-                      try {
-                          Invoke-WebRequest -Uri $nsis_url -OutFile $nsis_zip -MaximumRedirection 10
-                          $ok = $true; break
-                      } catch {
-                          Write-Host "nsis download failed (attempt $i): $_"
-                          Start-Sleep -Seconds 15
-                      }
+                      choco install nsis --version 3.10 -y --no-progress
+                      if ($LASTEXITCODE -eq 0) { $ok = $true; break }
+                      Write-Host "choco install nsis failed (attempt $i), retrying in 15s"
+                      Start-Sleep -Seconds 15
                   }
-                  if (-not $ok) { throw "nsis download failed after 5 attempts" }
-                  Expand-Archive -Path $nsis_zip -DestinationPath $nsis_dir -Force
-                  $makensis = "$nsis_dir\nsis-$nsis_ver\makensis.exe"
+                  if (-not $ok) { throw "nsis install failed after 5 attempts" }
+                  $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
 
                   magick packaging/icon.png -define icon:auto-resize=256,128,64,48,32,16 packaging/nsis/Carousel.ico
                   Copy-Item "target/${{ matrix.target }}/release/Carousel.exe" packaging/nsis/Carousel.exe
