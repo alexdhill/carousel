@@ -8,6 +8,7 @@
 // patches, selection state, and slide-mount instructions. Patches are designed
 // to be idempotent so they can be applied without coordination.
 
+pub mod agent;
 pub mod bridge;
 pub mod landing;
 pub mod present;
@@ -73,6 +74,39 @@ pub enum MessageKind {
     Error {
         code: String,
         message: String,
+    },
+
+    // AgentPromptSubmitted
+    // JS→Rust: user submitted a prompt to the agent. `agent` is the display
+    // name selected in the panel dropdown; the Rust side spawns/switches to it.
+    AgentPromptSubmitted {
+        text: String,
+        #[serde(default)]
+        agent: String,
+    },
+    // AgentCancelRequested
+    // JS→Rust: user requested agent cancellation.
+    AgentCancelRequested,
+    // AgentAddRequested
+    // JS→Rust: the add-agent modal saved a new agent. The Rust side appends it
+    // to config.json (replacing any entry with the same name) and re-publishes
+    // the agent list.
+    AgentAddRequested {
+        name: String,
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+    },
+    // AgentPanelToggled
+    // JS→Rust: chat pane opened/closed.
+    AgentPanelToggled {
+        open: bool,
+    },
+    // AgentPermissionReply
+    // JS→Rust: user approved or denied a pending write.
+    AgentPermissionReply {
+        request_id: String,
+        allow: bool,
     },
 
     // ---- Rust -> JS ----
@@ -199,6 +233,22 @@ pub enum MessageKind {
     // Sent only when a close is requested while the deck has unsaved changes;
     // the three buttons reply with QuitConfirmed or dismiss locally.
     ShowQuitDialog,
+
+    // AgentPanelStateUpdate
+    // Rust→JS: session running state and error status.
+    AgentPanelStateUpdate(agent::AgentPanelState),
+    // AgentStream
+    // Rust→JS: one streamed chunk from the agent.
+    AgentStream(agent::AgentStreamChunk),
+    // AgentTool
+    // Rust→JS: tool invocation notice (read/write operation log).
+    AgentTool(agent::AgentToolNotice),
+    // AgentPermission
+    // Rust→JS: permission request for a pending write.
+    AgentPermission(agent::AgentPermissionAsk),
+    // AgentListUpdate
+    // Rust→JS: the configured agents' names for the panel dropdown.
+    AgentListUpdate(agent::AgentList),
 }
 
 // ---------- JS -> Rust payloads ----------
@@ -1824,5 +1874,41 @@ mod tests {
             InteractionEvent::ElementIdEditRequested { ref element_id, ref new_id }
                 if element_id == "el_a" && new_id == "el b"
         ));
+    }
+
+    // ---------- Agent panel messages ----------
+
+    #[test]
+    fn agent_prompt_submitted_roundtrips_through_ipc() {
+        let msg = IpcMessage::new(MessageKind::AgentPromptSubmitted {
+            text: "refactor this slide".into(),
+            agent: "Claude".into(),
+        });
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: IpcMessage = serde_json::from_str(&json).unwrap();
+        match parsed.kind {
+            MessageKind::AgentPromptSubmitted { text, agent } => {
+                assert_eq!(text, "refactor this slide");
+                assert_eq!(agent, "Claude");
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn agent_panel_state_update_roundtrips_through_ipc() {
+        let state = agent::AgentPanelState {
+            running: true,
+            error: None,
+        };
+        let msg = IpcMessage::new(MessageKind::AgentPanelStateUpdate(state.clone()));
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: IpcMessage = serde_json::from_str(&json).unwrap();
+        match parsed.kind {
+            MessageKind::AgentPanelStateUpdate(s) => {
+                assert_eq!(s, state);
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
     }
 }

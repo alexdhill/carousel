@@ -346,6 +346,28 @@
                 </button>
                 <button
                     type="button"
+                    id="agent-toggle"
+                    class="icon-btn tt"
+                    aria-pressed="false"
+                    data-tip="Agent"
+                    data-key=""
+                    aria-label="Toggle agent panel"
+                >
+                    <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.8"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                    >
+                        <path d="M12 8v8M8 12h8M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z" />
+                    </svg>
+                </button>
+                <button
+                    type="button"
                     id="present-btn"
                     class="btn--accent present-btn"
                     title="Present (⌘↩)"
@@ -366,10 +388,126 @@
 
         <!-- ============================ MIDDLE ROW ============================ -->
         <div class="middle-row">
-            <!-- ---------- Layers (left) ---------- -->
-            <aside id="object-panel" class="panel panel--objects">
+            <!-- ---------- Left column: Agent + Layers ---------- -->
+            <div class="left-col" data-agent="objects">
+                <!-- Agent panel -->
+                <aside id="agent-panel" class="panel panel--agent panel--collapsed">
+                    <div class="panel-head">
+                        <h2 class="panel-head__title">Agent</h2>
+                        <button
+                            type="button"
+                            class="icon-btn icon-btn--sm pane-collapse"
+                            data-pane-collapse="agent"
+                            aria-label="Collapse agent panel"
+                        >
+                            <svg
+                                width="15"
+                                height="15"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="1.9"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                            >
+                                <path d="M8 9l4-4 4 4M8 15l4 4 4-4" />
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="agent__scroll" id="agent-log" role="log" aria-live="polite"></div>
+                    <div class="agent__input-row">
+                        <textarea
+                            id="agent-input"
+                            class="agent__textarea"
+                            placeholder="Ask the agent... (Enter to send, Shift+Enter for newline)"
+                            spellcheck="false"
+                        ></textarea>
+                        <div class="agent__controls-row">
+                            <select
+                                id="agent-select"
+                                class="agent__select"
+                                aria-label="Select agent"
+                            ></select>
+                            <button
+                                type="button"
+                                id="agent-send-btn"
+                                class="agent__btn agent__btn--send"
+                                title="Send prompt"
+                                aria-label="Send"
+                            >
+                                <svg
+                                    width="15"
+                                    height="15"
+                                    viewBox="0 0 24 24"
+                                    fill="currentColor"
+                                >
+                                    <path d="M7 4.5 19 12 7 19.5z" />
+                                </svg>
+                            </button>
+                            <button
+                                type="button"
+                                id="agent-stop-btn"
+                                class="agent__btn agent__btn--stop"
+                                title="Stop agent"
+                                aria-label="Stop"
+                            >
+                                <svg
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 24 24"
+                                    fill="currentColor"
+                                >
+                                    <rect x="6" y="6" width="12" height="12" rx="2" />
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    <template id="agent-permission">
+                        <div class="agent__permission-row" data-request-id="">
+                            <div class="agent__permission-text"></div>
+                            <div class="agent__permission-buttons">
+                                <button
+                                    type="button"
+                                    class="agent__btn agent__btn--approve"
+                                    data-action="approve"
+                                >
+                                    Approve
+                                </button>
+                                <button
+                                    type="button"
+                                    class="agent__btn agent__btn--deny"
+                                    data-action="deny"
+                                >
+                                    Deny
+                                </button>
+                            </div>
+                        </div>
+                    </template>
+                </aside>
+
+                <!-- Layers panel -->
+                <aside id="object-panel" class="panel panel--objects">
                 <div class="panel-head">
                     <h2 class="panel-head__title">Layers</h2>
+                    <button
+                        type="button"
+                        class="icon-btn icon-btn--sm pane-collapse"
+                        data-pane-collapse="objects"
+                        aria-label="Collapse layers panel"
+                    >
+                        <svg
+                            width="15"
+                            height="15"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.9"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                        >
+                            <path d="M8 9l4-4 4 4M8 15l4 4 4-4" />
+                        </svg>
+                    </button>
                     <div class="panel-head__tools">
                         <button
                             type="button"
@@ -417,6 +555,7 @@
                 </div>
                 <div class="objects__scroll" id="objects-tree" role="tree"></div>
             </aside>
+            </div>
 
             <!-- ---------- Canvas (center) ---------- -->
             <div class="panel panel--canvas">

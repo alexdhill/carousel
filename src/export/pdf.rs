@@ -139,6 +139,7 @@ pub fn build_pdf_print_html(deck: &Deck) -> String {
                 date: today.clone(),
             }),
             hide_placeholders: true,
+        min_element_size: 0.0,
         };
         let html: String = serialize_slide_themed(slide, fill.as_deref(), img.as_deref(), &opts);
         // Pages whose slide uses a compositing-only effect carry a marker so the

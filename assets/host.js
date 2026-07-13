@@ -3276,6 +3276,40 @@
             availableFonts = (payload && Array.isArray(payload.families))
                 ? payload.families : [];
         },
+        AgentPanelStateUpdate: function (payload) {
+            if (payload) {
+                set_panel_state(payload);
+            }
+        },
+        AgentStream: function (payload) {
+            if (payload) {
+                append_stream_chunk(payload);
+            }
+        },
+        AgentTool: function (payload) {
+            if (payload) {
+                const log = document.querySelector("#agent-log");
+                if (log) {
+                    const row = document.createElement("div");
+                    row.className = "agent__message agent__message--tool";
+                    const kind = payload.kind || "";
+                    const summary = payload.summary || "";
+                    row.textContent = "[" + kind + "] " + summary;
+                    log.appendChild(row);
+                    log.scrollTop = log.scrollHeight;
+                }
+            }
+        },
+        AgentPermission: function (payload) {
+            if (payload) {
+                show_permission_ask(payload);
+            }
+        },
+        AgentListUpdate: function (payload) {
+            if (payload) {
+                populate_agent_select(payload);
+            }
+        },
     };
 
     // ---------- __deck bridge ----------
@@ -8068,6 +8102,7 @@
         wireTableBox();
         wireShareMenu();
         wireLayoutEditorControls();
+        init_agent_panel(document.body);
         wireAnimationsSection();
         wirePaneResizers();
         renderObjectPanel(null);
@@ -9222,6 +9257,294 @@
             themeLoad.addEventListener("click", function () {
                 window.__deck.send("Interaction", { kind: "LoadThemeRequested" });
             });
+        }
+    }
+
+    // ---------- agent panel ----------
+
+    // Agent panel state.
+    let agent_panel_open = false;
+    let agent_current_stream_id = null;
+    let agent_running = false;
+    // Last real agent selected (to revert after the "+ Add agent" sentinel).
+    let agent_last_selection = "";
+    // Name to auto-select once the next AgentListUpdate arrives (set by the
+    // add-agent modal so the freshly added agent becomes current).
+    let agent_pending_select = null;
+    // Sentinel option value that opens the add-agent modal.
+    const AGENT_ADD_SENTINEL = "__add_agent__";
+
+    // init_agent_panel
+    // Inputs: root HTMLElement. Output: side-effect; wires toggle, send, stop,
+    // permission buttons; registers receive handlers for AgentPanelStateUpdate,
+    // AgentStream, AgentTool, AgentPermission.
+    function init_agent_panel(root) {
+        if (!root) { return; }
+        const toggle = root.querySelector("#agent-toggle");
+        const input = root.querySelector("#agent-input");
+        const send_btn = root.querySelector("#agent-send-btn");
+        const stop_btn = root.querySelector("#agent-stop-btn");
+        if (toggle) {
+            toggle.addEventListener("click", function () {
+                agent_panel_open = !agent_panel_open;
+                toggle.setAttribute("aria-pressed", agent_panel_open ? "true" : "false");
+                window.__deck.send("AgentPanelToggled", { open: agent_panel_open });
+            });
+        }
+        if (send_btn) {
+            send_btn.addEventListener("click", function () {
+                send_agent_prompt(input ? input.value.trim() : "");
+            });
+        }
+        if (input) {
+            input.addEventListener("keydown", function (e) {
+                if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    send_agent_prompt(input.value.trim());
+                }
+            });
+        }
+        if (stop_btn) {
+            stop_btn.addEventListener("click", function () {
+                window.__deck.send("AgentCancelRequested", null);
+            });
+        }
+        const select = root.querySelector("#agent-select");
+        if (select) {
+            select.addEventListener("change", function () {
+                if (select.value === AGENT_ADD_SENTINEL) {
+                    select.value = agent_last_selection;
+                    open_add_agent_modal();
+                } else {
+                    agent_last_selection = select.value;
+                }
+            });
+        }
+        root.querySelectorAll("[data-pane-collapse]").forEach(function (btn) {
+            btn.addEventListener("click", function () {
+                const which = btn.dataset.paneCollapse;
+                const col = document.querySelector(".left-col");
+                if (!col) { return; }
+                const other = which === "agent" ? "objects" : "agent";
+                toggle_left_layout(col.dataset.agent === which ? other : which);
+            });
+        });
+    }
+
+    // send_agent_prompt
+    // Inputs: text string. Output: side-effect; posts AgentPromptSubmitted,
+    // clears input, appends a user row to the log.
+    function send_agent_prompt(text) {
+        if (!text || text.length === 0) { return; }
+        const select = document.querySelector("#agent-select");
+        const agent = select ? select.value : "";
+        window.__deck.send("AgentPromptSubmitted", { text: text, agent: agent });
+        const input = document.querySelector("#agent-input");
+        if (input) {
+            input.value = "";
+        }
+        const log = document.querySelector("#agent-log");
+        if (log) {
+            const row = document.createElement("div");
+            row.className = "agent__message agent__message--user";
+            row.textContent = text;
+            log.appendChild(row);
+            log.scrollTop = log.scrollHeight;
+        }
+    }
+
+    // populate_agent_select
+    // Inputs: object { agents: string[] }. Output: side-effect; rebuilds the
+    // dropdown options, preserving the current selection when still present.
+    function populate_agent_select(payload) {
+        if (!payload || !Array.isArray(payload.agents)) { return; }
+        const select = document.querySelector("#agent-select");
+        if (!select) { return; }
+        const previous = select.value;
+        select.textContent = "";
+        payload.agents.forEach(function (name) {
+            const opt = document.createElement("option");
+            opt.value = name;
+            opt.textContent = name;
+            select.appendChild(opt);
+        });
+        const add_opt = document.createElement("option");
+        add_opt.value = AGENT_ADD_SENTINEL;
+        add_opt.textContent = "+ Add agent…";
+        select.appendChild(add_opt);
+        let chosen = "";
+        if (agent_pending_select && payload.agents.indexOf(agent_pending_select) >= 0) {
+            chosen = agent_pending_select;
+        } else if (payload.agents.indexOf(previous) >= 0) {
+            chosen = previous;
+        } else if (payload.agents.length > 0) {
+            chosen = payload.agents[0];
+        }
+        agent_pending_select = null;
+        select.value = chosen;
+        agent_last_selection = chosen;
+    }
+
+    // open_add_agent_modal
+    // Output: side-effect; builds a modal over a backdrop collecting a new
+    // agent's name, command, and (whitespace-separated) args. Save posts
+    // AgentAddRequested and marks the name pending-select; Cancel/backdrop
+    // dismiss without change.
+    function open_add_agent_modal() {
+        if (document.querySelector("#agent-modal")) { return; }
+        const backdrop = document.createElement("div");
+        backdrop.id = "agent-modal";
+        backdrop.className = "agent-modal";
+        const panel = document.createElement("div");
+        panel.className = "agent-modal__panel";
+        panel.innerHTML =
+            "<h3 class=\"agent-modal__title\">Add agent</h3>" +
+            "<label class=\"agent-modal__label\">Name" +
+            "<input class=\"agent-modal__input\" data-field=\"name\" placeholder=\"Claude\"></label>" +
+            "<label class=\"agent-modal__label\">Command" +
+            "<input class=\"agent-modal__input\" data-field=\"command\" placeholder=\"claude-code-acp\"></label>" +
+            "<label class=\"agent-modal__label\">Args (space-separated)" +
+            "<input class=\"agent-modal__input\" data-field=\"args\" placeholder=\"--flag value\"></label>" +
+            "<div class=\"agent-modal__buttons\">" +
+            "<button type=\"button\" class=\"agent__btn agent__btn--deny\" data-action=\"cancel\">Cancel</button>" +
+            "<button type=\"button\" class=\"agent__btn agent__btn--approve\" data-action=\"save\">Save</button>" +
+            "</div>";
+        backdrop.appendChild(panel);
+        document.body.appendChild(backdrop);
+        const close = function () { backdrop.remove(); };
+        backdrop.addEventListener("mousedown", function (e) {
+            if (e.target === backdrop) { close(); }
+        });
+        panel.querySelector("[data-action=\"cancel\"]").addEventListener("click", close);
+        panel.querySelector("[data-action=\"save\"]").addEventListener("click", function () {
+            const name = panel.querySelector("[data-field=\"name\"]").value.trim();
+            const command = panel.querySelector("[data-field=\"command\"]").value.trim();
+            const args_raw = panel.querySelector("[data-field=\"args\"]").value.trim();
+            if (name.length === 0 || command.length === 0) { return; }
+            const args = args_raw.length > 0 ? args_raw.split(/\s+/) : [];
+            agent_pending_select = name;
+            window.__deck.send("AgentAddRequested", { name: name, command: command, args: args });
+            close();
+        });
+        const name_input = panel.querySelector("[data-field=\"name\"]");
+        if (name_input) { name_input.focus(); }
+    }
+
+    // append_stream_chunk
+    // Inputs: object { role, text, final_chunk }. Output: side-effect;
+    // appends or patches the in-progress agent row, closing it if final_chunk.
+    function append_stream_chunk(chunk) {
+        if (!chunk || typeof chunk !== "object") { return; }
+        const log = document.querySelector("#agent-log");
+        if (!log) { return; }
+        let row = document.querySelector("#agent-log .agent__message--stream");
+        if (!row || !row.dataset.final) {
+            if (!row) {
+                row = document.createElement("div");
+                row.className = "agent__message agent__message--stream";
+                row.dataset.final = "false";
+                log.appendChild(row);
+            }
+            const old_text = row.textContent || "";
+            row.textContent = old_text + (chunk.text || "");
+        }
+        if (chunk.final_chunk) {
+            row.dataset.final = "true";
+            agent_current_stream_id = null;
+        }
+        log.scrollTop = log.scrollHeight;
+    }
+
+    // show_permission_ask
+    // Inputs: object { request_id, slide_id, summary }. Output: side-effect;
+    // clones template, renders, wires approve/deny buttons.
+    function show_permission_ask(ask) {
+        if (!ask || typeof ask !== "object") { return; }
+        const log = document.querySelector("#agent-log");
+        const template = document.querySelector("#agent-permission");
+        if (!log || !template) { return; }
+        const row = template.content.cloneNode(true);
+        const row_el = row.querySelector(".agent__permission-row");
+        if (row_el) {
+            row_el.dataset.requestId = ask.request_id;
+            const text_el = row_el.querySelector(".agent__permission-text");
+            if (text_el) {
+                text_el.textContent = ask.summary || "";
+            }
+            const approve_btn = row_el.querySelector("[data-action=\"approve\"]");
+            const deny_btn = row_el.querySelector("[data-action=\"deny\"]");
+            if (approve_btn) {
+                approve_btn.addEventListener("click", function () {
+                    window.__deck.send("AgentPermissionReply", {
+                        request_id: ask.request_id,
+                        allow: true,
+                    });
+                    row_el.remove();
+                });
+            }
+            if (deny_btn) {
+                deny_btn.addEventListener("click", function () {
+                    window.__deck.send("AgentPermissionReply", {
+                        request_id: ask.request_id,
+                        allow: false,
+                    });
+                    row_el.remove();
+                });
+            }
+        }
+        log.appendChild(row);
+        log.scrollTop = log.scrollHeight;
+    }
+
+    // set_panel_state
+    // Inputs: object { running, error }. Output: side-effect; disables input
+    // while running, shows error text.
+    function set_panel_state(state) {
+        if (!state || typeof state !== "object") { return; }
+        agent_running = state.running || false;
+        const input = document.querySelector("#agent-input");
+        const send_btn = document.querySelector("#agent-send-btn");
+        const stop_btn = document.querySelector("#agent-stop-btn");
+        const select = document.querySelector("#agent-select");
+        if (input) {
+            input.disabled = agent_running;
+        }
+        if (select) {
+            select.disabled = agent_running;
+        }
+        if (send_btn) {
+            send_btn.disabled = agent_running;
+        }
+        if (stop_btn) {
+            stop_btn.style.display = agent_running ? "inline-flex" : "none";
+        }
+        if (state.error && state.error.length > 0) {
+            const log = document.querySelector("#agent-log");
+            if (log) {
+                const err_row = document.createElement("div");
+                err_row.className = "agent__message agent__message--error";
+                err_row.textContent = "Error: " + state.error;
+                log.appendChild(err_row);
+                log.scrollTop = log.scrollHeight;
+            }
+        }
+    }
+
+    // toggle_left_layout
+    // Inputs: "agent" | "objects". Output: side-effect; flips data-agent
+    // and .panel--collapsed between the two panes.
+    function toggle_left_layout(expand) {
+        if (expand !== "agent" && expand !== "objects") { return; }
+        const left_col = document.querySelector(".left-col");
+        const agent_panel = document.querySelector("#agent-panel");
+        const objects_panel = document.querySelector("#object-panel");
+        if (!left_col) { return; }
+        left_col.dataset.agent = expand;
+        if (agent_panel) {
+            agent_panel.classList.toggle("panel--collapsed", expand === "objects");
+        }
+        if (objects_panel) {
+            objects_panel.classList.toggle("panel--collapsed", expand === "agent");
         }
     }
 

@@ -42,16 +42,33 @@ fn base_data_dir() -> PathBuf {
     PathBuf::from(home).join(".local").join("share")
 }
 
+// AgentDef
+// One user-configured agent the chat panel can spawn. `name` is the label the
+// panel's dropdown shows and the key the prompt selects by; `command` is the
+// spawnable ACP binary path/name; `args` are extra arguments. Users add one
+// entry per agent under `agents` in config.json.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentDef {
+    pub name: String,
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
 // Config
 // Persisted in app_data_dir()/config.json. `chrome_path` is the resolved
 // browser binary; `chromium_revision` records a downloaded build so we can
 // detect/upgrade it later. Both optional (a fresh install has neither).
+// `agents` is the list of user-configured ACP agents the chat panel offers in
+// its dropdown; empty by default (a fresh install has none).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub chrome_path: Option<PathBuf>,
     #[serde(default)]
     pub chromium_revision: Option<String>,
+    #[serde(default)]
+    pub agents: Vec<AgentDef>,
 }
 
 fn config_path() -> PathBuf {
@@ -79,6 +96,54 @@ pub fn save(cfg: &Config) -> std::io::Result<()> {
     std::fs::write(config_path(), json)
 }
 
+// agent_names
+// Input: cfg is a Config reference. Output: the display names of every
+// configured agent, in config order. Empty when none are configured.
+pub fn agent_names(cfg: &Config) -> Vec<String> {
+    cfg.agents.iter().map(|a| a.name.clone()).collect()
+}
+
+// find_agent
+// Input: cfg and a display name. Output: the matching AgentDef, or None when
+// no agent carries that name.
+pub fn find_agent<'a>(cfg: &'a Config, name: &str) -> Option<&'a AgentDef> {
+    assert!(!name.is_empty(), "find_agent called with empty name");
+    cfg.agents.iter().find(|a| a.name == name)
+}
+
+// cargo_bin
+// Input: a binary base name. Output: the path to that binary under the Cargo
+// bin directory (CARGO_HOME/bin or ~/.cargo/bin) when it exists, else None.
+// Checks the bare name and the `.exe` variant for Windows.
+fn cargo_bin(name: &str) -> Option<PathBuf> {
+    assert!(!name.is_empty(), "cargo_bin called with empty name");
+    let base: PathBuf = match std::env::var_os("CARGO_HOME") {
+        Some(h) => PathBuf::from(h),
+        None => PathBuf::from(std::env::var_os("HOME")?).join(".cargo"),
+    };
+    let bin_dir: PathBuf = base.join("bin");
+    for candidate_name in [name.to_string(), format!("{}.exe", name)] {
+        let candidate: PathBuf = bin_dir.join(&candidate_name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+// detect_default_agent
+// Output: a ready-to-use AgentDef for the `claude-code-acp-rs` binary when it
+// is installed under the Cargo bin dir, else None. Used to seed a first agent
+// so `cargo install claude-code-acp-rs` works without any manual config.
+pub fn detect_default_agent() -> Option<AgentDef> {
+    let bin: PathBuf = cargo_bin("claude-code-acp-rs")?;
+    Some(AgentDef {
+        name: "Claude Code".to_string(),
+        command: bin.to_string_lossy().to_string(),
+        args: Vec::new(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -95,6 +160,7 @@ mod tests {
         let cfg = Config {
             chrome_path: Some(PathBuf::from("/usr/bin/chrome")),
             chromium_revision: Some("1300313".into()),
+            ..Config::default()
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let back: Config = serde_json::from_str(&json).unwrap();
@@ -106,5 +172,22 @@ mod tests {
         let back: Config = serde_json::from_str("{}").unwrap();
         assert!(back.chrome_path.is_none());
         assert!(back.chromium_revision.is_none());
+    }
+
+    #[test]
+    fn agents_default_empty_and_lookup() {
+        let back: Config = serde_json::from_str("{}").unwrap();
+        assert!(back.agents.is_empty());
+        assert!(agent_names(&back).is_empty());
+
+        let configured: Config = serde_json::from_str(
+            r#"{"agents":[{"name":"Claude","command":"claude-code-acp","args":["--x"]}]}"#,
+        )
+        .unwrap();
+        assert_eq!(agent_names(&configured), vec!["Claude".to_string()]);
+        let found = find_agent(&configured, "Claude").unwrap();
+        assert_eq!(found.command, "claude-code-acp");
+        assert_eq!(found.args, vec!["--x".to_string()]);
+        assert!(find_agent(&configured, "Missing").is_none());
     }
 }

@@ -179,6 +179,7 @@ fn slide_payload(deck: &Deck, sid: &str, number: usize, count: usize) -> Present
             date: crate::html::serialize::today_ymd(),
         }),
         hide_placeholders: true,
+    min_element_size: 0.0,
     };
     let slide_html: String = deck
         .slides
