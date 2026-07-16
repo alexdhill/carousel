@@ -389,7 +389,7 @@
         <!-- ============================ MIDDLE ROW ============================ -->
         <div class="middle-row">
             <!-- ---------- Left column: Agent + Layers ---------- -->
-            <div class="left-col" data-agent="objects">
+            <div class="left-col" data-agent="objects" data-agent-visible="false">
                 <!-- Agent panel -->
                 <aside id="agent-panel" class="panel panel--agent panel--collapsed">
                     <div class="panel-head">
@@ -415,6 +415,17 @@
                         </button>
                     </div>
                     <div class="agent__scroll" id="agent-log" role="log" aria-live="polite"></div>
+                    <div id="agent-status" class="agent__status-row" hidden>
+                        <span class="agent-spinner"></span>
+                        <span class="agent-status__label">Starting agent…</span>
+                    </div>
+                    <div id="agent-thinking" class="agent-thinking" hidden>
+                        <button type="button" class="agent-thinking__toggle">
+                            <span class="agent-thinking__arrow"></span>
+                            <span>Thinking</span>
+                        </button>
+                        <div class="agent-thinking__body"></div>
+                    </div>
                     <div class="agent__input-row">
                         <textarea
                             id="agent-input"
@@ -435,30 +446,26 @@
                                 title="Send prompt"
                                 aria-label="Send"
                             >
-                                <svg
-                                    width="15"
-                                    height="15"
-                                    viewBox="0 0 24 24"
-                                    fill="currentColor"
-                                >
-                                    <path d="M7 4.5 19 12 7 19.5z" />
-                                </svg>
-                            </button>
-                            <button
-                                type="button"
-                                id="agent-stop-btn"
-                                class="agent__btn agent__btn--stop"
-                                title="Stop agent"
-                                aria-label="Stop"
-                            >
-                                <svg
-                                    width="14"
-                                    height="14"
-                                    viewBox="0 0 24 24"
-                                    fill="currentColor"
-                                >
-                                    <rect x="6" y="6" width="12" height="12" rx="2" />
-                                </svg>
+                                <span class="agent__glyph agent__glyph--send">
+                                    <svg
+                                        width="15"
+                                        height="15"
+                                        viewBox="0 0 24 24"
+                                        fill="currentColor"
+                                    >
+                                        <path d="M7 4.5 19 12 7 19.5z" />
+                                    </svg>
+                                </span>
+                                <span class="agent__glyph agent__glyph--stop">
+                                    <svg
+                                        width="14"
+                                        height="14"
+                                        viewBox="0 0 24 24"
+                                        fill="currentColor"
+                                    >
+                                        <rect x="6" y="6" width="12" height="12" rx="2" />
+                                    </svg>
+                                </span>
                             </button>
                         </div>
                     </div>

@@ -3310,6 +3310,21 @@
                 populate_agent_select(payload);
             }
         },
+        AgentActivityUpdate: function (payload) {
+            if (payload) {
+                set_activity(payload);
+            }
+        },
+        AgentThoughtUpdate: function (payload) {
+            if (payload) {
+                append_thought(payload);
+            }
+        },
+        AgentToolStatusUpdate: function (payload) {
+            if (payload) {
+                upsert_tool_row(payload);
+            }
+        },
     };
 
     // ---------- __deck bridge ----------
@@ -9273,6 +9288,12 @@
     let agent_pending_select = null;
     // Sentinel option value that opens the add-agent modal.
     const AGENT_ADD_SENTINEL = "__add_agent__";
+    // Heartbeat timer for "Still working..." fallback.
+    let activity_heartbeat_timer = null;
+    // Current activity phase (idle|starting|thinking|streaming|tool|awaiting_approval|error).
+    let current_activity_phase = "idle";
+    // Whether the thinking area is collapsed.
+    let thinking_collapsed = true;
 
     // init_agent_panel
     // Inputs: root HTMLElement. Output: side-effect; wires toggle, send, stop,
@@ -9283,17 +9304,27 @@
         const toggle = root.querySelector("#agent-toggle");
         const input = root.querySelector("#agent-input");
         const send_btn = root.querySelector("#agent-send-btn");
-        const stop_btn = root.querySelector("#agent-stop-btn");
         if (toggle) {
             toggle.addEventListener("click", function () {
                 agent_panel_open = !agent_panel_open;
                 toggle.setAttribute("aria-pressed", agent_panel_open ? "true" : "false");
+                const col = document.querySelector(".left-col");
+                if (col) {
+                    col.dataset.agentVisible = agent_panel_open ? "true" : "false";
+                }
+                if (agent_panel_open) {
+                    toggle_left_layout("agent");
+                }
                 window.__deck.send("AgentPanelToggled", { open: agent_panel_open });
             });
         }
         if (send_btn) {
             send_btn.addEventListener("click", function () {
-                send_agent_prompt(input ? input.value.trim() : "");
+                if (agent_running) {
+                    window.__deck.send("AgentCancelRequested", null);
+                } else {
+                    send_agent_prompt(input ? input.value.trim() : "");
+                }
             });
         }
         if (input) {
@@ -9304,11 +9335,6 @@
                 }
             });
         }
-        if (stop_btn) {
-            stop_btn.addEventListener("click", function () {
-                window.__deck.send("AgentCancelRequested", null);
-            });
-        }
         const select = root.querySelector("#agent-select");
         if (select) {
             select.addEventListener("change", function () {
@@ -9317,6 +9343,16 @@
                     open_add_agent_modal();
                 } else {
                     agent_last_selection = select.value;
+                }
+            });
+        }
+        const thinking_toggle = root.querySelector(".agent-thinking__toggle");
+        if (thinking_toggle) {
+            thinking_toggle.addEventListener("click", function () {
+                const thinking_el = root.querySelector("#agent-thinking");
+                if (thinking_el) {
+                    thinking_collapsed = !thinking_collapsed;
+                    thinking_el.dataset.collapsed = thinking_collapsed ? "true" : "false";
                 }
             });
         }
@@ -9433,12 +9469,13 @@
     // append_stream_chunk
     // Inputs: object { role, text, final_chunk }. Output: side-effect;
     // appends or patches the in-progress agent row, closing it if final_chunk.
+    // Calls note_activity() to keep heartbeat alive.
     function append_stream_chunk(chunk) {
         if (!chunk || typeof chunk !== "object") { return; }
         const log = document.querySelector("#agent-log");
         if (!log) { return; }
         let row = document.querySelector("#agent-log .agent__message--stream");
-        if (!row || !row.dataset.final) {
+        if (!row || row.dataset.final !== "true") {
             if (!row) {
                 row = document.createElement("div");
                 row.className = "agent__message agent__message--stream";
@@ -9453,6 +9490,7 @@
             agent_current_stream_id = null;
         }
         log.scrollTop = log.scrollHeight;
+        note_activity();
     }
 
     // show_permission_ask
@@ -9504,7 +9542,6 @@
         agent_running = state.running || false;
         const input = document.querySelector("#agent-input");
         const send_btn = document.querySelector("#agent-send-btn");
-        const stop_btn = document.querySelector("#agent-stop-btn");
         const select = document.querySelector("#agent-select");
         if (input) {
             input.disabled = agent_running;
@@ -9513,10 +9550,9 @@
             select.disabled = agent_running;
         }
         if (send_btn) {
-            send_btn.disabled = agent_running;
-        }
-        if (stop_btn) {
-            stop_btn.style.display = agent_running ? "inline-flex" : "none";
+            send_btn.classList.toggle("agent__btn--is-stop", agent_running);
+            send_btn.title = agent_running ? "Stop agent" : "Send prompt";
+            send_btn.setAttribute("aria-label", agent_running ? "Stop" : "Send");
         }
         if (state.error && state.error.length > 0) {
             const log = document.querySelector("#agent-log");
@@ -9528,6 +9564,140 @@
                 log.scrollTop = log.scrollHeight;
             }
         }
+    }
+
+    // note_activity
+    // Inputs: none. Output: side-effect; resets the heartbeat timer. Called
+    // whenever activity is detected (activity updates, thoughts, tool updates,
+    // stream chunks) to keep the "Still working..." timeout alive.
+    function note_activity() {
+        if (activity_heartbeat_timer) {
+            clearTimeout(activity_heartbeat_timer);
+        }
+        if (current_activity_phase !== "idle") {
+            activity_heartbeat_timer = setTimeout(function () {
+                const status_label = document.querySelector(".agent-status__label");
+                if (status_label) {
+                    status_label.textContent = "Still working…";
+                }
+            }, 8000);
+        }
+    }
+
+    // set_activity
+    // Inputs: object { phase, label }. Output: side-effect; manages the status
+    // row visibility, spinner state, thinking area collapse, and heartbeat.
+    // phase in "idle"|"starting"|"thinking"|"streaming"|"tool"|"awaiting_approval"|"error".
+    function set_activity(payload) {
+        if (!payload || typeof payload !== "object") { return; }
+        const phase = payload.phase || "idle";
+        const label = payload.label || "";
+        const status_el = document.querySelector("#agent-status");
+        const thinking_el = document.querySelector("#agent-thinking");
+        const status_label = document.querySelector(".agent-status__label");
+        current_activity_phase = phase;
+        const phase_labels = {
+            "idle": "",
+            "starting": "Starting agent…",
+            "thinking": "Thinking…",
+            "streaming": "Streaming…",
+            "tool": "Using tool…",
+            "awaiting_approval": "Awaiting approval…",
+            "error": "Error"
+        };
+        if (phase === "idle" || phase === "") {
+            if (status_el) {
+                status_el.hidden = true;
+            }
+            if (thinking_el) {
+                thinking_el.hidden = true;
+                const thinking_body = thinking_el.querySelector(".agent-thinking__body");
+                if (thinking_body) {
+                    thinking_body.textContent = "";
+                }
+            }
+            finalize_tool_rows("completed");
+            const stream_row = document.querySelector("#agent-log .agent__message--stream");
+            if (stream_row) { stream_row.classList.remove("agent__message--stream"); }
+            if (activity_heartbeat_timer) {
+                clearTimeout(activity_heartbeat_timer);
+                activity_heartbeat_timer = null;
+            }
+        } else {
+            if (status_el) {
+                status_el.hidden = false;
+                if (status_label) {
+                    status_label.textContent = label || phase_labels[phase] || "Agent active…";
+                }
+            }
+            if (phase === "streaming") {
+                if (thinking_el) {
+                    thinking_el.dataset.collapsed = "true";
+                    thinking_collapsed = true;
+                }
+            }
+            if (phase === "error") {
+                finalize_tool_rows("failed");
+            }
+            note_activity();
+        }
+    }
+
+    // finalize_tool_rows
+    // Inputs: a terminal status ("completed" | "failed"). Output: side-effect;
+    // any tool row still marked pending/in_progress (agent never sent a
+    // completion) is forced to the terminal status so its spinner stops.
+    function finalize_tool_rows(status) {
+        const rows = document.querySelectorAll("#agent-log .agent__tool-row");
+        rows.forEach(function (row) {
+            const current = row.dataset.status;
+            if (current === "pending" || current === "in_progress") {
+                row.dataset.status = status;
+            }
+        });
+    }
+
+    // append_thought
+    // Inputs: object { text }. Output: side-effect; shows thinking area,
+    // appends text fragment to the body, scrolls to bottom.
+    function append_thought(payload) {
+        if (!payload || typeof payload !== "object") { return; }
+        const text = payload.text || "";
+        if (!text) { return; }
+        const thinking_el = document.querySelector("#agent-thinking");
+        if (!thinking_el) { return; }
+        thinking_el.hidden = false;
+        const body = thinking_el.querySelector(".agent-thinking__body");
+        if (body) {
+            body.textContent = (body.textContent || "") + text;
+            body.scrollTop = body.scrollHeight;
+        }
+        note_activity();
+    }
+
+    // upsert_tool_row
+    // Inputs: object { id, title, status }. Output: side-effect; finds or
+    // creates a tool row in the log, sets title and data-status. Scrolls log.
+    // status in "pending"|"in_progress"|"completed"|"failed".
+    function upsert_tool_row(payload) {
+        if (!payload || typeof payload !== "object") { return; }
+        const tool_id = payload.id || "";
+        const title = payload.title || "";
+        const status = payload.status || "pending";
+        if (!tool_id) { return; }
+        const log = document.querySelector("#agent-log");
+        if (!log) { return; }
+        let row = log.querySelector("[data-tool-id=\"" + tool_id + "\"]");
+        if (!row) {
+            row = document.createElement("div");
+            row.className = "agent__message agent__tool-row";
+            row.dataset.toolId = tool_id;
+            log.appendChild(row);
+        }
+        if (title) { row.textContent = title; }
+        row.dataset.status = status;
+        log.scrollTop = log.scrollHeight;
+        note_activity();
     }
 
     // toggle_left_layout

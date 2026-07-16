@@ -2,6 +2,7 @@
 
 pub mod acp;
 pub mod vfs;
+pub mod workspace;
 
 // AgentConfig
 // Spawnable agent binary with command and arguments.
@@ -12,11 +13,22 @@ pub struct AgentConfig {
 }
 
 // AgentEvent
-// Worker→main-thread boundary events. FsRead, FsWrite, and PermissionRequest
-// carry a JSON-RPC request_id so the main thread can post a reply back to the
-// agent; other variants are terminal signals (stream end, error, etc.).
+// Worker→main-thread boundary events. Activity events (SessionReady, Thought,
+// ToolStatus) surface the ACP handshake and reasoning/tool progress. FsRead,
+// FsWrite, and PermissionRequest carry a JSON-RPC request_id so the main thread
+// can post a reply back to the agent; other variants are terminal signals
+// (stream end, error, etc.).
 #[derive(Debug)]
 pub enum AgentEvent {
+    SessionReady,
+    Thought {
+        text: String,
+    },
+    ToolStatus {
+        id: String,
+        title: String,
+        status: String,
+    },
     StreamChunk {
         role: String,
         text: String,

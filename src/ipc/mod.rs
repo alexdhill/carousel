@@ -249,6 +249,15 @@ pub enum MessageKind {
     // AgentListUpdate
     // Rust→JS: the configured agents' names for the panel dropdown.
     AgentListUpdate(agent::AgentList),
+    // AgentActivityUpdate
+    // Rust→JS: current agent execution phase and status label.
+    AgentActivityUpdate(agent::AgentActivity),
+    // AgentThoughtUpdate
+    // Rust→JS: one reasoning fragment to append to the thinking area.
+    AgentThoughtUpdate(agent::AgentThought),
+    // AgentToolStatusUpdate
+    // Rust→JS: upsert a tool row by id with the given title and status.
+    AgentToolStatusUpdate(agent::AgentToolStatus),
 }
 
 // ---------- JS -> Rust payloads ----------
@@ -1907,6 +1916,23 @@ mod tests {
         match parsed.kind {
             MessageKind::AgentPanelStateUpdate(s) => {
                 assert_eq!(s, state);
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn agent_activity_update_roundtrips_through_ipc() {
+        let activity = agent::AgentActivity {
+            phase: "thinking".into(),
+            label: "Analyzing slide content".into(),
+        };
+        let msg = IpcMessage::new(MessageKind::AgentActivityUpdate(activity.clone()));
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: IpcMessage = serde_json::from_str(&json).unwrap();
+        match parsed.kind {
+            MessageKind::AgentActivityUpdate(a) => {
+                assert_eq!(a, activity);
             }
             other => panic!("unexpected variant: {other:?}"),
         }

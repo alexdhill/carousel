@@ -49,6 +49,33 @@ pub struct AgentPermissionAsk {
     pub summary: String,
 }
 
+// AgentActivity
+// Rust→JS: current agent execution phase and human-readable status label.
+// Drives the panel status line + spinner. `phase` is a closed vocabulary:
+// "idle" | "starting" | "thinking" | "streaming" | "tool" | "awaiting_approval" | "error".
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct AgentActivity {
+    pub phase: String,
+    pub label: String,
+}
+
+// AgentThought
+// Rust→JS: one reasoning fragment appended to the thinking area.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct AgentThought {
+    pub text: String,
+}
+
+// AgentToolStatus
+// Rust→JS: upsert a tool row keyed by id. `status` is one of:
+// pending | in_progress | completed | failed.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct AgentToolStatus {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -99,5 +126,32 @@ mod tests {
             summary: "write slide 1".into(),
         };
         assert_eq!(round_trip(&ask), ask);
+    }
+
+    #[test]
+    fn agent_activity_roundtrips() {
+        let activity = AgentActivity {
+            phase: "thinking".into(),
+            label: "Analyzing slide content".into(),
+        };
+        assert_eq!(round_trip(&activity), activity);
+    }
+
+    #[test]
+    fn agent_thought_roundtrips() {
+        let thought = AgentThought {
+            text: "The user wants to refactor this slide for clarity.".into(),
+        };
+        assert_eq!(round_trip(&thought), thought);
+    }
+
+    #[test]
+    fn agent_tool_status_roundtrips() {
+        let status = AgentToolStatus {
+            id: "tool_1".into(),
+            title: "Update Text".into(),
+            status: "in_progress".into(),
+        };
+        assert_eq!(round_trip(&status), status);
     }
 }
