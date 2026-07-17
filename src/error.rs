@@ -19,6 +19,9 @@ pub enum AppError {
     #[allow(dead_code)]
     #[error("ipc send: channel closed")]
     IpcChannelClosed,
+
+    #[error("agent: {0}")]
+    Agent(String),
 }
 
 pub type AppResult<T> = Result<T, AppError>;

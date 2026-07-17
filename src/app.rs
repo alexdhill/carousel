@@ -23,12 +23,13 @@ use crate::commands::{
     ElementTransform, FileAction, GeometryProperty, GroupElements, InsertAnimation, InsertElement,
     InsertLayout, InsertSlide, InsertTableColumn, InsertTableRow, InterpretResult, MoveElement,
     RemoveAnimation, RemoveElementCommand, RemoveInlineStyle, RemoveSlide, RenameElement,
-    ReparentElement, ResizeElement, SetAnimationProperty, SetCellStyles, SetCellText, SetDeckTitle,
-    SetElementId, SetElementsTransform, SetEmbedHtml, SetGeometryProperty, SetGlobalsCss,
-    SetGroupLayout, SetGroupScale, SetInlineStyle, SetLayoutBackground, SetLayoutBackgroundImage,
-    SetLayoutName, SetMorphTransition, SetSlideBackground, SetSlideBackgroundImage, SetSlideLayout,
-    SetSlideNotes, SetSlideTitle, SetSlideTransition, SetTableHeaderColumns, SetTableHeaderRows,
-    SetTextContent, SwapTheme, TransactionSnapshot,
+    ReorderSlide, ReparentElement, ReplaceSlideContent, ResizeElement, SetAnimationProperty,
+    SetCellStyles, SetCellText, SetDeckTitle, SetElementId, SetElementsTransform, SetEmbedHtml,
+    SetGeometryProperty, SetGlobalsCss, SetGroupLayout, SetGroupScale, SetInlineStyle,
+    SetLayoutBackground, SetLayoutBackgroundImage, SetLayoutName, SetMorphTransition,
+    SetSlideBackground, SetSlideBackgroundImage, SetSlideLayout, SetSlideNotes, SetSlideTitle,
+    SetSlideTransition, SetTableHeaderColumns, SetTableHeaderRows, SetTextContent, SwapTheme,
+    TransactionSnapshot,
 };
 use crate::deck::animation::{
     AnimationCategory, AnimationEffect, AnimationEntry, AnimationTiming, AnimationTrigger,
@@ -44,6 +45,7 @@ use crate::deck::style::{ColorRef, FontRef, Geometry, ImageStyle, Length, ShapeS
 use crate::deck::{Canvas, CanvasTarget, Deck, ElementId, LayoutId, ShapeGeometry, SlideId};
 use crate::error::{AppError, AppResult};
 use crate::html::serialize::{ANIMATION_KEYFRAMES_CSS, serialize_slide, serialize_slide_themed};
+use crate::ipc::agent::{AgentPanelState, AgentPermissionAsk, AgentStreamChunk, AgentToolNotice};
 use crate::ipc::bridge::WebviewSender;
 use crate::ipc::present::{PresentInbound, PresentInitPayload};
 use crate::ipc::{
@@ -54,7 +56,7 @@ use crate::ipc::{
 };
 use crate::present::session::{PresentStep, PresentationSession};
 use base64::Engine;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use tracing::{debug, info, warn};
 
@@ -203,15 +205,32 @@ pub struct ApplicationCore {
     // Raised when the app should exit after the current handler returns. main.rs
     // drains it via take_quit_requested and sets ControlFlow::Exit.
     quit_requested: bool,
+    // Live agent session handle (None when not running). Spawned lazily on the
+    // first prompt and torn down on panel close.
+    agent: Option<crate::agent::acp::AgentHandle>,
+    // Display name of the currently running agent (None when none running).
+    // Used to decide whether a prompt should reuse or switch the session.
+    agent_name: Option<String>,
+    // Posts agent events from the worker thread into the main event loop.
+    // Passed to spawn_agent as the callback.
+    agent_sink: std::sync::Arc<dyn Fn(crate::agent::AgentEvent) + Send + Sync>,
+    // Pending write approvals: request_id -> (path, contents) awaiting
+    // on_agent_permission_reply with allow=true.
+    agent_pending: std::collections::HashMap<String, (String, String)>,
+    // Real-file mirror of the live deck used as the agent cwd. Present only
+    // while an agent session is running; dropped (temp dir removed) on teardown.
+    agent_workspace: Option<crate::agent::workspace::Workspace>,
 }
 
 impl ApplicationCore {
     // new
     // Inputs: a WebviewSender, a no-arg closure that posts
-    // UserEvent::FlushPatches on the event loop, and an IoThread handle
-    // used for all background bundle reads/writes.
+    // UserEvent::FlushPatches on the event loop, an IoThread handle
+    // used for all background bundle reads/writes, and an agent_sink
+    // closure for posting agent events to the event loop.
     // Output: an ApplicationCore preloaded with `Deck::sample()` and the
     // first slide selected as active.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         sender: WebviewSender,
         schedule_flush: Box<dyn Fn()>,
@@ -220,6 +239,7 @@ impl ApplicationCore {
         request_present_close: Box<dyn Fn()>,
         dispatch_pdf_job: Box<dyn Fn(PdfJob)>,
         dispatch_chromium_download: Box<dyn Fn()>,
+        agent_sink: std::sync::Arc<dyn Fn(crate::agent::AgentEvent) + Send + Sync>,
     ) -> Self {
         Self::new_with_deck(
             Deck::sample(),
@@ -230,6 +250,7 @@ impl ApplicationCore {
             request_present_close,
             dispatch_pdf_job,
             dispatch_chromium_download,
+            agent_sink,
             false,
         )
     }
@@ -237,7 +258,8 @@ impl ApplicationCore {
     // new_with_deck
     // Like `new`, but starts from a caller-supplied deck (the landing window
     // builds the editor on a chosen template / placeholder deck). The deck must
-    // contain at least one slide.
+    // contain at least one slide. Accepts an agent_sink closure for posting
+    // agent events to the event loop.
     #[allow(clippy::too_many_arguments)]
     pub fn new_with_deck(
         deck: Deck,
@@ -248,6 +270,7 @@ impl ApplicationCore {
         request_present_close: Box<dyn Fn()>,
         dispatch_pdf_job: Box<dyn Fn(PdfJob)>,
         dispatch_chromium_download: Box<dyn Fn()>,
+        agent_sink: std::sync::Arc<dyn Fn(crate::agent::AgentEvent) + Send + Sync>,
         focus_title: bool,
     ) -> Self {
         let active_slide: Option<SlideId> = deck.slide_order.first().cloned();
@@ -277,6 +300,11 @@ impl ApplicationCore {
             focus_title,
             pending_quit: false,
             quit_requested: false,
+            agent: None,
+            agent_name: None,
+            agent_sink,
+            agent_pending: HashMap::new(),
+            agent_workspace: None,
         }
     }
 
@@ -354,6 +382,17 @@ impl ApplicationCore {
                 self.send_save_state()
             }
             MessageKind::Interaction(event) => self.handle_interaction(event),
+            MessageKind::AgentPanelToggled { open } => self.on_agent_panel_toggled(open),
+            MessageKind::AgentPromptSubmitted { text, agent } => self.on_agent_prompt(text, agent),
+            MessageKind::AgentCancelRequested => self.on_agent_cancel(),
+            MessageKind::AgentAddRequested {
+                name,
+                command,
+                args,
+            } => self.on_agent_add(name, command, args),
+            MessageKind::AgentPermissionReply { request_id, allow } => {
+                self.on_agent_permission_reply(request_id, allow)
+            }
             other => {
                 warn!(
                     "unhandled message kind: {:?}",
@@ -536,6 +575,7 @@ impl ApplicationCore {
                         date: crate::html::serialize::today_ymd(),
                     }),
                     hide_placeholders: false,
+                    min_element_size: 0.0,
                 };
                 Some((
                     id.clone(),
@@ -1330,6 +1370,26 @@ impl ApplicationCore {
                 Some(cmd) => InterpretResult::Command(cmd),
                 None => InterpretResult::Nothing,
             },
+            InteractionEvent::SlideThumbnailReordered {
+                slide_id,
+                new_index,
+            } => {
+                let order: &[SlideId] = &self.dispatcher.deck().slide_order;
+                match order.iter().position(|id| id == &slide_id) {
+                    Some(from) => {
+                        let to: usize = new_index.min(order.len().saturating_sub(1));
+                        if from == to {
+                            InterpretResult::Nothing
+                        } else {
+                            InterpretResult::Command(Box::new(ReorderSlide {
+                                slide_id,
+                                new_index: to,
+                            }))
+                        }
+                    }
+                    None => InterpretResult::Nothing,
+                }
+            }
             // ---- Stage 11: layout editor ----
             InteractionEvent::SetEditorMode { mode } => match mode.as_str() {
                 "slide" => InterpretResult::SetEditorMode(EditorMode::Slide),
@@ -2829,6 +2889,450 @@ private copy (~150 MB).",
         self.active_slide = active;
         self.selection = SelectionState::empty();
     }
+
+    // on_agent_panel_toggled
+    // Inputs: open flag indicating whether the panel is opening or closing.
+    // Output: Ok(()) after publishing the agent list + panel state (open) or
+    // tearing the running agent down (close). Errors: IPC send failures.
+    // Dataflow: open ships the configured agent names for the dropdown and an
+    // idle (or "no agents") state; no agent is spawned until the first prompt.
+    // Close shuts down any running agent and clears the selected name.
+    fn on_agent_panel_toggled(&mut self, open: bool) -> AppResult<()> {
+        if open {
+            let mut cfg: crate::config::Config = crate::config::load();
+            if cfg.agents.is_empty()
+                && let Some(def) = crate::config::detect_default_agent()
+            {
+                cfg.agents.push(def);
+                if let Err(e) = crate::config::save(&cfg) {
+                    warn!("failed to save seeded agent config: {}", e);
+                }
+                info!("seeded default agent from installed claude-code-acp-rs");
+            }
+            let names: Vec<String> = crate::config::agent_names(&cfg);
+            self.sender
+                .send(MessageKind::AgentListUpdate(crate::ipc::agent::AgentList {
+                    agents: names.clone(),
+                }))?;
+            let error: Option<String> = if names.is_empty() {
+                Some(
+                    "No agents configured. Install claude-code-acp-rs or add one via + Add agent."
+                        .to_string(),
+                )
+            } else {
+                None
+            };
+            self.sender
+                .send(MessageKind::AgentPanelStateUpdate(AgentPanelState {
+                    running: false,
+                    error,
+                }))?;
+        } else {
+            if let Some(mut h) = self.agent.take() {
+                let _ = h.shutdown();
+            }
+            self.agent_name = None;
+        }
+        Ok(())
+    }
+
+    // ensure_agent
+    // Inputs: the display name of the agent to run.
+    // Output: Ok(true) when a matching agent is running afterwards, Ok(false)
+    // when the name is blank/unknown or the spawn failed (an error state is
+    // sent to the webview in those cases). Errors: IPC send failures.
+    // Dataflow: reuse the running agent when its name already matches; else
+    // shut it down, look the name up in Config, and spawn it with a cwd derived
+    // from the open deck path (temp_dir fallback) and the shared event sink.
+    fn ensure_agent(&mut self, name: &str) -> AppResult<bool> {
+        if name.is_empty() {
+            self.send_agent_error("Select an agent from the dropdown.")?;
+            return Ok(false);
+        }
+        if self.agent.is_some() && self.agent_name.as_deref() == Some(name) {
+            return Ok(true);
+        }
+        if let Some(mut h) = self.agent.take() {
+            let _ = h.shutdown();
+        }
+        self.agent_workspace = None;
+        self.agent_name = None;
+        let cfg: crate::config::Config = crate::config::load();
+        let agent_cfg = match crate::agent::from_named(&cfg, name) {
+            Some(c) => c,
+            None => {
+                self.send_agent_error(&format!("Agent '{}' is not configured.", name))?;
+                return Ok(false);
+            }
+        };
+        let workspace: crate::agent::workspace::Workspace =
+            match crate::agent::workspace::Workspace::create(self.dispatcher.deck()) {
+                Ok(w) => w,
+                Err(e) => {
+                    self.send_agent_error(&format!("Failed to prepare deck workspace: {}", e))?;
+                    return Ok(false);
+                }
+            };
+        let cwd: std::path::PathBuf = workspace.path().to_path_buf();
+        let sink = self.agent_sink.clone();
+        let callback = move |ev: crate::agent::AgentEvent| {
+            sink(ev);
+        };
+        match crate::agent::acp::spawn_agent(&agent_cfg, &cwd, callback) {
+            Ok(handle) => {
+                self.agent = Some(handle);
+                self.agent_workspace = Some(workspace);
+                self.agent_name = Some(name.to_string());
+                info!("agent spawned: {}", name);
+                Ok(true)
+            }
+            Err(e) => {
+                self.send_agent_error(&format!("Failed to spawn agent: {}", e))?;
+                warn!("agent spawn failed: {}", e);
+                Ok(false)
+            }
+        }
+    }
+
+    // send_activity
+    // Inputs: phase (non-empty activity phase string) and label (status text).
+    // Output: Ok(()) after sending AgentActivityUpdate. Errors: IPC send failures.
+    // Dataflow: construct AgentActivity with the provided phase and label,
+    // convert to strings, and send via IPC.
+    fn send_activity(&self, phase: &str, label: &str) -> AppResult<()> {
+        assert!(!phase.is_empty(), "send_activity called with empty phase");
+        self.sender.send(MessageKind::AgentActivityUpdate(
+            crate::ipc::agent::AgentActivity {
+                phase: phase.into(),
+                label: label.into(),
+            },
+        ))
+    }
+
+    // send_agent_error
+    // Inputs: a human-readable message. Output: Ok(()) after pushing an idle
+    // panel state carrying the error. Errors: IPC send failures.
+    fn send_agent_error(&self, message: &str) -> AppResult<()> {
+        assert!(
+            !message.is_empty(),
+            "send_agent_error called with empty message"
+        );
+        self.sender
+            .send(MessageKind::AgentPanelStateUpdate(AgentPanelState {
+                running: false,
+                error: Some(message.to_string()),
+            }))
+    }
+
+    // on_agent_prompt
+    // Inputs: user-supplied prompt text and the selected agent's display name.
+    // Output: Ok(()) after ensuring the named agent runs and forwarding the
+    // prompt, or after an error state when it could not be started. Errors:
+    // IPC send or agent send failures.
+    // Dataflow: capture whether agent was already running, ensure_agent
+    // spawns/switches to the named agent (or reports an error and returns false),
+    // on success send_prompt + running=true state and emit activity.
+    fn on_agent_prompt(&mut self, text: String, agent: String) -> AppResult<()> {
+        let was_ready: bool =
+            self.agent.is_some() && self.agent_name.as_deref() == Some(agent.as_str());
+        if !self.ensure_agent(&agent)? {
+            return Ok(());
+        }
+        if let Some(handle) = &self.agent {
+            handle.send_prompt(&text)?;
+            self.sender
+                .send(MessageKind::AgentPanelStateUpdate(AgentPanelState {
+                    running: true,
+                    error: None,
+                }))?;
+            if was_ready {
+                self.send_activity("thinking", "Thinking…")?;
+            } else {
+                self.send_activity("starting", "Starting agent…")?;
+            }
+        }
+        Ok(())
+    }
+
+    // on_agent_add
+    // Inputs: a new agent's display name, spawnable command, and args from the
+    // add-agent modal. Output: Ok(()) after persisting the agent to config.json
+    // and re-publishing the agent list. Errors: IPC send failures (a config
+    // save failure is logged, not fatal).
+    // Dataflow: reject blank name/command with an error state; load Config,
+    // replace any same-named entry, append, save, and broadcast the new list.
+    fn on_agent_add(&mut self, name: String, command: String, args: Vec<String>) -> AppResult<()> {
+        if name.is_empty() || command.is_empty() {
+            return self.send_agent_error("Agent name and command are required.");
+        }
+        let mut cfg: crate::config::Config = crate::config::load();
+        cfg.agents.retain(|a| a.name != name);
+        cfg.agents.push(crate::config::AgentDef {
+            name,
+            command,
+            args,
+        });
+        if let Err(e) = crate::config::save(&cfg) {
+            warn!("failed to save agent config: {}", e);
+        }
+        self.sender
+            .send(MessageKind::AgentListUpdate(crate::ipc::agent::AgentList {
+                agents: crate::config::agent_names(&cfg),
+            }))
+    }
+
+    // on_agent_cancel
+    // Inputs: none.
+    // Output: Ok(()) after sending cancel to the agent if present and emitting
+    // idle activity. Errors: agent send or IPC send failures.
+    fn on_agent_cancel(&mut self) -> AppResult<()> {
+        if let Some(agent) = &self.agent {
+            agent.cancel()?;
+        }
+        self.send_activity("idle", "")?;
+        Ok(())
+    }
+
+    // on_agent_permission_reply
+    // Inputs: request_id and allow flag.
+    // Output: Ok(()) after processing the permission reply.
+    // Errors: IPC send, agent send, or command dispatch failures.
+    // Dataflow: if request_id is in agent_pending, this is a slide write gate.
+    // If allow, parse and dispatch ReplaceSlideContent, respond with success,
+    // rebroadcast slide list and object tree. Else send error. If request_id
+    // not in pending, it's an ACP permission request: relay to agent.
+    fn on_agent_permission_reply(&mut self, request_id: String, allow: bool) -> AppResult<()> {
+        if let Some((path, contents)) = self.agent_pending.remove(&request_id) {
+            if allow {
+                match crate::agent::vfs::parse_slide_write(&path, &contents) {
+                    Ok(sw) if sw.new_children.is_empty() => {
+                        if let Some(agent) = &self.agent {
+                            let _ = agent.send_fs_error(&request_id, "no usable elements in slide");
+                        }
+                    }
+                    Ok(sw) => {
+                        let real_id: Option<SlideId> = crate::agent::vfs::resolve_slide_ref(
+                            self.dispatcher.deck(),
+                            &sw.slide_id,
+                        );
+                        let real_id = match real_id {
+                            Some(id) => id,
+                            None => {
+                                if let Some(agent) = &self.agent {
+                                    let _ = agent.send_fs_error(&request_id, "unknown slide path");
+                                }
+                                return Ok(());
+                            }
+                        };
+                        self.dispatch_and_maybe_flush(Box::new(ReplaceSlideContent {
+                            slide_id: real_id,
+                            new_children: sw.new_children,
+                        }));
+                        if let Some(agent) = &self.agent {
+                            let _ = agent.send_fs_response(&request_id, serde_json::Value::Null);
+                        }
+                        if let Err(e) = self.send_slide_list() {
+                            warn!("slide list broadcast after agent write failed: {}", e);
+                        }
+                        if let Err(e) = self.send_object_tree() {
+                            warn!("object tree broadcast after agent write failed: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        if let Some(agent) = &self.agent {
+                            let _ = agent.send_fs_error(&request_id, &e.to_string());
+                        }
+                    }
+                }
+            } else if let Some(agent) = &self.agent {
+                let _ = agent.send_fs_error(&request_id, "user rejected edit");
+            }
+        } else if let Some(agent) = &self.agent {
+            let _ = agent.send_permission_reply(&request_id, allow);
+        }
+        Ok(())
+    }
+
+    // __ingest_agent_changes
+    // Inputs: &mut self. Output: Ok after pulling any slide files the agent
+    // edited or created this turn back into the deck. Errors: IPC broadcast
+    // failures. Dataflow: collect SlideChanges from the workspace; for each,
+    // append a new slide (InsertSlide, updates slide_order + manifest) or replace
+    // an existing slide's content (ReplaceSlideContent). Both are undoable. Then
+    // rebroadcast the slide list and object tree once.
+    fn __ingest_agent_changes(&mut self) -> AppResult<()> {
+        let changes: Vec<crate::agent::workspace::SlideChange> = match self.agent_workspace.as_mut()
+        {
+            Some(ws) => ws.collect_changes(),
+            None => return Ok(()),
+        };
+        if changes.is_empty() {
+            return Ok(());
+        }
+        let mut skipped_total: usize = 0;
+        for change in changes {
+            skipped_total += change.skipped;
+            if change.new_children.is_empty() {
+                warn!("agent slide {} had no usable elements", change.slide_ref);
+                continue;
+            }
+            if change.is_new {
+                self.dispatch_and_maybe_flush(__new_slide_command(
+                    self.dispatcher.deck().slide_order.len(),
+                    change.new_children,
+                ));
+                continue;
+            }
+            let real_id: Option<SlideId> =
+                crate::agent::vfs::resolve_slide_ref(self.dispatcher.deck(), &change.slide_ref);
+            let real_id = match real_id {
+                Some(id) => id,
+                None => {
+                    warn!("agent edited unknown slide {}", change.slide_ref);
+                    continue;
+                }
+            };
+            self.dispatch_and_maybe_flush(Box::new(ReplaceSlideContent {
+                slide_id: real_id,
+                new_children: change.new_children,
+            }));
+        }
+        if skipped_total > 0 {
+            self.toast(
+                &format!("{} element(s) could not be loaded", skipped_total),
+                "The agent produced HTML that did not match the slide element format.",
+            );
+        }
+        self.send_slide_list()?;
+        self.send_object_tree()?;
+        Ok(())
+    }
+
+    // __handle_agent_fs_read
+    // Inputs: request_id and path from FsRead event.
+    // Output: Ok(()) after resolving and responding. Errors: IPC send failures.
+    // Dataflow: resolve the read request via VFS, respond to agent, send tool notice.
+    fn __handle_agent_fs_read(&mut self, request_id: String, path: String) -> AppResult<()> {
+        match crate::agent::vfs::resolve_read(self.dispatcher.deck(), &path) {
+            Some(c) => {
+                let _ = self
+                    .agent
+                    .as_ref()
+                    .map(|a| a.send_fs_response(&request_id, serde_json::json!({"content": c})));
+            }
+            None => {
+                let _ = self
+                    .agent
+                    .as_ref()
+                    .map(|a| a.send_fs_error(&request_id, "no such path"));
+            }
+        }
+        self.sender.send(MessageKind::AgentTool(AgentToolNotice {
+            kind: "read".to_string(),
+            slide_id: None,
+            summary: format!("read {}", path),
+        }))
+    }
+
+    // handle_agent_event
+    // Inputs: an AgentEvent from the worker thread.
+    // Output: Ok(()) after dispatching the event. Errors: IPC send failures.
+    // Dataflow: match on event variant, emit activity, and forward/apply.
+    // SessionReady -> activity thinking. Thought -> activity + thought msg.
+    // StreamChunk -> activity streaming + stream msg. ToolStatus -> activity tool.
+    // FsRead/FsWrite -> activity tool + existing handlers. PermissionRequest ->
+    // activity awaiting + perm msg. TurnEnded/Failed -> activity + state update.
+    pub fn handle_agent_event(&mut self, ev: crate::agent::AgentEvent) -> AppResult<()> {
+        match ev {
+            crate::agent::AgentEvent::SessionReady => {
+                self.send_activity("thinking", "Thinking…")?;
+            }
+            crate::agent::AgentEvent::Thought { text } => {
+                self.send_activity("thinking", "Thinking…")?;
+                self.sender.send(MessageKind::AgentThoughtUpdate(
+                    crate::ipc::agent::AgentThought { text },
+                ))?;
+            }
+            crate::agent::AgentEvent::StreamChunk {
+                role,
+                text,
+                final_chunk,
+            } => {
+                self.send_activity("streaming", "Responding…")?;
+                self.sender
+                    .send(MessageKind::AgentStream(AgentStreamChunk {
+                        role,
+                        text,
+                        final_chunk,
+                    }))?;
+            }
+            crate::agent::AgentEvent::ToolStatus { id, title, status } => {
+                let label: String = if title.is_empty() {
+                    "Working…".to_string()
+                } else {
+                    title.clone()
+                };
+                self.send_activity("tool", &label)?;
+                self.sender.send(MessageKind::AgentToolStatusUpdate(
+                    crate::ipc::agent::AgentToolStatus { id, title, status },
+                ))?;
+            }
+            crate::agent::AgentEvent::FsRead { request_id, path } => {
+                self.send_activity("tool", "Reading slide")?;
+                self.__handle_agent_fs_read(request_id, path)?;
+            }
+            crate::agent::AgentEvent::FsWrite {
+                request_id,
+                path,
+                contents,
+            } => {
+                self.send_activity("tool", "Writing slide")?;
+                self.agent_pending
+                    .insert(request_id.clone(), (path.clone(), contents));
+                self.sender
+                    .send(MessageKind::AgentPermission(AgentPermissionAsk {
+                        request_id,
+                        slide_id: crate::agent::vfs::slide_id_from_path(&path).unwrap_or_default(),
+                        summary: format!("Agent wants to edit {}", path),
+                    }))?;
+            }
+            crate::agent::AgentEvent::PermissionRequest {
+                request_id,
+                path: _path,
+                summary,
+            } => {
+                self.send_activity("awaiting_approval", "Waiting for approval")?;
+                self.sender
+                    .send(MessageKind::AgentPermission(AgentPermissionAsk {
+                        request_id,
+                        slide_id: String::new(),
+                        summary,
+                    }))?;
+            }
+            crate::agent::AgentEvent::TurnEnded => {
+                self.__ingest_agent_changes()?;
+                self.send_activity("idle", "")?;
+                self.sender
+                    .send(crate::ipc::MessageKind::AgentPanelStateUpdate(
+                        crate::ipc::agent::AgentPanelState {
+                            running: false,
+                            error: None,
+                        },
+                    ))?;
+            }
+            crate::agent::AgentEvent::Failed { message } => {
+                self.send_activity("error", "Error")?;
+                self.sender
+                    .send(crate::ipc::MessageKind::AgentPanelStateUpdate(
+                        crate::ipc::agent::AgentPanelState {
+                            running: false,
+                            error: Some(message),
+                        },
+                    ))?;
+            }
+        }
+        Ok(())
+    }
 }
 
 // recent_title
@@ -3536,6 +4040,7 @@ fn build_slide_list_data(deck: &Deck, active_slide: Option<&SlideId>) -> SlideLi
                 date: date.clone(),
             }),
             hide_placeholders: false,
+            min_element_size: 0.0,
         };
         let html: String = serialize_slide_themed(slide, fill.as_deref(), img.as_deref(), &opts);
         slides.push(SlideListEntry {
@@ -4368,6 +4873,52 @@ fn build_insert_slide_after_active(
         manifest_entry,
     });
     Some((cmd, slide_id))
+}
+
+// __new_slide_command
+// Inputs: the append position (current slide count) and the parsed children of
+// an agent-created slide file. Output: an InsertSlide command that adds a
+// blank-layout slide carrying those children at `position`, minting a fresh
+// slide id and matching manifest entry. Used to fold agent-created slides back
+// into the deck. Control flow: mint id -> wrap children in a group root ->
+// build slide + manifest entry -> box InsertSlide.
+fn __new_slide_command(position: usize, children: Vec<ElementNode>) -> Box<dyn Command> {
+    use crate::bundle::SlideEntry;
+    use crate::bundle::manifest::slide_path_for;
+    use crate::deck::builders::group_element;
+    use crate::deck::new_slide_id;
+
+    assert!(
+        !children.is_empty(),
+        "__new_slide_command: empty slide children"
+    );
+    let slide_id: SlideId = new_slide_id();
+    assert!(
+        !slide_id.is_empty(),
+        "__new_slide_command: minted empty slide id"
+    );
+    let root: ElementNode = group_element(new_element_id(), children);
+    let slide: SlideNode = SlideNode::new(slide_id.clone(), "blank".to_string(), root);
+    let manifest_entry: SlideEntry = SlideEntry {
+        id: slide_id.clone(),
+        path: slide_path_for(&slide_id),
+        layout_id: "blank".to_string(),
+        title: String::new(),
+        thumbnail: None,
+        transition: None,
+        duration_hint: None,
+        notes_ref: None,
+        animations: Vec::new(),
+        guides: Vec::new(),
+        background: None,
+        background_image: None,
+        notes: None,
+    };
+    Box::new(InsertSlide {
+        position,
+        slide,
+        manifest_entry,
+    })
 }
 
 // build_insert_layout_after_active

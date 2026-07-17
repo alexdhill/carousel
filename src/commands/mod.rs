@@ -30,6 +30,7 @@ pub mod patch_buffer;
 pub mod remove_element;
 pub mod rename_element;
 pub mod reparent_element;
+pub mod replace_slide;
 pub mod resize_element;
 pub mod scale_elements;
 pub mod set_element_id;
@@ -59,6 +60,7 @@ pub use group_select::{DissolveGroup, GroupElements};
 pub use history::{CommandHistory, DEFAULT_HISTORY_DEPTH, HistoryEntry, UndoOutput};
 pub use rename_element::RenameElement;
 pub use reparent_element::ReparentElement;
+pub use replace_slide::ReplaceSlideContent;
 pub use resize_element::ResizeElement;
 pub use scale_elements::{ElementTransform, SetElementsTransform};
 pub use set_geometry::{GeometryProperty, SetGeometryProperty};
@@ -75,7 +77,7 @@ pub use set_element_id::SetElementId;
 pub use set_embed::SetEmbedHtml;
 pub use set_morph_transition::SetMorphTransition;
 pub use set_text::SetTextContent;
-pub use slide_lifecycle::{InsertSlide, RemoveSlide};
+pub use slide_lifecycle::{InsertSlide, RemoveSlide, ReorderSlide};
 pub use slide_metadata::{SetDeckTitle, SetSlideTitle};
 pub use slide_style::{
     SetSlideBackground, SetSlideBackgroundImage, SetSlideLayout, SetSlideNotes, SetSlideTransition,

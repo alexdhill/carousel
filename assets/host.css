@@ -556,6 +556,52 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     white-space: nowrap;
 }
 
+/* ===================== Left column: Agent + Objects ===================== */
+
+/* Side-by-side (agent beside objects) layout is disabled for now: too
+   cluttered. The panes always stack and use the accordion collapse instead.
+   To re-enable side-by-side, set `flex-direction: row` here. */
+.left-col {
+    display: flex;
+    flex-direction: column;
+    gap: var(--gap);
+    flex: 0 0 auto;
+}
+
+/* Accordion collapse chevron shown next to each pane's title. */
+.pane-collapse {
+    margin-right: auto;
+}
+
+/* Agent panel hidden until toggled from the top bar. While hidden, the objects
+   pane fills the column and the accordion collapse chevrons are pointless, so
+   they are hidden too. */
+.left-col[data-agent-visible="false"] .panel--agent {
+    display: none;
+}
+
+.left-col[data-agent-visible="false"] .pane-collapse {
+    display: none;
+}
+
+.left-col[data-agent="agent"] .panel--agent {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.left-col[data-agent="agent"] .panel--objects {
+    flex: 0 0 auto;
+}
+
+.left-col[data-agent="objects"] .panel--agent {
+    flex: 0 0 auto;
+}
+
+.left-col[data-agent="objects"] .panel--objects {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
 /* ===================== Objects / Layers (left) ===================== */
 
 .panel--objects {
@@ -724,6 +770,536 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     color: var(--ink3);
     font-size: 12px;
     font-style: italic;
+}
+
+/* ===================== Agent panel ===================== */
+
+.panel--agent {
+    width: 240px;
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.panel--agent.panel--collapsed {
+    flex: 0 0 42px;
+}
+
+.panel--agent.panel--collapsed .agent__scroll,
+.panel--agent.panel--collapsed .agent__input-row {
+    display: none;
+}
+
+/* Collapsed layers pane: header only, hide the tree + header tools. */
+.panel--objects.panel--collapsed .objects__scroll,
+.panel--objects.panel--collapsed .panel-head__tools {
+    display: none;
+}
+
+.agent__scroll {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.agent__input-row {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px;
+    border-top: 1px solid var(--line);
+    align-items: stretch;
+}
+
+.agent__controls-row {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+}
+
+.agent__select {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 30px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-field);
+    background: var(--field);
+    color: var(--ink);
+    font: inherit;
+    font-size: 12px;
+    padding: 0 6px;
+}
+
+.agent__select:focus {
+    outline: none;
+    border-color: var(--acc);
+}
+
+.agent__select:disabled {
+    color: var(--ink3);
+    cursor: not-allowed;
+}
+
+.agent__textarea {
+    flex: 1 1 auto;
+    min-height: 32px;
+    max-height: 100px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-field);
+    background: var(--field);
+    color: var(--ink);
+    font: inherit;
+    font-size: 12px;
+    padding: 6px 8px;
+    resize: none;
+    overflow-y: auto;
+}
+
+.agent__textarea:focus {
+    outline: none;
+    background: var(--field-on);
+    border-color: var(--acc);
+}
+
+.agent__textarea:disabled {
+    background: var(--field);
+    color: var(--ink3);
+    cursor: not-allowed;
+}
+
+.agent__btn {
+    flex: 0 0 auto;
+    width: 30px;
+    height: 30px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    border-radius: var(--r-field);
+    background: transparent;
+    color: var(--ink2);
+    cursor: pointer;
+}
+
+.agent__btn:hover {
+    background: var(--hover);
+    color: var(--ink);
+}
+
+.agent__btn:disabled {
+    color: var(--ink3);
+    cursor: not-allowed;
+}
+
+.agent__btn--send {
+    background: var(--acc-soft);
+    color: var(--acc-ink);
+}
+
+.agent__btn--send:hover {
+    background: var(--acc-line);
+    color: var(--acc-ink);
+}
+
+.agent__btn--send:disabled {
+    background: var(--field);
+    color: var(--ink3);
+}
+
+/* Send button morphs into a stop button while the agent is running: swap the
+   two glyphs and tint it. */
+.agent__glyph {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.agent__glyph--stop {
+    display: none;
+}
+
+.agent__btn--is-stop .agent__glyph--send {
+    display: none;
+}
+
+.agent__btn--is-stop .agent__glyph--stop {
+    display: inline-flex;
+}
+
+.agent__btn--is-stop {
+    background: var(--field);
+    color: var(--ink);
+}
+
+.agent__btn--is-stop:hover {
+    background: var(--hover);
+    color: var(--acc-ink);
+}
+
+.agent__permission-row {
+    padding: 8px;
+    background: var(--field);
+    border: 1px solid var(--line);
+    border-radius: var(--r-field);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+}
+
+.agent__permission-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 12px;
+    color: var(--ink2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.agent__permission-buttons {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 4px;
+}
+
+.agent__btn--approve,
+.agent__btn--deny {
+    padding: 4px 8px;
+    font-size: 11px;
+    font-weight: 500;
+    height: auto;
+    width: auto;
+}
+
+.agent__btn--approve {
+    background: var(--acc-soft);
+    color: var(--acc-ink);
+}
+
+.agent__btn--approve:hover {
+    background: var(--acc-line);
+}
+
+.agent__btn--deny {
+    background: var(--field);
+    color: var(--ink2);
+}
+
+.agent__btn--deny:hover {
+    background: var(--hover);
+}
+
+/* Agent log messages */
+.agent__message {
+    padding: 6px 8px;
+    border-radius: var(--r-field);
+    font-size: 12px;
+    line-height: 1.4;
+    word-wrap: break-word;
+    white-space: pre-wrap;
+}
+
+.agent__message--user {
+    background: var(--acc-soft);
+    color: var(--acc-ink);
+}
+
+.agent__message--stream {
+    background: var(--field);
+    color: var(--ink);
+}
+
+.agent__message--tool {
+    background: var(--field);
+    color: var(--ink3);
+    font-size: 11px;
+}
+
+.agent__message--error {
+    background: #fde8e8;
+    color: #c1584d;
+}
+
+/* Spinner keyframe animation */
+@keyframes agent_spin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.agent-spinner {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    margin-right: 6px;
+    border: 2px solid currentColor;
+    border-radius: 50%;
+    border-top-color: transparent;
+    animation: agent_spin 0.8s linear infinite;
+}
+
+/* Status row: compact, dimmed background, inline spinner + label */
+#agent-status {
+    display: flex;
+    align-items: center;
+    padding: 6px 8px;
+    background: var(--field);
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    color: var(--ink2);
+    font-size: 12px;
+}
+
+#agent-status[hidden] {
+    display: none;
+}
+
+.agent-status__label {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Thinking area: dimmed, collapsible */
+.agent-thinking {
+    display: flex;
+    flex-direction: column;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    background: var(--field);
+}
+
+.agent-thinking[hidden] {
+    display: none;
+}
+
+.agent-thinking__toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 6px 8px;
+    border: 0;
+    background: transparent;
+    color: var(--ink2);
+    font-size: 11px;
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+}
+
+.agent-thinking__toggle:hover {
+    background: var(--hover);
+}
+
+.agent-thinking__arrow {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-right: 1.5px solid var(--ink2);
+    border-bottom: 1.5px solid var(--ink2);
+    transform: rotate(-45deg);
+    transition: transform 0.12s ease;
+}
+
+.agent-thinking[data-collapsed="true"] .agent-thinking__arrow {
+    transform: rotate(45deg);
+}
+
+.agent-thinking__body {
+    padding: 6px 8px;
+    color: var(--ink3);
+    font-size: 11px;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    max-height: 100px;
+    overflow-y: auto;
+}
+
+.agent-thinking[data-collapsed="true"] .agent-thinking__body {
+    display: none;
+}
+
+/* Tool row state variants */
+.agent__tool-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: var(--r-field);
+    font-size: 12px;
+    background: var(--field);
+    color: var(--ink);
+}
+
+.agent__tool-row[data-status="pending"]::before,
+.agent__tool-row[data-status="in_progress"]::before {
+    content: "";
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--acc);
+    border-radius: 50%;
+    border-top-color: transparent;
+    animation: agent_spin 0.8s linear infinite;
+    flex: 0 0 auto;
+}
+
+.agent__tool-row[data-status="completed"]::before {
+    content: "✓";
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    color: #4caf50;
+    font-weight: 600;
+    font-size: 12px;
+    flex: 0 0 auto;
+}
+
+.agent__tool-row[data-status="failed"]::before {
+    content: "✕";
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    color: #c1584d;
+    font-weight: 600;
+    font-size: 12px;
+    flex: 0 0 auto;
+}
+
+/* ===================== Add-agent modal ===================== */
+
+.agent-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(20, 16, 12, 0.4);
+}
+
+.agent-modal__panel {
+    width: 340px;
+    padding: 20px 22px 22px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--r-card, 12px);
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.3);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.agent-modal__title {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--ink);
+}
+
+.agent-modal__label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--ink2);
+}
+
+.agent-modal__input {
+    height: 30px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-field);
+    background: var(--field);
+    color: var(--ink);
+    font: inherit;
+    font-size: 12px;
+    padding: 0 8px;
+}
+
+.agent-modal__input:focus {
+    outline: none;
+    background: var(--field-on);
+    border-color: var(--acc);
+}
+
+.agent-modal__buttons {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+/* Collapsed panel state: header only, hidden content */
+.panel--collapsed {
+    flex: 0 0 42px;
+}
+
+.panel--collapsed .panel-head {
+    border-bottom: none;
+}
+
+/* ===================== Narrow window accordion ===================== */
+
+@media (max-width: 1100px) {
+    .left-col {
+        flex-direction: column;
+        flex: 1 1 auto;
+        min-height: 0;
+    }
+
+    .panel--agent,
+    .panel--objects {
+        width: 100%;
+    }
+
+    .left-col[data-agent="agent"] .panel--agent {
+        flex: 1 1 auto;
+        min-height: 0;
+    }
+
+    .left-col[data-agent="agent"] .panel--objects {
+        flex: 0 0 auto;
+    }
+
+    .left-col[data-agent="agent"] .panel--objects.panel--collapsed {
+        flex: 0 0 42px;
+    }
+
+    .left-col[data-agent="objects"] .panel--objects {
+        flex: 1 1 auto;
+        min-height: 0;
+    }
+
+    .left-col[data-agent="objects"] .panel--agent {
+        flex: 0 0 auto;
+    }
+
+    .left-col[data-agent="objects"] .panel--agent.panel--collapsed {
+        flex: 0 0 42px;
+    }
 }
 
 /* ===================== Canvas (center) ===================== */
@@ -1966,6 +2542,7 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 }
 
 .thumbs-strip {
+    position: relative;
     flex: 1 1 auto;
     min-height: 0;
     display: flex;
@@ -1977,9 +2554,42 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     overflow-y: hidden;
 }
 
+/* Reorder drag: live insertion marker snapped into the gap between slides,
+   and a dimmed source thumbnail while it is being dragged. */
+.thumb-drop-line {
+    display: none;
+    position: absolute;
+    top: 12px;
+    height: 82px;
+    width: 2px;
+    border-radius: 1px;
+    background: var(--acc);
+    pointer-events: none;
+    z-index: 5;
+}
+
+.thumb.is-dragging .thumb__preview {
+    opacity: 0.4;
+}
+
+/* Off-screen node snapshotted as the drag ghost: a single 160×90 slide. */
+.thumb-drag-ghost {
+    position: fixed;
+    top: 0;
+    left: -10000px;
+    width: 160px;
+    height: 90px;
+    overflow: hidden;
+    background: #fff;
+    border: 2px solid var(--acc);
+    border-radius: var(--r-field);
+    pointer-events: none;
+}
+
 .thumb {
     position: relative;
     flex: 0 0 auto;
+    width: 166px;
     display: flex;
     flex-direction: column;
     align-items: stretch;
@@ -1993,7 +2603,7 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 }
 
 .thumb__preview {
-    width: 160px;
+    width: 166px;
     height: 90px;
     background: #fff;
     border: 2px solid var(--line);
@@ -2005,15 +2615,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
         transform 0.1s,
         box-shadow 0.1s,
         border-color 0.1s;
-}
-
-/* Current slide: slightly larger with a more pronounced drop shadow. This is
-   the always-on "you are here" cue and carries no accent. */
-.thumb[aria-current="true"] .thumb__preview {
-    transform: scale(1.05);
-    box-shadow:
-        0 7px 18px rgba(0, 0, 0, 0.26),
-        var(--shadow);
 }
 
 .thumb:hover .thumb__preview {
@@ -2058,6 +2659,7 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     font-size: 11px;
     color: var(--ink3);
     text-align: left;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

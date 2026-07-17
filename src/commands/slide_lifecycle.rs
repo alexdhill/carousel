@@ -185,6 +185,77 @@ impl Command for RemoveSlide {
     }
 }
 
+// ReorderSlide
+// Moves the slide `slide_id` to `new_index` in slide_order and the parallel
+// manifest.slides. `new_index` is the target slot in the FINAL array
+// (0..len-1), clamped to the last valid slot; the command performs the
+// remove-then-insert arithmetic internally so callers pass a plain landing
+// slot. No slide content changes, so it emits no patches and no dirty slide
+// targets — only manifest_dirty drives the manifest rewrite. Its inverse is a
+// ReorderSlide back to the original index.
+#[derive(Debug, Clone)]
+pub struct ReorderSlide {
+    pub slide_id: SlideId,
+    pub new_index: usize,
+}
+
+impl Command for ReorderSlide {
+    // apply
+    // Inputs: &self, &mut Deck.
+    // Output: CommandOutput with no patches, manifest_dirty=true, and an
+    // inverse ReorderSlide targeting the original index.
+    // Errors: SlideNotFound when slide_id is absent from slide_order.
+    // Dataflow: locate source index -> clamp target -> move within
+    // slide_order -> move the manifest entry (located by id) -> build inverse.
+    fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
+        assert!(!self.slide_id.is_empty(), "ReorderSlide: slide id is empty");
+        let from: usize = deck
+            .slide_order
+            .iter()
+            .position(|id| id == &self.slide_id)
+            .ok_or_else(|| CommandError::SlideNotFound(self.slide_id.clone()))?;
+        let last: usize = deck.slide_order.len().saturating_sub(1);
+        let to: usize = self.new_index.min(last);
+        assert_ne!(from, to, "ReorderSlide: source and target index are equal");
+
+        let moved_id: SlideId = deck.slide_order.remove(from);
+        deck.slide_order.insert(to, moved_id);
+
+        // Manifest order mirrors slide_order, but locate + clamp defensively
+        // rather than assuming the indices line up.
+        let manifest_last: usize = deck.manifest.slides.len().saturating_sub(1);
+        let manifest_from: usize = deck
+            .manifest
+            .slides
+            .iter()
+            .position(|e| e.id == self.slide_id)
+            .unwrap_or(from.min(manifest_last));
+        let manifest_to: usize = to.min(manifest_last);
+        let moved_entry: SlideEntry = deck.manifest.slides.remove(manifest_from);
+        deck.manifest.slides.insert(manifest_to, moved_entry);
+        deck.manifest_dirty = true;
+
+        Ok(CommandOutput {
+            patches: Vec::new(),
+            inverse: Box::new(ReorderSlide {
+                slide_id: self.slide_id.clone(),
+                new_index: from,
+            }),
+            dirty_targets: Vec::new(),
+            manifest_dirty: true,
+            warnings: Vec::new(),
+        })
+    }
+
+    fn label(&self) -> &'static str {
+        "Reorder Slide"
+    }
+
+    fn affects_slide_list(&self) -> bool {
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -394,5 +465,80 @@ mod tests {
         out.inverse.apply(&mut deck).unwrap();
         assert_eq!(deck.slide_order, order_before);
         assert_eq!(deck.slide_order[1], "s_b");
+    }
+
+    fn three_slide_deck() -> Deck {
+        let mut deck = Deck::sample();
+        InsertSlide {
+            position: 1,
+            slide: blank_slide("s_b"),
+            manifest_entry: entry_for("s_b"),
+        }
+        .apply(&mut deck)
+        .unwrap();
+        InsertSlide {
+            position: 2,
+            slide: blank_slide("s_c"),
+            manifest_entry: entry_for("s_c"),
+        }
+        .apply(&mut deck)
+        .unwrap();
+        deck
+    }
+
+    #[test]
+    fn reorder_moves_slide_forward_in_order_and_manifest() {
+        let mut deck = three_slide_deck();
+        let first: SlideId = deck.slide_order[0].clone();
+        let out = ReorderSlide {
+            slide_id: first.clone(),
+            new_index: 2,
+        }
+        .apply(&mut deck)
+        .unwrap();
+        assert_eq!(deck.slide_order[2], first);
+        assert_eq!(deck.manifest.slides[2].id, first);
+        assert!(out.manifest_dirty);
+        assert!(out.patches.is_empty());
+    }
+
+    #[test]
+    fn reorder_clamps_out_of_range_index_to_last() {
+        let mut deck = three_slide_deck();
+        let first: SlideId = deck.slide_order[0].clone();
+        ReorderSlide {
+            slide_id: first.clone(),
+            new_index: 999,
+        }
+        .apply(&mut deck)
+        .unwrap();
+        assert_eq!(deck.slide_order.last().cloned(), Some(first));
+    }
+
+    #[test]
+    fn reorder_missing_slide_errors() {
+        let mut deck = three_slide_deck();
+        let err = ReorderSlide {
+            slide_id: "ghost".into(),
+            new_index: 0,
+        }
+        .apply(&mut deck)
+        .unwrap_err();
+        assert!(matches!(err, CommandError::SlideNotFound(_)));
+    }
+
+    #[test]
+    fn reorder_then_inverse_restores_original_order() {
+        let mut deck = three_slide_deck();
+        let before = deck.slide_order.clone();
+        let last: SlideId = deck.slide_order[2].clone();
+        let out = ReorderSlide {
+            slide_id: last,
+            new_index: 0,
+        }
+        .apply(&mut deck)
+        .unwrap();
+        out.inverse.apply(&mut deck).unwrap();
+        assert_eq!(deck.slide_order, before);
     }
 }

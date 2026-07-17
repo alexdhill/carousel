@@ -1,3 +1,4 @@
+mod agent;
 mod app;
 mod bundle;
 mod commands;
@@ -74,6 +75,9 @@ enum UserEvent {
     // channel; the main thread drains it and either sends the landing data,
     // builds the editor, or exits.
     LandingIpcReceived,
+    // Agent worker thread posts agent events (stream chunks, fs requests, etc.)
+    // to the main loop via the EventLoopProxy.
+    AgentEvent(crate::agent::AgentEvent),
 }
 
 // ChromeJob
@@ -457,6 +461,7 @@ fn build_editor(
     request_present_close: Box<dyn Fn()>,
     dispatch_pdf_job: Box<dyn Fn(app::PdfJob)>,
     dispatch_chromium_download: Box<dyn Fn()>,
+    agent_sink: std::sync::Arc<dyn Fn(crate::agent::AgentEvent) + Send + Sync>,
     focus_title: bool,
 ) -> Result<(Window, ApplicationCore), Box<dyn std::error::Error>> {
     let window = WindowBuilder::new()
@@ -501,6 +506,7 @@ fn build_editor(
         request_present_close,
         dispatch_pdf_job,
         dispatch_chromium_download,
+        agent_sink,
         focus_title,
     );
     Ok((window, app))
@@ -692,6 +698,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let io_thread: IoThread = IoThread::spawn(io_tx, io_wake)?;
 
+    // Agent event sink: posts agent events from the worker thread into the
+    // main event loop via the proxy.
+    let agent_sink: std::sync::Arc<dyn Fn(crate::agent::AgentEvent) + Send + Sync> = {
+        let p = proxy_for_app.clone();
+        std::sync::Arc::new(move |ev| {
+            let _ = p.send_event(UserEvent::AgentEvent(ev));
+        })
+    };
+
     // Editor ingredients, moved into build_editor on the first Open.
     let mut schedule_flush_opt: Option<Box<dyn Fn()>> = Some(schedule_flush);
     let mut io_thread_opt: Option<IoThread> = Some(io_thread);
@@ -700,6 +715,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut dispatch_pdf_job_opt: Option<Box<dyn Fn(app::PdfJob)>> = Some(dispatch_pdf_job);
     let mut dispatch_chromium_download_opt: Option<Box<dyn Fn()>> =
         Some(dispatch_chromium_download);
+    let mut agent_sink_opt: Option<std::sync::Arc<dyn Fn(crate::agent::AgentEvent) + Send + Sync>> =
+        Some(agent_sink);
     let mut app: Option<ApplicationCore> = None;
     let mut editor_window: Option<Window> = None;
 
@@ -843,6 +860,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     Some(rpc),
                                     Some(dpj),
                                     Some(dcd),
+                                    Some(as_),
                                 ) = (
                                     schedule_flush_opt.take(),
                                     io_thread_opt.take(),
@@ -850,6 +868,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     request_present_close_opt.take(),
                                     dispatch_pdf_job_opt.take(),
                                     dispatch_chromium_download_opt.take(),
+                                    agent_sink_opt.take(),
                                 ) {
                                     match build_editor(
                                         target,
@@ -862,6 +881,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         rpc,
                                         dpj,
                                         dcd,
+                                        as_,
                                         focus_title,
                                     ) {
                                         Ok((win, mut a)) => {
@@ -879,6 +899,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     }
+                }
+            }
+            Event::UserEvent(UserEvent::AgentEvent(ev)) => {
+                if let Some(app) = app.as_mut()
+                    && let Err(e) = app.handle_agent_event(ev)
+                {
+                    error!("agent event failed: {}", e);
                 }
             }
             // macOS delivers Finder double-clicks / "Open with" as file URLs

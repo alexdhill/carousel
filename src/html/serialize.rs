@@ -98,6 +98,21 @@ pub struct RenderCtx {
 pub struct RenderOpts {
     pub ctx: Option<RenderCtx>,
     pub hide_placeholders: bool,
+    // Detail floor for scaled-down renders (thumbnails/previews): elements whose
+    // larger side, in slide units, is below this are omitted — invisible at
+    // thumbnail scale, so skipping them cuts DOM for no visible loss. Groups drop
+    // their whole subtree. 0.0 (default) renders everything, so full-size mounts
+    // are unaffected.
+    pub min_element_size: f64,
+}
+
+// below_min_size
+// Output: true when the node is smaller than the render's detail floor and must
+// be skipped. False whenever the floor is disabled (<= 0.0), so full renders
+// keep every element.
+fn below_min_size(node: &ElementNode, opts: &RenderOpts) -> bool {
+    opts.min_element_size > 0.0
+        && node.geometry.width.max(node.geometry.height) < opts.min_element_size
 }
 
 // resolve_tokens
@@ -287,6 +302,9 @@ pub fn serialize_slide_themed(
         if opts.hide_placeholders && child.placeholder {
             continue;
         }
+        if below_min_size(child, opts) {
+            continue;
+        }
         write_node(child, Some(idx as i32), &anim, opts, &mut out);
     }
     out.push_str("</div></section>");
@@ -461,6 +479,9 @@ fn write_content(node: &ElementNode, anim: &AnimMap, opts: &RenderOpts, out: &mu
         ElementContent::Group => {
             for (idx, child) in node.children.iter().enumerate() {
                 if opts.hide_placeholders && child.placeholder {
+                    continue;
+                }
+                if below_min_size(child, opts) {
                     continue;
                 }
                 write_node(child, Some(idx as i32), anim, opts, out);
@@ -882,6 +903,45 @@ mod tests {
         assert!(html.contains(r#"data-element-id="c1""#));
     }
 
+    fn sized(id: &str, w: f64, h: f64) -> ElementNode {
+        let mut n = text_element(id, id);
+        n.geometry = Geometry {
+            width: w,
+            height: h,
+            ..Default::default()
+        };
+        n
+    }
+
+    #[test]
+    fn min_element_size_drops_small_keeps_large() {
+        use crate::deck::slide::SlideNode;
+        let root = group_element(
+            "rt",
+            vec![sized("big", 200.0, 200.0), sized("tiny", 10.0, 10.0)],
+        );
+        let slide = SlideNode::new("s".into(), "title".into(), root);
+        let opts = RenderOpts {
+            min_element_size: 40.0,
+            ..Default::default()
+        };
+        let html = serialize_slide_themed(&slide, None, None, &opts);
+        assert!(
+            html.contains(r#"data-element-id="big""#),
+            "large element kept"
+        );
+        assert!(
+            !html.contains(r#"data-element-id="tiny""#),
+            "small element dropped"
+        );
+        // Default (0.0) keeps everything.
+        let all = serialize_slide(&slide);
+        assert!(
+            all.contains(r#"data-element-id="tiny""#),
+            "floor off keeps small"
+        );
+    }
+
     #[test]
     fn serialize_panics_on_inconsistent_element() {
         let mut n = text_element("a", "x");
@@ -1002,6 +1062,7 @@ mod tests {
                 date: "2026-07-08".into(),
             }),
             hide_placeholders: false,
+            min_element_size: 0.0,
         };
         let html = serialize_slide_themed(&slide, None, None, &opts);
         assert!(html.contains(">Slide 4<"), "value shown: {html}");
@@ -1042,6 +1103,7 @@ mod tests {
             &RenderOpts {
                 ctx: None,
                 hide_placeholders: true,
+                min_element_size: 0.0,
             },
         );
         assert!(

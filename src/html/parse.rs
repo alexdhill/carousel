@@ -450,6 +450,41 @@ fn parse_element_children(parent: &NodeRef) -> Result<Vec<ElementNode>, ParseErr
     Ok(out)
 }
 
+// parse_slide_children_lenient
+// Inputs: HTML for a slide the agent wrote back — a full `section.slide` (its
+// `div.slide__content` children are the elements), or bare element tags.
+// Output: (parsed children, count skipped). Unlike parse_slide_fragment this
+// never fails: a child that does not parse (bad/missing data-* attributes) is
+// dropped and counted, so one malformed element never discards the whole slide.
+// Control flow: locate the content container (slide__content, else body, else
+// the document), then parse each direct child element, tallying failures.
+pub fn parse_slide_children_lenient(html: &str) -> (Vec<ElementNode>, usize) {
+    use kuchikiki::traits::*;
+    assert!(
+        html.len() < 10_000_000,
+        "parse_slide_children_lenient: HTML too large"
+    );
+    let doc: NodeRef = kuchikiki::parse_html().one(html.to_string());
+    let container: NodeRef = doc
+        .select_first("div.slide__content")
+        .ok()
+        .map(|r| r.as_node().clone())
+        .or_else(|| doc.select_first("body").ok().map(|r| r.as_node().clone()))
+        .unwrap_or(doc);
+    let mut out: Vec<ElementNode> = Vec::new();
+    let mut skipped: usize = 0;
+    for child in container.children() {
+        if child.as_element().is_none() {
+            continue;
+        }
+        match parse_node(&child) {
+            Ok(el) => out.push(el),
+            Err(_) => skipped += 1,
+        }
+    }
+    (out, skipped)
+}
+
 fn extract_text(node: &NodeRef) -> String {
     let mut out: String = String::new();
     for child in node.children() {

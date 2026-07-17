@@ -36,6 +36,12 @@ const THUMB_JPEG_QUALITY: u8 = 72;
 // else leave the reference blank rather than bloat the landing payload.
 const THUMB_HARD_CAP: usize = 12 * 1024 * 1024;
 
+// Detail floor for the thumbnail render, as a fraction of the slide's larger
+// dimension. Cards render ~180px wide against a ~1920px slide (~0.09 scale), so
+// an element under ~2.5% of the slide is a few pixels on the card — invisible
+// detail worth dropping from the DOM.
+const THUMB_MIN_ELEMENT_FRAC: f64 = 0.025;
+
 // build_thumb
 // Input: a deck bundle path.
 // Output: Some(ThumbData) rendering the deck's first slide, or None when the
@@ -50,6 +56,8 @@ pub fn build_thumb(path: &Path) -> Option<ThumbData> {
     assert!(!deck.slide_order.is_empty(), "slide_order lost first id");
 
     let (fill, img) = deck.effective_slide_bg(slide);
+    let dims = &deck.manifest.dimensions;
+    let long_edge: f64 = dims.width.max(dims.height) as f64;
     let opts: crate::html::serialize::RenderOpts = crate::html::serialize::RenderOpts {
         ctx: Some(crate::html::serialize::RenderCtx {
             number: 1,
@@ -57,6 +65,7 @@ pub fn build_thumb(path: &Path) -> Option<ThumbData> {
             date: crate::html::serialize::today_ymd(),
         }),
         hide_placeholders: true,
+        min_element_size: long_edge * THUMB_MIN_ELEMENT_FRAC,
     };
     let html: String = serialize_slide_themed(slide, fill.as_deref(), img.as_deref(), &opts);
     let css: String = format!(

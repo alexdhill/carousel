@@ -83,6 +83,7 @@ pub fn build_html_export(deck: &Deck) -> Result<ExportBundle, serde_json::Error>
                 date: date.clone(),
             }),
             hide_placeholders: true,
+            min_element_size: 0.0,
         };
         let html: String = serialize_slide_themed(slide, fill.as_deref(), img.as_deref(), &opts);
         slides.push(SlideData {
