@@ -77,7 +77,7 @@ pub use set_element_id::SetElementId;
 pub use set_embed::SetEmbedHtml;
 pub use set_morph_transition::SetMorphTransition;
 pub use set_text::SetTextContent;
-pub use slide_lifecycle::{InsertSlide, RemoveSlide};
+pub use slide_lifecycle::{InsertSlide, RemoveSlide, ReorderSlide};
 pub use slide_metadata::{SetDeckTitle, SetSlideTitle};
 pub use slide_style::{
     SetSlideBackground, SetSlideBackgroundImage, SetSlideLayout, SetSlideNotes, SetSlideTransition,

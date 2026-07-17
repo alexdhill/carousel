@@ -22,7 +22,7 @@ use crate::commands::{
     Command, CommandDispatcher, CompositeCommand, DeleteTableColumn, DeleteTableRow, EditorMode,
     ElementTransform, FileAction, GeometryProperty, GroupElements, InsertAnimation, InsertElement,
     InsertLayout, InsertSlide, InsertTableColumn, InsertTableRow, InterpretResult, MoveElement,
-    RemoveAnimation, RemoveElementCommand, RemoveInlineStyle, RemoveSlide, RenameElement,
+    RemoveAnimation, RemoveElementCommand, RemoveInlineStyle, RemoveSlide, RenameElement, ReorderSlide,
     ReplaceSlideContent, ReparentElement, ResizeElement, SetAnimationProperty, SetCellStyles, SetCellText, SetDeckTitle,
     SetElementId, SetElementsTransform, SetEmbedHtml, SetGeometryProperty, SetGlobalsCss,
     SetGroupLayout, SetGroupScale, SetInlineStyle, SetLayoutBackground, SetLayoutBackgroundImage,
@@ -1367,6 +1367,26 @@ impl ApplicationCore {
                 Some(cmd) => InterpretResult::Command(cmd),
                 None => InterpretResult::Nothing,
             },
+            InteractionEvent::SlideThumbnailReordered {
+                slide_id,
+                new_index,
+            } => {
+                let order: &[SlideId] = &self.dispatcher.deck().slide_order;
+                match order.iter().position(|id| id == &slide_id) {
+                    Some(from) => {
+                        let to: usize = new_index.min(order.len().saturating_sub(1));
+                        if from == to {
+                            InterpretResult::Nothing
+                        } else {
+                            InterpretResult::Command(Box::new(ReorderSlide {
+                                slide_id,
+                                new_index: to,
+                            }))
+                        }
+                    }
+                    None => InterpretResult::Nothing,
+                }
+            }
             // ---- Stage 11: layout editor ----
             InteractionEvent::SetEditorMode { mode } => match mode.as_str() {
                 "slide" => InterpretResult::SetEditorMode(EditorMode::Slide),

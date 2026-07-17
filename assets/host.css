@@ -2542,6 +2542,7 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 }
 
 .thumbs-strip {
+    position: relative;
     flex: 1 1 auto;
     min-height: 0;
     display: flex;
@@ -2553,9 +2554,42 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     overflow-y: hidden;
 }
 
+/* Reorder drag: live insertion marker snapped into the gap between slides,
+   and a dimmed source thumbnail while it is being dragged. */
+.thumb-drop-line {
+    display: none;
+    position: absolute;
+    top: 12px;
+    height: 82px;
+    width: 2px;
+    border-radius: 1px;
+    background: var(--acc);
+    pointer-events: none;
+    z-index: 5;
+}
+
+.thumb.is-dragging .thumb__preview {
+    opacity: 0.4;
+}
+
+/* Off-screen node snapshotted as the drag ghost: a single 160×90 slide. */
+.thumb-drag-ghost {
+    position: fixed;
+    top: 0;
+    left: -10000px;
+    width: 160px;
+    height: 90px;
+    overflow: hidden;
+    background: #fff;
+    border: 2px solid var(--acc);
+    border-radius: var(--r-field);
+    pointer-events: none;
+}
+
 .thumb {
     position: relative;
     flex: 0 0 auto;
+    width: 166px;
     display: flex;
     flex-direction: column;
     align-items: stretch;
@@ -2569,7 +2603,7 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 }
 
 .thumb__preview {
-    width: 160px;
+    width: 166px;
     height: 90px;
     background: #fff;
     border: 2px solid var(--line);
@@ -2581,15 +2615,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
         transform 0.1s,
         box-shadow 0.1s,
         border-color 0.1s;
-}
-
-/* Current slide: slightly larger with a more pronounced drop shadow. This is
-   the always-on "you are here" cue and carries no accent. */
-.thumb[aria-current="true"] .thumb__preview {
-    transform: scale(1.05);
-    box-shadow:
-        0 7px 18px rgba(0, 0, 0, 0.26),
-        var(--shadow);
 }
 
 .thumb:hover .thumb__preview {
@@ -2634,6 +2659,7 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     font-size: 11px;
     color: var(--ink3);
     text-align: left;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

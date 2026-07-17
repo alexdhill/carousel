@@ -529,6 +529,15 @@ pub enum InteractionEvent {
         slide_id: SlideId,
         new_title: String,
     },
+    // SlideThumbnailReordered
+    // Drag-drop a slide thumbnail to a new slot. `new_index` is the target
+    // index in the FINAL slide_order (0-based). The interpret layer drops
+    // no-op moves (unknown id / same slot) and clamps before dispatching a
+    // ReorderSlide command.
+    SlideThumbnailReordered {
+        slide_id: SlideId,
+        new_index: usize,
+    },
     // ElementIdEditRequested
     // Double-click an object-panel row to rename the element's id.
     // `new_id` is the raw text the user typed; the Rust side sanitizes it
