@@ -122,7 +122,11 @@ impl AgentHandle {
     // Input: a request_id from an earlier PermissionRequest event, and a boolean
     // allow flag. Output: AppResult<()> after queueing a permission response.
     // Errors: channel closed, invalid input (empty request_id triggers assert).
-    pub fn send_permission_reply(&self, request_id: &str, allow: bool) -> crate::error::AppResult<()> {
+    pub fn send_permission_reply(
+        &self,
+        request_id: &str,
+        allow: bool,
+    ) -> crate::error::AppResult<()> {
         assert!(!request_id.is_empty(), "request_id must not be empty");
         let option_id: &str = if allow { "allow" } else { "reject" };
         let result: serde_json::Value = serde_json::json!({
@@ -132,7 +136,8 @@ impl AgentHandle {
             }
         });
         let line: String = __frame_response(request_id, result);
-        self.writer_tx.send(line)
+        self.writer_tx
+            .send(line)
             .map_err(|_| crate::error::AppError::IpcChannelClosed)?;
         Ok(())
     }
@@ -141,10 +146,15 @@ impl AgentHandle {
     // Input: a request_id and an arbitrary serde_json Value result.
     // Output: AppResult<()> after queueing the response. Errors: channel closed,
     // invalid input (empty request_id triggers assert).
-    pub fn send_fs_response(&self, request_id: &str, result: serde_json::Value) -> crate::error::AppResult<()> {
+    pub fn send_fs_response(
+        &self,
+        request_id: &str,
+        result: serde_json::Value,
+    ) -> crate::error::AppResult<()> {
         assert!(!request_id.is_empty(), "request_id must not be empty");
         let line: String = __frame_response(request_id, result);
-        self.writer_tx.send(line)
+        self.writer_tx
+            .send(line)
             .map_err(|_| crate::error::AppError::IpcChannelClosed)?;
         Ok(())
     }
@@ -164,8 +174,10 @@ impl AgentHandle {
             "jsonrpc": "2.0",
             "id": request_id,
             "error": error_obj
-        })).unwrap_or_default();
-        self.writer_tx.send(line)
+        }))
+        .unwrap_or_default();
+        self.writer_tx
+            .send(line)
             .map_err(|_| crate::error::AppError::IpcChannelClosed)?;
         Ok(())
     }
@@ -178,16 +190,14 @@ impl AgentHandle {
             .session_id
             .lock()
             .map_err(|_| crate::error::AppError::IpcChannelClosed)?;
-        let session_id_str: String = session_id_lock
-            .as_ref()
-            .cloned()
-            .unwrap_or_default();
+        let session_id_str: String = session_id_lock.as_ref().cloned().unwrap_or_default();
         drop(session_id_lock);
         let params: serde_json::Value = serde_json::json!({
             "sessionId": session_id_str
         });
         let line: String = __frame_notification("session/cancel", params);
-        self.writer_tx.send(line)
+        self.writer_tx
+            .send(line)
             .map_err(|_| crate::error::AppError::IpcChannelClosed)?;
         Ok(())
     }
@@ -224,9 +234,7 @@ where
         .stderr(Stdio::piped())
         .current_dir(cwd)
         .spawn()
-        .map_err(|e| {
-            crate::error::AppError::Agent(format!("spawn '{}': {}", config.command, e))
-        })?;
+        .map_err(|e| crate::error::AppError::Agent(format!("spawn '{}': {}", config.command, e)))?;
 
     let stdout: ChildStdout = child
         .stdout
@@ -439,7 +447,8 @@ fn __frame_request(id: u64, method: &str, params: serde_json::Value) -> String {
         "id": id,
         "method": method,
         "params": params
-    })).unwrap_or_default()
+    }))
+    .unwrap_or_default()
 }
 
 // __frame_prompt
@@ -462,7 +471,8 @@ fn __frame_notification(method: &str, params: serde_json::Value) -> String {
         "jsonrpc": "2.0",
         "method": method,
         "params": params
-    })).unwrap_or_default()
+    }))
+    .unwrap_or_default()
 }
 
 // __frame_response
@@ -473,7 +483,8 @@ fn __frame_response(id_str: &str, result: serde_json::Value) -> String {
         "jsonrpc": "2.0",
         "id": id_str,
         "result": result
-    })).unwrap_or_default()
+    }))
+    .unwrap_or_default()
 }
 
 // __classify_session_update
@@ -563,20 +574,26 @@ fn __classify_message(msg: serde_json::Value) -> Option<AgentEvent> {
 
         match method_str {
             Some("fs/read_text_file") => {
-                let path: String = msg.get("params")
+                let path: String = msg
+                    .get("params")
                     .and_then(|p| p.get("path"))
                     .and_then(|p| p.as_str())
                     .unwrap_or("")
                     .to_string();
-                return Some(AgentEvent::FsRead { request_id: id_str, path });
+                return Some(AgentEvent::FsRead {
+                    request_id: id_str,
+                    path,
+                });
             }
             Some("fs/write_text_file") => {
-                let path: String = msg.get("params")
+                let path: String = msg
+                    .get("params")
                     .and_then(|p| p.get("path"))
                     .and_then(|p| p.as_str())
                     .unwrap_or("")
                     .to_string();
-                let contents: String = msg.get("params")
+                let contents: String = msg
+                    .get("params")
                     .and_then(|p| p.get("content"))
                     .and_then(|c| c.as_str())
                     .unwrap_or("")
@@ -588,12 +605,14 @@ fn __classify_message(msg: serde_json::Value) -> Option<AgentEvent> {
                 });
             }
             Some("session/request_permission") => {
-                let path: String = msg.get("params")
+                let path: String = msg
+                    .get("params")
                     .and_then(|p| p.get("path"))
                     .and_then(|p| p.as_str())
                     .unwrap_or("")
                     .to_string();
-                let summary: String = msg.get("params")
+                let summary: String = msg
+                    .get("params")
                     .and_then(|p| p.get("toolCall"))
                     .and_then(|tc| tc.get("title"))
                     .and_then(|t| t.as_str())
@@ -668,8 +687,8 @@ mod tests {
             "protocolVersion": 1
         });
         let line: String = __frame_request(1, "initialize", params);
-        let parsed: serde_json::Value = serde_json::from_str(&line)
-            .expect("line must be valid json");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&line).expect("line must be valid json");
         assert_eq!(parsed["jsonrpc"], "2.0");
         assert_eq!(parsed["id"], 1);
         assert_eq!(parsed["method"], "initialize");
@@ -689,7 +708,11 @@ mod tests {
         });
         let evt: Option<AgentEvent> = __classify_message(msg);
         match evt {
-            Some(AgentEvent::FsWrite { request_id, path, contents }) => {
+            Some(AgentEvent::FsWrite {
+                request_id,
+                path,
+                contents,
+            }) => {
                 assert_eq!(request_id, "req123");
                 assert_eq!(path, "/deck/slides/slide1.html");
                 assert_eq!(contents, "<div>test</div>");
@@ -714,7 +737,11 @@ mod tests {
         });
         let evt: Option<AgentEvent> = __classify_message(msg);
         match evt {
-            Some(AgentEvent::StreamChunk { role, text, final_chunk }) => {
+            Some(AgentEvent::StreamChunk {
+                role,
+                text,
+                final_chunk,
+            }) => {
                 assert_eq!(role, "assistant");
                 assert_eq!(text, "hello world");
                 assert!(!final_chunk);

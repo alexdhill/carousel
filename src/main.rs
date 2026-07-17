@@ -715,7 +715,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut dispatch_pdf_job_opt: Option<Box<dyn Fn(app::PdfJob)>> = Some(dispatch_pdf_job);
     let mut dispatch_chromium_download_opt: Option<Box<dyn Fn()>> =
         Some(dispatch_chromium_download);
-    let mut agent_sink_opt: Option<std::sync::Arc<dyn Fn(crate::agent::AgentEvent) + Send + Sync>> = Some(agent_sink);
+    let mut agent_sink_opt: Option<std::sync::Arc<dyn Fn(crate::agent::AgentEvent) + Send + Sync>> =
+        Some(agent_sink);
     let mut app: Option<ApplicationCore> = None;
     let mut editor_window: Option<Window> = None;
 

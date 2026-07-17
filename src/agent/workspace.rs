@@ -6,11 +6,11 @@
 // back into the Deck at turn end.
 
 use crate::agent::vfs::{parse_slide_write, render_index};
-use crate::deck::element::ElementNode;
 use crate::deck::Deck;
+use crate::deck::element::ElementNode;
 use crate::html::serialize::serialize_slide;
-use std::fmt::Write as _;
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -113,7 +113,13 @@ impl Workspace {
     // Input: &mut self, the slides dir, a filename, whether the file is new, and
     // the output sink. Output: none; on a clean parse pushes a SlideChange and
     // advances the baseline, else logs and leaves the baseline untouched.
-    fn __ingest_file(&mut self, slides_dir: &Path, name: &str, is_new: bool, out: &mut Vec<SlideChange>) {
+    fn __ingest_file(
+        &mut self,
+        slides_dir: &Path,
+        name: &str,
+        is_new: bool,
+        out: &mut Vec<SlideChange>,
+    ) {
         assert!(!name.is_empty(), "__ingest_file: empty filename");
         let content: String = match fs::read_to_string(slides_dir.join(name)) {
             Ok(c) => c,
@@ -222,7 +228,12 @@ mod tests {
         let root: &Path = ws.path();
         assert!(root.join("deck").join("index.md").exists());
         assert!(root.join("deck").join("format.md").exists());
-        assert!(root.join("deck").join("slides").join("slide1.html").exists());
+        assert!(
+            root.join("deck")
+                .join("slides")
+                .join("slide1.html")
+                .exists()
+        );
     }
 
     #[test]
@@ -246,8 +257,7 @@ mod tests {
         let mut ws: Workspace = Workspace::create(&deck).unwrap();
         let slides_dir: PathBuf = ws.path().join("deck").join("slides");
         let existing: usize = deck.slide_order.len();
-        let template: String =
-            fs::read_to_string(slides_dir.join("slide1.html")).unwrap();
+        let template: String = fs::read_to_string(slides_dir.join("slide1.html")).unwrap();
         let new_name: String = format!("slide{}.html", existing + 1);
         fs::write(slides_dir.join(&new_name), &template).unwrap();
         let changes: Vec<SlideChange> = ws.collect_changes();

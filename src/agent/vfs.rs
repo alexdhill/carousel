@@ -2,10 +2,10 @@
 // Translates between the Deck and a flat HTML file view the agent reads/writes.
 // Parse-only: never mutates the Deck.
 
-use crate::deck::{Deck, SlideId};
 use crate::deck::element::ElementNode;
-use crate::html::serialize::serialize_slide;
+use crate::deck::{Deck, SlideId};
 use crate::html::parse;
+use crate::html::serialize::serialize_slide;
 use std::fmt;
 
 // SlideWrite
@@ -41,7 +41,10 @@ impl fmt::Display for VfsError {
 // Errors: none.
 // Dataflow: iterate slide_order, fetch each slide, format as markdown line.
 pub fn render_index(deck: &Deck) -> String {
-    assert!(!deck.slide_order.is_empty() || deck.slides.is_empty(), "slide_order must align with slides");
+    assert!(
+        !deck.slide_order.is_empty() || deck.slides.is_empty(),
+        "slide_order must align with slides"
+    );
 
     let mut out = String::new();
     out.push_str("# Deck slides (");
@@ -50,7 +53,11 @@ pub fn render_index(deck: &Deck) -> String {
 
     for (index, slide_id) in deck.slide_order.iter().enumerate() {
         if let Some(slide) = deck.slides.get(slide_id) {
-            let title = slide.metadata.title.clone().unwrap_or_else(|| "(untitled)".to_string());
+            let title = slide
+                .metadata
+                .title
+                .clone()
+                .unwrap_or_else(|| "(untitled)".to_string());
             let element_count = slide.root.children.len();
             out.push_str("- /deck/slides/slide");
             out.push_str(&(index + 1).to_string());
@@ -146,8 +153,7 @@ pub fn parse_slide_write(path: &str, contents: &str) -> Result<SlideWrite, VfsEr
         return Err(VfsError::UnwritablePath);
     }
 
-    let slide_id = slide_id_from_path(path)
-        .ok_or(VfsError::UnwritablePath)?;
+    let slide_id = slide_id_from_path(path).ok_or(VfsError::UnwritablePath)?;
 
     let (new_children, skipped) = parse::parse_slide_children_lenient(contents);
 
@@ -306,4 +312,3 @@ mod tests {
         assert!(result.is_some());
     }
 }
-

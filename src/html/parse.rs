@@ -460,7 +460,10 @@ fn parse_element_children(parent: &NodeRef) -> Result<Vec<ElementNode>, ParseErr
 // the document), then parse each direct child element, tallying failures.
 pub fn parse_slide_children_lenient(html: &str) -> (Vec<ElementNode>, usize) {
     use kuchikiki::traits::*;
-    assert!(html.len() < 10_000_000, "parse_slide_children_lenient: HTML too large");
+    assert!(
+        html.len() < 10_000_000,
+        "parse_slide_children_lenient: HTML too large"
+    );
     let doc: NodeRef = kuchikiki::parse_html().one(html.to_string());
     let container: NodeRef = doc
         .select_first("div.slide__content")

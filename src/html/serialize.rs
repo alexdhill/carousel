@@ -916,18 +916,30 @@ mod tests {
     #[test]
     fn min_element_size_drops_small_keeps_large() {
         use crate::deck::slide::SlideNode;
-        let root = group_element("rt", vec![sized("big", 200.0, 200.0), sized("tiny", 10.0, 10.0)]);
+        let root = group_element(
+            "rt",
+            vec![sized("big", 200.0, 200.0), sized("tiny", 10.0, 10.0)],
+        );
         let slide = SlideNode::new("s".into(), "title".into(), root);
         let opts = RenderOpts {
             min_element_size: 40.0,
             ..Default::default()
         };
         let html = serialize_slide_themed(&slide, None, None, &opts);
-        assert!(html.contains(r#"data-element-id="big""#), "large element kept");
-        assert!(!html.contains(r#"data-element-id="tiny""#), "small element dropped");
+        assert!(
+            html.contains(r#"data-element-id="big""#),
+            "large element kept"
+        );
+        assert!(
+            !html.contains(r#"data-element-id="tiny""#),
+            "small element dropped"
+        );
         // Default (0.0) keeps everything.
         let all = serialize_slide(&slide);
-        assert!(all.contains(r#"data-element-id="tiny""#), "floor off keeps small");
+        assert!(
+            all.contains(r#"data-element-id="tiny""#),
+            "floor off keeps small"
+        );
     }
 
     #[test]
@@ -1050,7 +1062,7 @@ mod tests {
                 date: "2026-07-08".into(),
             }),
             hide_placeholders: false,
-        min_element_size: 0.0,
+            min_element_size: 0.0,
         };
         let html = serialize_slide_themed(&slide, None, None, &opts);
         assert!(html.contains(">Slide 4<"), "value shown: {html}");
@@ -1091,7 +1103,7 @@ mod tests {
             &RenderOpts {
                 ctx: None,
                 hide_placeholders: true,
-            min_element_size: 0.0,
+                min_element_size: 0.0,
             },
         );
         assert!(

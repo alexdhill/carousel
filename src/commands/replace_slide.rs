@@ -38,7 +38,8 @@ impl Command for ReplaceSlideContent {
             "ReplaceSlideContent: new_children is empty"
         );
 
-        let canvas: &mut dyn Canvas = resolve_canvas_mut(deck, &CanvasTarget::Slide(self.slide_id.clone()))?;
+        let canvas: &mut dyn Canvas =
+            resolve_canvas_mut(deck, &CanvasTarget::Slide(self.slide_id.clone()))?;
 
         let old_children: Vec<ElementNode> = canvas.root().children.clone();
         let root_id: String = canvas.root().id.clone();

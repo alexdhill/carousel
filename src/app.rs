@@ -22,13 +22,14 @@ use crate::commands::{
     Command, CommandDispatcher, CompositeCommand, DeleteTableColumn, DeleteTableRow, EditorMode,
     ElementTransform, FileAction, GeometryProperty, GroupElements, InsertAnimation, InsertElement,
     InsertLayout, InsertSlide, InsertTableColumn, InsertTableRow, InterpretResult, MoveElement,
-    RemoveAnimation, RemoveElementCommand, RemoveInlineStyle, RemoveSlide, RenameElement, ReorderSlide,
-    ReplaceSlideContent, ReparentElement, ResizeElement, SetAnimationProperty, SetCellStyles, SetCellText, SetDeckTitle,
-    SetElementId, SetElementsTransform, SetEmbedHtml, SetGeometryProperty, SetGlobalsCss,
-    SetGroupLayout, SetGroupScale, SetInlineStyle, SetLayoutBackground, SetLayoutBackgroundImage,
-    SetLayoutName, SetMorphTransition, SetSlideBackground, SetSlideBackgroundImage, SetSlideLayout,
-    SetSlideNotes, SetSlideTitle, SetSlideTransition, SetTableHeaderColumns, SetTableHeaderRows,
-    SetTextContent, SwapTheme, TransactionSnapshot,
+    RemoveAnimation, RemoveElementCommand, RemoveInlineStyle, RemoveSlide, RenameElement,
+    ReorderSlide, ReparentElement, ReplaceSlideContent, ResizeElement, SetAnimationProperty,
+    SetCellStyles, SetCellText, SetDeckTitle, SetElementId, SetElementsTransform, SetEmbedHtml,
+    SetGeometryProperty, SetGlobalsCss, SetGroupLayout, SetGroupScale, SetInlineStyle,
+    SetLayoutBackground, SetLayoutBackgroundImage, SetLayoutName, SetMorphTransition,
+    SetSlideBackground, SetSlideBackgroundImage, SetSlideLayout, SetSlideNotes, SetSlideTitle,
+    SetSlideTransition, SetTableHeaderColumns, SetTableHeaderRows, SetTextContent, SwapTheme,
+    TransactionSnapshot,
 };
 use crate::deck::animation::{
     AnimationCategory, AnimationEffect, AnimationEntry, AnimationTiming, AnimationTrigger,
@@ -44,6 +45,7 @@ use crate::deck::style::{ColorRef, FontRef, Geometry, ImageStyle, Length, ShapeS
 use crate::deck::{Canvas, CanvasTarget, Deck, ElementId, LayoutId, ShapeGeometry, SlideId};
 use crate::error::{AppError, AppResult};
 use crate::html::serialize::{ANIMATION_KEYFRAMES_CSS, serialize_slide, serialize_slide_themed};
+use crate::ipc::agent::{AgentPanelState, AgentPermissionAsk, AgentStreamChunk, AgentToolNotice};
 use crate::ipc::bridge::WebviewSender;
 use crate::ipc::present::{PresentInbound, PresentInitPayload};
 use crate::ipc::{
@@ -52,7 +54,6 @@ use crate::ipc::{
     Patch, Point, SelectionState, Size, SlideAnimationEntry, SlideAnimationsData,
     SlideInspectorData, SlideInspectorLayout, SlideListData, SlideListEntry,
 };
-use crate::ipc::agent::{AgentPanelState, AgentPermissionAsk, AgentStreamChunk, AgentToolNotice};
 use crate::present::session::{PresentStep, PresentationSession};
 use base64::Engine;
 use std::collections::{BTreeMap, HashMap};
@@ -389,7 +390,9 @@ impl ApplicationCore {
                 command,
                 args,
             } => self.on_agent_add(name, command, args),
-            MessageKind::AgentPermissionReply { request_id, allow } => self.on_agent_permission_reply(request_id, allow),
+            MessageKind::AgentPermissionReply { request_id, allow } => {
+                self.on_agent_permission_reply(request_id, allow)
+            }
             other => {
                 warn!(
                     "unhandled message kind: {:?}",
@@ -572,7 +575,7 @@ impl ApplicationCore {
                         date: crate::html::serialize::today_ymd(),
                     }),
                     hide_placeholders: false,
-                min_element_size: 0.0,
+                    min_element_size: 0.0,
                 };
                 Some((
                     id.clone(),
@@ -2907,22 +2910,23 @@ private copy (~150 MB).",
                 info!("seeded default agent from installed claude-code-acp-rs");
             }
             let names: Vec<String> = crate::config::agent_names(&cfg);
-            self.sender.send(MessageKind::AgentListUpdate(
-                crate::ipc::agent::AgentList {
+            self.sender
+                .send(MessageKind::AgentListUpdate(crate::ipc::agent::AgentList {
                     agents: names.clone(),
-                }
-            ))?;
+                }))?;
             let error: Option<String> = if names.is_empty() {
-                Some("No agents configured. Install claude-code-acp-rs or add one via + Add agent.".to_string())
+                Some(
+                    "No agents configured. Install claude-code-acp-rs or add one via + Add agent."
+                        .to_string(),
+                )
             } else {
                 None
             };
-            self.sender.send(MessageKind::AgentPanelStateUpdate(
-                AgentPanelState {
+            self.sender
+                .send(MessageKind::AgentPanelStateUpdate(AgentPanelState {
                     running: false,
                     error,
-                }
-            ))?;
+                }))?;
         } else {
             if let Some(mut h) = self.agent.take() {
                 let _ = h.shutdown();
@@ -3001,7 +3005,7 @@ private copy (~150 MB).",
             crate::ipc::agent::AgentActivity {
                 phase: phase.into(),
                 label: label.into(),
-            }
+            },
         ))
     }
 
@@ -3009,11 +3013,15 @@ private copy (~150 MB).",
     // Inputs: a human-readable message. Output: Ok(()) after pushing an idle
     // panel state carrying the error. Errors: IPC send failures.
     fn send_agent_error(&self, message: &str) -> AppResult<()> {
-        assert!(!message.is_empty(), "send_agent_error called with empty message");
-        self.sender.send(MessageKind::AgentPanelStateUpdate(AgentPanelState {
-            running: false,
-            error: Some(message.to_string()),
-        }))
+        assert!(
+            !message.is_empty(),
+            "send_agent_error called with empty message"
+        );
+        self.sender
+            .send(MessageKind::AgentPanelStateUpdate(AgentPanelState {
+                running: false,
+                error: Some(message.to_string()),
+            }))
     }
 
     // on_agent_prompt
@@ -3025,16 +3033,18 @@ private copy (~150 MB).",
     // spawns/switches to the named agent (or reports an error and returns false),
     // on success send_prompt + running=true state and emit activity.
     fn on_agent_prompt(&mut self, text: String, agent: String) -> AppResult<()> {
-        let was_ready: bool = self.agent.is_some() && self.agent_name.as_deref() == Some(agent.as_str());
+        let was_ready: bool =
+            self.agent.is_some() && self.agent_name.as_deref() == Some(agent.as_str());
         if !self.ensure_agent(&agent)? {
             return Ok(());
         }
         if let Some(handle) = &self.agent {
             handle.send_prompt(&text)?;
-            self.sender.send(MessageKind::AgentPanelStateUpdate(AgentPanelState {
-                running: true,
-                error: None,
-            }))?;
+            self.sender
+                .send(MessageKind::AgentPanelStateUpdate(AgentPanelState {
+                    running: true,
+                    error: None,
+                }))?;
             if was_ready {
                 self.send_activity("thinking", "Thinking…")?;
             } else {
@@ -3065,9 +3075,10 @@ private copy (~150 MB).",
         if let Err(e) = crate::config::save(&cfg) {
             warn!("failed to save agent config: {}", e);
         }
-        self.sender.send(MessageKind::AgentListUpdate(crate::ipc::agent::AgentList {
-            agents: crate::config::agent_names(&cfg),
-        }))
+        self.sender
+            .send(MessageKind::AgentListUpdate(crate::ipc::agent::AgentList {
+                agents: crate::config::agent_names(&cfg),
+            }))
     }
 
     // on_agent_cancel
@@ -3100,24 +3111,23 @@ private copy (~150 MB).",
                         }
                     }
                     Ok(sw) => {
-                        let real_id: Option<SlideId> =
-                            crate::agent::vfs::resolve_slide_ref(self.dispatcher.deck(), &sw.slide_id);
+                        let real_id: Option<SlideId> = crate::agent::vfs::resolve_slide_ref(
+                            self.dispatcher.deck(),
+                            &sw.slide_id,
+                        );
                         let real_id = match real_id {
                             Some(id) => id,
                             None => {
                                 if let Some(agent) = &self.agent {
-                                    let _ = agent
-                                        .send_fs_error(&request_id, "unknown slide path");
+                                    let _ = agent.send_fs_error(&request_id, "unknown slide path");
                                 }
                                 return Ok(());
                             }
                         };
-                        self.dispatch_and_maybe_flush(Box::new(
-                            ReplaceSlideContent {
-                                slide_id: real_id,
-                                new_children: sw.new_children,
-                            }
-                        ));
+                        self.dispatch_and_maybe_flush(Box::new(ReplaceSlideContent {
+                            slide_id: real_id,
+                            new_children: sw.new_children,
+                        }));
                         if let Some(agent) = &self.agent {
                             let _ = agent.send_fs_response(&request_id, serde_json::Value::Null);
                         }
@@ -3151,7 +3161,8 @@ private copy (~150 MB).",
     // an existing slide's content (ReplaceSlideContent). Both are undoable. Then
     // rebroadcast the slide list and object tree once.
     fn __ingest_agent_changes(&mut self) -> AppResult<()> {
-        let changes: Vec<crate::agent::workspace::SlideChange> = match self.agent_workspace.as_mut() {
+        let changes: Vec<crate::agent::workspace::SlideChange> = match self.agent_workspace.as_mut()
+        {
             Some(ws) => ws.collect_changes(),
             None => return Ok(()),
         };
@@ -3204,21 +3215,23 @@ private copy (~150 MB).",
     fn __handle_agent_fs_read(&mut self, request_id: String, path: String) -> AppResult<()> {
         match crate::agent::vfs::resolve_read(self.dispatcher.deck(), &path) {
             Some(c) => {
-                let _ = self.agent.as_ref()
+                let _ = self
+                    .agent
+                    .as_ref()
                     .map(|a| a.send_fs_response(&request_id, serde_json::json!({"content": c})));
             }
             None => {
-                let _ = self.agent.as_ref()
+                let _ = self
+                    .agent
+                    .as_ref()
                     .map(|a| a.send_fs_error(&request_id, "no such path"));
             }
         }
-        self.sender.send(MessageKind::AgentTool(
-            AgentToolNotice {
-                kind: "read".to_string(),
-                slide_id: None,
-                summary: format!("read {}", path),
-            }
-        ))
+        self.sender.send(MessageKind::AgentTool(AgentToolNotice {
+            kind: "read".to_string(),
+            slide_id: None,
+            summary: format!("read {}", path),
+        }))
     }
 
     // handle_agent_event
@@ -3237,66 +3250,85 @@ private copy (~150 MB).",
             crate::agent::AgentEvent::Thought { text } => {
                 self.send_activity("thinking", "Thinking…")?;
                 self.sender.send(MessageKind::AgentThoughtUpdate(
-                    crate::ipc::agent::AgentThought { text }
+                    crate::ipc::agent::AgentThought { text },
                 ))?;
             }
-            crate::agent::AgentEvent::StreamChunk { role, text, final_chunk } => {
+            crate::agent::AgentEvent::StreamChunk {
+                role,
+                text,
+                final_chunk,
+            } => {
                 self.send_activity("streaming", "Responding…")?;
-                self.sender.send(MessageKind::AgentStream(
-                    AgentStreamChunk { role, text, final_chunk }
-                ))?;
+                self.sender
+                    .send(MessageKind::AgentStream(AgentStreamChunk {
+                        role,
+                        text,
+                        final_chunk,
+                    }))?;
             }
             crate::agent::AgentEvent::ToolStatus { id, title, status } => {
-                let label: String = if title.is_empty() { "Working…".to_string() } else { title.clone() };
+                let label: String = if title.is_empty() {
+                    "Working…".to_string()
+                } else {
+                    title.clone()
+                };
                 self.send_activity("tool", &label)?;
                 self.sender.send(MessageKind::AgentToolStatusUpdate(
-                    crate::ipc::agent::AgentToolStatus { id, title, status }
+                    crate::ipc::agent::AgentToolStatus { id, title, status },
                 ))?;
             }
             crate::agent::AgentEvent::FsRead { request_id, path } => {
                 self.send_activity("tool", "Reading slide")?;
                 self.__handle_agent_fs_read(request_id, path)?;
             }
-            crate::agent::AgentEvent::FsWrite { request_id, path, contents } => {
+            crate::agent::AgentEvent::FsWrite {
+                request_id,
+                path,
+                contents,
+            } => {
                 self.send_activity("tool", "Writing slide")?;
-                self.agent_pending.insert(request_id.clone(), (path.clone(), contents));
-                self.sender.send(MessageKind::AgentPermission(
-                    AgentPermissionAsk {
+                self.agent_pending
+                    .insert(request_id.clone(), (path.clone(), contents));
+                self.sender
+                    .send(MessageKind::AgentPermission(AgentPermissionAsk {
                         request_id,
-                        slide_id: crate::agent::vfs::slide_id_from_path(&path)
-                            .unwrap_or_default(),
+                        slide_id: crate::agent::vfs::slide_id_from_path(&path).unwrap_or_default(),
                         summary: format!("Agent wants to edit {}", path),
-                    }
-                ))?;
+                    }))?;
             }
-            crate::agent::AgentEvent::PermissionRequest { request_id, path: _path, summary } => {
+            crate::agent::AgentEvent::PermissionRequest {
+                request_id,
+                path: _path,
+                summary,
+            } => {
                 self.send_activity("awaiting_approval", "Waiting for approval")?;
-                self.sender.send(MessageKind::AgentPermission(
-                    AgentPermissionAsk {
+                self.sender
+                    .send(MessageKind::AgentPermission(AgentPermissionAsk {
                         request_id,
                         slide_id: String::new(),
                         summary,
-                    }
-                ))?;
+                    }))?;
             }
             crate::agent::AgentEvent::TurnEnded => {
                 self.__ingest_agent_changes()?;
                 self.send_activity("idle", "")?;
-                self.sender.send(crate::ipc::MessageKind::AgentPanelStateUpdate(
-                    crate::ipc::agent::AgentPanelState {
-                        running: false,
-                        error: None,
-                    }
-                ))?;
+                self.sender
+                    .send(crate::ipc::MessageKind::AgentPanelStateUpdate(
+                        crate::ipc::agent::AgentPanelState {
+                            running: false,
+                            error: None,
+                        },
+                    ))?;
             }
             crate::agent::AgentEvent::Failed { message } => {
                 self.send_activity("error", "Error")?;
-                self.sender.send(crate::ipc::MessageKind::AgentPanelStateUpdate(
-                    crate::ipc::agent::AgentPanelState {
-                        running: false,
-                        error: Some(message),
-                    }
-                ))?;
+                self.sender
+                    .send(crate::ipc::MessageKind::AgentPanelStateUpdate(
+                        crate::ipc::agent::AgentPanelState {
+                            running: false,
+                            error: Some(message),
+                        },
+                    ))?;
             }
         }
         Ok(())
@@ -4008,7 +4040,7 @@ fn build_slide_list_data(deck: &Deck, active_slide: Option<&SlideId>) -> SlideLi
                 date: date.clone(),
             }),
             hide_placeholders: false,
-        min_element_size: 0.0,
+            min_element_size: 0.0,
         };
         let html: String = serialize_slide_themed(slide, fill.as_deref(), img.as_deref(), &opts);
         slides.push(SlideListEntry {
@@ -4856,9 +4888,15 @@ fn __new_slide_command(position: usize, children: Vec<ElementNode>) -> Box<dyn C
     use crate::deck::builders::group_element;
     use crate::deck::new_slide_id;
 
-    assert!(!children.is_empty(), "__new_slide_command: empty slide children");
+    assert!(
+        !children.is_empty(),
+        "__new_slide_command: empty slide children"
+    );
     let slide_id: SlideId = new_slide_id();
-    assert!(!slide_id.is_empty(), "__new_slide_command: minted empty slide id");
+    assert!(
+        !slide_id.is_empty(),
+        "__new_slide_command: minted empty slide id"
+    );
     let root: ElementNode = group_element(new_element_id(), children);
     let slide: SlideNode = SlideNode::new(slide_id.clone(), "blank".to_string(), root);
     let manifest_entry: SlideEntry = SlideEntry {
