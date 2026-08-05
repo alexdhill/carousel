@@ -1,21 +1,11 @@
-// Style and presentation primitives.
-//
-// `Geometry` is shared by every element. The per-type `*Style` structs are
-// selected by the `ElementStyle` enum in `element.rs`. `ColorRef` and
-// `FontRef` separate theme bindings from literals so theme changes can
-// propagate without rewriting elements.
-
 use serde::{Deserialize, Serialize};
 
-// GroupDirection — which axis a group distributes along (main axis).
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum GroupDirection {
     Row,
     Column,
 }
 
-// GroupDistribution — main-axis distribution mode. None = manual (keep each
-// child's own main coordinate).
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum GroupDistribution {
     None,
@@ -27,7 +17,6 @@ pub enum GroupDistribution {
     SpaceEvenly,
 }
 
-// GroupAlignment — cross-axis alignment. None = manual.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum GroupAlignment {
     None,
@@ -36,8 +25,6 @@ pub enum GroupAlignment {
     End,
 }
 
-// GroupStyle — a group's layout state. `scale` is a uniform multiplier applied
-// at render (transform: scale) and to the on-slide shrink-wrap shift.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct GroupStyle {
     #[serde(default = "group_dir_default")]
@@ -74,9 +61,6 @@ impl Default for GroupStyle {
     }
 }
 
-// Geometry
-// Position, size, rotation, opacity, z-order. Coordinates in pixels;
-// rotation in radians; opacity in [0,1].
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Geometry {
     pub x: f64,
@@ -102,8 +86,6 @@ impl Default for Geometry {
     }
 }
 
-// Length
-// A CSS length value bound to a unit.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Length {
     pub value: f64,
@@ -144,18 +126,12 @@ impl LengthUnit {
     }
 }
 
-// ColorRef
-// Either a theme-palette key (rendered as `var(--theme-<key>)`) or a literal
-// CSS color string.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ColorRef {
     Theme(String),
     Literal(String),
 }
 
-// FontRef
-// Either a theme typography key (rendered as `var(--theme-<key>)`) or a
-// literal font family stack.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum FontRef {
     Theme(String),
@@ -196,9 +172,6 @@ impl TextAlign {
     }
 }
 
-// TextStyle
-// All the per-element typography settings. font-family and color use Ref
-// types so theme bindings survive serialization.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct TextStyle {
     pub font_family: FontRef,

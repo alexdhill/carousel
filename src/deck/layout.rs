@@ -1,46 +1,26 @@
-// LayoutNode.
-//
-// A layout is a reusable element template edited with the same tooling as a
-// slide. Like a slide it owns a single `root` ElementNode (always a Group)
-// whose children are the top-level elements, plus a human-readable `id`
-// (stable, used as the map key and on disk) and a display `name`. It is a
-// Canvas, so the element commands edit it through the shared interface.
-
 use crate::deck::canvas::Canvas;
 use crate::deck::element::ElementNode;
 use crate::deck::ids::LayoutId;
 use serde::{Deserialize, Serialize};
 
-// LayoutNode
-// Inputs at construction: id, name, root (must be a Group).
-// `dirty` is set by commands when the layout changes; clears on save.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct LayoutNode {
     pub id: LayoutId,
     pub name: String,
     pub root: ElementNode,
-    // Theme-level background for slides built on this layout. A slide inherits
-    // these when its own metadata leaves the field empty (see
-    // Deck::effective_slide_bg). `background_image` holds a var(--asset-<id>).
+
     #[serde(default)]
     pub background: Option<String>,
     #[serde(default)]
     pub background_image: Option<String>,
-    // Editor alignment guides owned by this layout. Slides built on the layout
-    // display these read-only (inherited) in addition to their own; see
-    // Deck::inherited_guides. Persisted via theme_io like the layout background.
+
     #[serde(default)]
     pub guides: Vec<crate::deck::guide::Guide>,
     pub dirty: bool,
 }
 
 impl LayoutNode {
-    // new
-    // Inputs: id (non-empty), display name, a root ElementNode that must be a
-    // Group satisfying the element-triple invariant.
-    // Output: a LayoutNode with dirty=false.
-    // Errors: panics if id is empty or the root is not a consistent Group —
-    // layouts are always group-rooted by the model invariant (as slides are).
+
     pub fn new(id: LayoutId, name: String, root: ElementNode) -> Self {
         assert!(!id.is_empty(), "layout id must not be empty");
         assert!(
@@ -62,13 +42,6 @@ impl LayoutNode {
         }
     }
 
-    // seeded_children
-    // Output: this layout's top-level elements cloned for stamping onto a slide.
-    // Content-bearing slots (Text / Image / Media / Table) are marked
-    // `placeholder = true` so an untouched slot hides in playback; decorative
-    // slots (Shape / Group / Embed) are always rendered (`placeholder = false`),
-    // matching how PowerPoint/Keynote treat layout graphics. Ids are preserved —
-    // they are the slot keys used for layout-change remapping.
     pub fn seeded_children(&self) -> Vec<ElementNode> {
         use crate::deck::element::ElementType;
         let mut out: Vec<ElementNode> = self.root.children.clone();
@@ -81,10 +54,6 @@ impl LayoutNode {
         out
     }
 
-    // preview_slide
-    // Output: a transient SlideNode wrapping this layout's root so it reuses
-    // the slide serializer / object-tree builder, carrying the layout's own
-    // background so the layout preview and its on-disk HTML show it.
     pub fn preview_slide(&self) -> crate::deck::slide::SlideNode {
         let mut s =
             crate::deck::slide::SlideNode::new(self.id.clone(), self.id.clone(), self.root.clone());
@@ -94,7 +63,6 @@ impl LayoutNode {
     }
 }
 
-// LayoutNode is an editable Canvas, sharing the slide element tooling.
 impl Canvas for LayoutNode {
     fn root(&self) -> &ElementNode {
         &self.root

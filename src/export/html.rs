@@ -1,18 +1,14 @@
-// HTML export: assemble a self-contained playable folder for the deck.
 use crate::deck::Deck;
 use crate::deck::animation::step_count;
 use crate::html::serialize::{ANIMATION_KEYFRAMES_CSS, serialize_slide_themed};
 use crate::present::reveal::{forward_reveal, snap_reveal};
 use serde::Serialize;
 
-// Static player files, embedded and copied verbatim into the export.
 const INDEX_HTML: &str = include_str!("../../assets/export/index.html");
 const PLAYER_CSS: &str = include_str!("../../assets/export/player.css");
 const PLAYER_JS: &str = include_str!("../../assets/export/player.js");
 const MORPH_JS: &str = include_str!("../../assets/morph.js");
 
-// ExportBundle
-// An in-memory list of (relative path, bytes) to write into the export folder.
 pub struct ExportBundle {
     pub files: Vec<(String, Vec<u8>)>,
 }
@@ -37,21 +33,11 @@ struct DeckData {
     theme_css: String,
     globals_css: String,
     keyframes_css: String,
-    // The asset id→relative-path list. The player resolves each path to an
-    // absolute URL (against document.baseURI) before building the --asset-<id>
-    // custom properties — a relative url() inside a custom property in a shadow
-    // root does not reliably resolve against the document base in browsers, so
-    // it must be absolutized at runtime (keeping it portable if the folder
-    // moves).
+
     assets: Vec<AssetFile>,
     slides: Vec<SlideData>,
 }
 
-// build_html_export
-// Inputs: the deck. Output: an ExportBundle whose files are the static player,
-// a generated deck.js data global, and every asset's bytes. Reuses the
-// presentation step/reveal logic so playback matches presentation exactly.
-// Errors: serde_json serialization failure (effectively never for this data).
 pub fn build_html_export(deck: &Deck) -> Result<ExportBundle, serde_json::Error> {
     let mut slides: Vec<SlideData> = Vec::with_capacity(deck.slide_order.len());
     let count: usize = deck.slide_order.len();
@@ -65,9 +51,7 @@ pub fn build_html_export(deck: &Deck) -> Result<ExportBundle, serde_json::Error>
         let mut step: usize = 0;
         while step < n {
             snaps.push(snap_reveal(sid, timeline, step));
-            // forward_reveal is the animated transition INTO step k (k >= 1).
-            // Step 0 has no forward (you enter a slide via its snap), so park a
-            // snap there; the player only reads forwards[k] when advancing (k>=1).
+
             if step == 0 {
                 forwards.push(snap_reveal(sid, timeline, 0));
             } else {
@@ -92,7 +76,7 @@ pub fn build_html_export(deck: &Deck) -> Result<ExportBundle, serde_json::Error>
             forwards,
         });
     }
-    // Only assets whose bytes are present get written and listed.
+
     let mut assets: Vec<AssetFile> = Vec::new();
     let mut asset_files: Vec<(String, Vec<u8>)> = Vec::new();
     for entry in &deck.assets.assets {
@@ -104,9 +88,7 @@ pub fn build_html_export(deck: &Deck) -> Result<ExportBundle, serde_json::Error>
             asset_files.push((entry.path.clone(), bytes.clone()));
         }
     }
-    // Bundle the fonts the deck actually uses: append their @font-face rules to
-    // globals_css and write the face files alongside the assets, so the export
-    // renders identically on a machine without those fonts installed.
+
     let (font_css, font_files) = crate::export::fonts::build_font_faces(deck);
     let globals_css: String = if font_css.is_empty() {
         deck.theme.globals_css.clone()
@@ -159,10 +141,9 @@ mod tests {
             None,
         );
         let bundle = build_html_export(&deck).unwrap();
-        // The asset's bytes are written at its path.
+
         assert!(file(&bundle, &entry.path).is_some());
-        // deck.js lists the asset with id + the SAME relative path, so the
-        // player can absolutize it.
+
         let deck_js = std::str::from_utf8(file(&bundle, "deck.js").unwrap()).unwrap();
         let v: serde_json::Value = serde_json::from_str(
             deck_js
@@ -220,7 +201,7 @@ mod tests {
         use crate::deck::builders::{group_element, text_element};
         let mut deck = Deck::sample();
         let sid = deck.slide_order[0].clone();
-        // Replace the first child of slide 0 with a token text element.
+
         let root = group_element(
             "root",
             vec![text_element("tk", "${slideNumber}/${slideCount}")],

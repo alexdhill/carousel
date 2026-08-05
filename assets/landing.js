@@ -1,16 +1,6 @@
-// Landing window frontend.
-//
-// Reports Ready, receives one LandingData payload (recents + layout templates),
-// renders two rows of cards, tracks a single selection across both rows, and
-// posts the chosen open intent (or Cancel) back to Rust. Inbound controls are
-// envelope-free flat objects ({ "kind": "OpenTemplate", ... }); the data
-// payload arrives via window.__landing.receive(<json string>).
 (function () {
     "use strict";
 
-    // post
-    // Inputs: a control kind and optional extra fields. Output: side-effect;
-    // posts a flat LandingInbound object to Rust.
     function post(kind, extra) {
         if (!window.ipc || typeof window.ipc.postMessage !== "function") {
             console.error("landing: window.ipc.postMessage unavailable");
@@ -20,12 +10,8 @@
         window.ipc.postMessage(JSON.stringify(msg));
     }
 
-    // Current single selection across both rows, or null.
-    // { kind: "template", theme_id, layout_id } | { kind: "recent", path }
     let selection = null;
 
-    // relativeDate
-    // Inputs: unix seconds. Output: a short "Nm/h/d ago" string.
     function relativeDate(secs) {
         const delta = Math.max(0, Date.now() / 1000 - Number(secs || 0));
         if (delta < 3600) {
@@ -37,8 +23,6 @@
         return Math.floor(delta / 86400) + "d ago";
     }
 
-    // clearSelection
-    // Drops the aria-selected flag from every card so only one stays lit.
     function clearSelection() {
         const cards = document.querySelectorAll(".landing__card[aria-selected=\"true\"]");
         for (let i = 0; i < cards.length; i++) {
@@ -46,9 +30,6 @@
         }
     }
 
-    // bar
-    // Inputs: a color plus left/top/width/height as percentages. Output: an
-    // absolutely-positioned preview bar div.
     function bar(color, left, top, width, height) {
         const d = document.createElement("div");
         d.className = "landing__tile-bar";
@@ -60,9 +41,6 @@
         return d;
     }
 
-    // layoutTile
-    // Inputs: a template entry. Output: a 16:9 tile painted in the theme
-    // background with bars echoing the layout (title / hero / text).
     function layoutTile(t) {
         const tile = document.createElement("div");
         tile.className = "landing__tile";
@@ -86,9 +64,6 @@
         return tile;
     }
 
-    // makeCard
-    // Inputs: a tile node, a title, a subtitle, the selection descriptor, and
-    // an open callback. Output: a wired card (click selects, dblclick opens).
     function makeCard(tile, title, subtitle, descriptor, openFn) {
         const card = document.createElement("div");
         card.className = "landing__card";
@@ -114,11 +89,6 @@
         return card;
     }
 
-    // thumbScaler
-    // One observer for every mounted thumbnail: whenever a stage's width
-    // changes (window resize, row reflow) it rescales that stage's surface so
-    // the native-pixel slide keeps filling the tile. A per-mount transform set
-    // once would freeze at its first width and drift as the row reflows.
     const thumbScaler = new ResizeObserver(function (entries) {
         for (let i = 0; i < entries.length; i++) {
             const stage = entries[i].target;
@@ -128,12 +98,6 @@
         }
     });
 
-    // mountThumb
-    // Inputs: a tile element and a thumb payload { html, css, asset_vars_css,
-    // width, height }. Output: side-effect; mounts the first-slide render in a
-    // shadow root on the tile (so :host-scoped theme vars resolve) and scales
-    // the native slide dimensions down to the tile's width via thumbScaler.
-    // Inert: pointer events off, no interaction.
     function mountThumb(tile, thumb) {
         const w = Number(thumb.width) || 1920;
         const h = Number(thumb.height) || 1080;
@@ -152,8 +116,6 @@
         thumbScaler.observe(stage);
     }
 
-    // renderRecents / renderLayouts
-    // Fill each row from the payload, or show an empty state.
     function renderRecents(recents) {
         const root = document.getElementById("recents");
         root.replaceChildren();
@@ -194,9 +156,6 @@
         }
     }
 
-    // onOpen
-    // Open the current selection, or a default light deck when nothing is
-    // selected.
     function onOpen() {
         if (selection && selection.kind === "template") {
             post("OpenTemplate", { theme_id: selection.theme_id, layout_id: selection.layout_id });
@@ -207,8 +166,6 @@
         }
     }
 
-    // window.__landing.receive — the single inbound entry point. Rust calls it
-    // with the JSON string of a LandingData payload.
     window.__landing = {
         receive: function (json) {
             let data;

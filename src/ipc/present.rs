@@ -1,20 +1,7 @@
-// Presentation-mode IPC payloads.
-//
-// A private, minimal protocol between the Rust brain and the dedicated
-// presentation webview (`assets/present.*`). Outbound (Rust -> JS) payloads are
-// wrapped by the three `MessageKind::Present*` variants and ride the standard
-// IpcMessage envelope through `WebviewSender`. Inbound (JS -> Rust) controls use
-// the envelope-free `PresentInbound` enum, decoded directly in the presentation
-// webview's IPC handler (see main.rs).
-
 use crate::deck::animation::{AnimationIterations, PropertyTarget};
 use crate::ipc::{ElementId, SlideId};
 use serde::{Deserialize, Serialize};
 
-// PresentInitPayload
-// One-shot configuration sent after the presentation webview reports Ready:
-// the immutable built-in @keyframes library plus the deck's authored pixel
-// dimensions (so the frontend can size + scale the stage).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct PresentInitPayload {
     pub animation_keyframes_css: String,
@@ -22,34 +9,22 @@ pub struct PresentInitPayload {
     pub height: u32,
 }
 
-// PresentSlidePayload
-// Mounts one slide in the presentation stage. `slide_html` is produced by the
-// existing `serialize_slide`; the two CSS blobs are the deck theme + globals,
-// injected (with the keyframes) into a fresh shadow root — the same scoping the
-// editor's MountSlide uses.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct PresentSlidePayload {
     pub slide_id: SlideId,
     pub slide_html: String,
     pub theme_css: String,
     pub globals_css: String,
-    // The OUTGOING slide's transition to animate this mount. Some(non-None) only
-    // on a forward cross-slide change; None (cut) on back, initial, same-slide.
+
     #[serde(default)]
     pub transition: Option<crate::deck::SlideTransition>,
 }
 
-// AnimateInstruction
-// One element to animate on a single forward transition. `delay_ms` is the
-// EFFECTIVE delay (already includes any after-previous offset computed by the
-// Rust brain, so the frontend needs no chaining logic). `ends_hidden` is true
-// for exit animations, whose resolved post-state is hidden.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct AnimateInstruction {
     pub element_id: ElementId,
     pub keyframe: String,
-    // Property-change targets (the post-state to transition to). Empty for a
-    // keyframe animation; non-empty (and keyframe empty) for a property entry.
+
     #[serde(default)]
     pub targets: Vec<PropertyTarget>,
     pub duration_ms: u32,
@@ -59,11 +34,6 @@ pub struct AnimateInstruction {
     pub ends_hidden: bool,
 }
 
-// RevealPayload
-// The full visual state to apply for one step. Each MANAGED (timeline) element
-// appears in exactly one of: `hidden` (opacity:0, no anim), `shown` (opacity:1,
-// no anim — resolved), or `animate` (play a keyframe now). Static elements that
-// appear in no animation entry are never listed and are left untouched.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct RevealPayload {
     pub slide_id: SlideId,
@@ -72,10 +42,6 @@ pub struct RevealPayload {
     pub animate: Vec<AnimateInstruction>,
 }
 
-// PresentInbound
-// Envelope-free controls posted by the presentation webview. Internally tagged
-// on `kind` (like InteractionEvent) so `present.js` posts a flat object, e.g.
-// {"kind":"Advance"}. Decoded directly in the presentation IPC handler.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(tag = "kind")]
 pub enum PresentInbound {
@@ -91,8 +57,6 @@ mod tests {
     use super::*;
     use crate::deck::animation::AnimationIterations;
 
-    // round_trip
-    // Serializes a value, parses it back, returns the reparsed value.
     fn round_trip<T>(value: &T) -> T
     where
         T: serde::Serialize + for<'de> serde::Deserialize<'de>,
@@ -192,7 +156,7 @@ mod tests {
             let env = IpcMessage::new(kind.clone());
             let json = serde_json::to_string(&env).unwrap();
             let back: IpcMessage = serde_json::from_str(&json).unwrap();
-            // Discriminant equality is enough; payload equality covered above.
+
             assert_eq!(
                 std::mem::discriminant(&back.kind),
                 std::mem::discriminant(&kind)

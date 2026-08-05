@@ -1,15 +1,3 @@
-// GroupElements / DissolveGroup commands.
-//
-// GroupElements wraps a set of sibling elements in a new Group node, placed at
-// the z-position (sibling slot) of the highest-z member, then shrink-wraps the
-// group around them. The members must share one direct parent (the editor's
-// multi-selection is sibling-based). DissolveGroup is the exact inverse: it
-// removes the group and restores the original siblings at their prior
-// positions/geometry.
-//
-// Like ReparentElement these emit no patches and require a remount (z-order is
-// derived from sibling order by the serializer).
-
 use crate::commands::{Command, CommandError, CommandOutput, resolve_canvas_mut};
 use crate::deck::builders::group_element;
 use crate::deck::canvas::RemovedElement;
@@ -24,8 +12,6 @@ pub struct GroupElements {
     pub element_ids: Vec<ElementId>,
 }
 
-// parent_of — id of the node whose direct children include `id`. None at root
-// or when absent. Iterative DFS, fixed ceiling.
 fn parent_of(root: &ElementNode, id: &str) -> Option<String> {
     const MAX_NODES: usize = 1_000_000;
     let mut stack: Vec<&ElementNode> = vec![root];
@@ -44,8 +30,7 @@ fn parent_of(root: &ElementNode, id: &str) -> Option<String> {
 }
 
 impl Command for GroupElements {
-    // apply — validate same-parent siblings, lift them into a fresh group at the
-    // top member's slot, shrink-wrap. Inverse restores the originals exactly.
+
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(!self.group_id.is_empty(), "GroupElements: empty group_id");
         assert!(
@@ -54,7 +39,6 @@ impl Command for GroupElements {
         );
         let canvas = resolve_canvas_mut(deck, &self.target)?;
 
-        // All members must exist, be non-root, and share one direct parent.
         let parent_id: String = match parent_of(canvas.root(), &self.element_ids[0]) {
             Some(p) => p,
             None => return Err(CommandError::ElementNotFound(self.element_ids[0].clone())),
@@ -76,8 +60,6 @@ impl Command for GroupElements {
             }
         }
 
-        // Snapshot originals (node + position) for an exact inverse, in
-        // ascending sibling order so positions stay valid on restore.
         let mut originals: Vec<(usize, ElementNode)> = Vec::new();
         for id in &self.element_ids {
             let RemovedElement { node, position, .. } = canvas
@@ -85,9 +67,7 @@ impl Command for GroupElements {
                 .ok_or_else(|| CommandError::ElementNotFound(id.clone()))?;
             originals.push((position, node));
         }
-        // Positions captured above are post-removal-order; re-derive the slot for
-        // the group as the max original position adjusted for earlier removals.
-        // Sort originals by position so the group's children keep z-order.
+
         originals.sort_by_key(|(p, _)| *p);
         let max_pos: usize = originals.iter().map(|(p, _)| *p).max().unwrap_or(0);
         let insert_index: usize = max_pos.saturating_sub(self.element_ids.len() - 1);
@@ -142,15 +122,14 @@ pub struct DissolveGroup {
 }
 
 impl Command for DissolveGroup {
-    // apply — remove the group and re-insert the saved originals at their prior
-    // positions. Inverse re-groups them.
+
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(!self.group_id.is_empty(), "DissolveGroup: empty group_id");
         let canvas = resolve_canvas_mut(deck, &self.target)?;
         canvas
             .remove_non_root_element(&self.group_id)
             .ok_or_else(|| CommandError::ElementNotFound(self.group_id.clone()))?;
-        // Ascending positions keep each insert index valid.
+
         for (pos, node) in &self.originals {
             canvas
                 .insert_child(&self.parent_id, *pos, node.clone())
@@ -158,7 +137,7 @@ impl Command for DissolveGroup {
                     CommandError::InvalidOperation("DissolveGroup: insert failed".into())
                 })?;
         }
-        // Re-fit the parent chain (the parent may itself be a flex group).
+
         relayout_ancestors(canvas.root_mut(), &self.parent_id);
         canvas.mark_dirty();
         canvas.invalidate_index();
@@ -218,7 +197,7 @@ mod tests {
 
     #[test]
     fn groups_siblings_and_shrinkwraps_at_top_slot() {
-        // root -> [a(10,10,20,10), b(60,40,20,10), c(0,0,5,5)]; group a+b.
+
         let mut deck = deck_with(vec![
             kid("a", 10.0, 10.0, 20.0, 10.0),
             kid("b", 60.0, 40.0, 20.0, 10.0),
@@ -234,16 +213,16 @@ mod tests {
 
         let sid: SlideId = "s".into();
         let root = &deck.slides[&sid].root;
-        // c remains; group inserted at b's slot (index 1 after a/b removed -> 1).
+
         assert!(root.children.iter().any(|n| n.id == "grp"));
         assert!(root.children.iter().any(|n| n.id == "c"));
         let g = root.children.iter().find(|n| n.id == "grp").unwrap();
-        // bbox of a(10,10,20,10)+b(60,40,20,10) -> x10..80 (70), y10..50 (40).
+
         assert_eq!(g.geometry.width, 70.0);
         assert_eq!(g.geometry.height, 40.0);
         assert_eq!(g.geometry.x, 10.0);
         assert_eq!(g.geometry.y, 10.0);
-        // a normalized to (0,0), b to (50,30).
+
         let a = g.children.iter().find(|n| n.id == "a").unwrap();
         let b = g.children.iter().find(|n| n.id == "b").unwrap();
         assert_eq!((a.geometry.x, a.geometry.y), (0.0, 0.0));
@@ -274,7 +253,7 @@ mod tests {
 
     #[test]
     fn rejects_cross_parent_members() {
-        // root -> [g1 -> [a], b]; grouping a+b spans two parents.
+
         let g1 = group_element("g1", vec![kid("a", 0.0, 0.0, 5.0, 5.0)]);
         let mut deck = deck_with(vec![g1, kid("b", 0.0, 0.0, 5.0, 5.0)]);
         let err = GroupElements {

@@ -1,11 +1,5 @@
-// Agent panel IPC payloads.
-//
-// Wire shapes for the chat pane and ACP agent communication.
-
 use serde::{Deserialize, Serialize};
 
-// AgentPanelState
-// Rust→JS: current session state (running flag + last error).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct AgentPanelState {
     pub running: bool,
@@ -13,8 +7,6 @@ pub struct AgentPanelState {
     pub error: Option<String>,
 }
 
-// AgentStreamChunk
-// Rust→JS: one streamed turn fragment.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct AgentStreamChunk {
     pub role: String,
@@ -22,8 +14,6 @@ pub struct AgentStreamChunk {
     pub final_chunk: bool,
 }
 
-// AgentToolNotice
-// Rust→JS: a slide read/write happened (log row, no data body).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct AgentToolNotice {
     pub kind: String,
@@ -32,16 +22,11 @@ pub struct AgentToolNotice {
     pub summary: String,
 }
 
-// AgentList
-// Rust→JS: the configured agents' display names for the chat panel dropdown.
-// Sent when the panel opens; empty when no agents are configured.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct AgentList {
     pub agents: Vec<String>,
 }
 
-// AgentPermissionAsk
-// Rust→JS: approve/deny prompt for a pending write.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct AgentPermissionAsk {
     pub request_id: String,
@@ -49,26 +34,17 @@ pub struct AgentPermissionAsk {
     pub summary: String,
 }
 
-// AgentActivity
-// Rust→JS: current agent execution phase and human-readable status label.
-// Drives the panel status line + spinner. `phase` is a closed vocabulary:
-// "idle" | "starting" | "thinking" | "streaming" | "tool" | "awaiting_approval" | "error".
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct AgentActivity {
     pub phase: String,
     pub label: String,
 }
 
-// AgentThought
-// Rust→JS: one reasoning fragment appended to the thinking area.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct AgentThought {
     pub text: String,
 }
 
-// AgentToolStatus
-// Rust→JS: upsert a tool row keyed by id. `status` is one of:
-// pending | in_progress | completed | failed.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct AgentToolStatus {
     pub id: String,

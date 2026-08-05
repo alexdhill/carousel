@@ -1,30 +1,8 @@
-// Transactions.
-//
-// SPEC §9.4–9.5. A `Transaction` groups a stream of related commands into a
-// single editor-level operation. The interpretation layer opens one on
-// ElementDragStarted and closes it on ElementDragEnded; intermediate
-// ElementDragged events apply MoveElement commands inside the transaction.
-//
-// At Stage 5, transactions exist but do not produce a history entry on
-// commit — there is no history stack yet (it lands in Stage 6). The
-// snapshot captured at begin time, together with the accumulated patches
-// and dirty slide set, is the data that Stage 6 will fold into a composite
-// inverse command.
-
 use crate::deck::style::Geometry;
 use crate::deck::{CanvasTarget, ElementId};
 use crate::ipc::Patch;
 use std::collections::HashMap;
 
-// TransactionSnapshot
-// Records pre-transaction state for the fields a transaction's commands
-// could touch. For a drag transaction only `geometry` is populated; for a
-// text-edit transaction only `content`. The two maps are kept separate so
-// snapshots stay tight (no need to clone a full element tree).
-//
-// Keyed on (CanvasTarget, ElementId): the target identifies the editable
-// surface (slide or layout) the element lives on, so a snapshot is valid in
-// either editor mode and the composite inverse restores the right canvas.
 #[derive(Debug, Default, Clone)]
 pub struct TransactionSnapshot {
     pub geometry: HashMap<(CanvasTarget, ElementId), Geometry>,
@@ -32,17 +10,11 @@ pub struct TransactionSnapshot {
 }
 
 impl TransactionSnapshot {
-    // empty
-    // Inputs: none.
-    // Output: a TransactionSnapshot with both maps empty.
+
     pub fn empty() -> Self {
         Self::default()
     }
 
-    // record_geometry
-    // Inputs: canvas target, element id, the geometry to remember.
-    // Output: side-effect; stores the (x, y, w, h, ...) at transaction
-    // start so the inverse command can restore it later.
     pub fn record_geometry(
         &mut self,
         target: CanvasTarget,
@@ -60,11 +32,6 @@ impl TransactionSnapshot {
         self.geometry.insert((target, element_id), geometry);
     }
 
-    // position_of
-    // Inputs: canvas target, element id.
-    // Output: the (x, y) at transaction start as a tuple, or None if not
-    // recorded. ElementDragged handlers use this to compute the new
-    // absolute position from the cumulative drag delta.
     pub fn position_of(&self, target: &CanvasTarget, element_id: &str) -> Option<(f64, f64)> {
         let key: (CanvasTarget, ElementId) = (target.clone(), element_id.to_string());
         let g: &Geometry = self.geometry.get(&key)?;
@@ -72,11 +39,6 @@ impl TransactionSnapshot {
     }
 }
 
-// Transaction
-// Active state for a single in-flight transaction. `patches` accumulates
-// every patch the dispatcher emits while this transaction is open so the
-// commit step (Stage 6) can build a single composite inverse and a single
-// history entry. `dirty_targets` collects the canvases touched.
 #[derive(Debug)]
 pub struct Transaction {
     pub label: &'static str,
@@ -86,9 +48,7 @@ pub struct Transaction {
 }
 
 impl Transaction {
-    // new
-    // Inputs: a static label (e.g., "Move Element"), the start snapshot.
-    // Output: a Transaction with empty patch and dirty-target accumulators.
+
     pub fn new(label: &'static str, snapshot: TransactionSnapshot) -> Self {
         assert!(!label.is_empty(), "transaction label must not be empty");
         Self {
@@ -150,7 +110,7 @@ mod tests {
             "el_a".into(),
             geom(9.0, 9.0),
         );
-        // Same string id, different surface — must not collide.
+
         assert_eq!(s.position_of(&slide("s1"), "el_a"), Some((1.0, 2.0)));
         assert_eq!(
             s.position_of(&CanvasTarget::Layout("s1".into()), "el_a"),

@@ -1,15 +1,3 @@
-// SetSlideTitle command.
-//
-// Edits a slide's display name — the `title` field of its manifest entry,
-// shown as the thumbnail label. Double-clicking a thumbnail label routes
-// here so the rename lands in the deck's manifest (the true backend) and
-// persists across save/load.
-//
-// It produces no DOM patches (a slide's title is chrome, not slide
-// content) and reports affects_slide_list so the dispatcher rebroadcasts
-// the slide list and the thumbnail label refreshes — on the initial edit
-// and on undo/redo alike. Its inverse restores the prior title.
-
 use crate::commands::{Command, CommandError, CommandOutput};
 use crate::deck::SlideId;
 
@@ -20,13 +8,7 @@ pub struct SetSlideTitle {
 }
 
 impl Command for SetSlideTitle {
-    // apply
-    // Inputs: &self, &mut Deck.
-    // Output: CommandOutput with no patches, manifest_dirty=true, and an
-    // inverse SetSlideTitle carrying the prior title.
-    // Errors: SlideNotFound when no manifest entry matches slide_id.
-    // Dataflow: locate the manifest entry -> snapshot prior title ->
-    // overwrite -> build inverse.
+
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.slide_id.is_empty(),
@@ -65,23 +47,13 @@ impl Command for SetSlideTitle {
     }
 }
 
-// SetDeckTitle command.
-//
-// Edits the deck's display name — `manifest.metadata.title`, shown in the
-// editor's top-left title field and used as the recents/landing label. Like
-// SetSlideTitle it produces no DOM patches (deck chrome, not slide content),
-// is self-inverse, and marks the manifest dirty. It does not affect the slide
-// list; the editor re-reads the title from its own input optimistically.
 #[derive(Debug, Clone)]
 pub struct SetDeckTitle {
     pub new_title: String,
 }
 
 impl Command for SetDeckTitle {
-    // apply
-    // Inputs: &self, &mut Deck.
-    // Output: CommandOutput with no patches, manifest_dirty=true, and an inverse
-    // SetDeckTitle carrying the prior title.
+
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         let prior: String = deck.manifest.metadata.title.clone();
         deck.manifest.metadata.title = self.new_title.clone();

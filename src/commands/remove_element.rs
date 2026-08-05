@@ -1,14 +1,3 @@
-// RemoveElement command.
-//
-// SPEC §9.3 (element lifecycle). Removes an element subtree from a slide
-// and emits a Patch::RemoveElement. The inverse is an InsertElement that
-// captures the removed subtree, its parent id, and its prior position, so
-// undo can reinsert it at exactly the same location.
-//
-// The type name is `RemoveElementCommand` (not `RemoveElement`) so it
-// does not collide with `Patch::RemoveElement` when both are imported in
-// the same module.
-
 use crate::commands::insert_element::InsertElement;
 use crate::commands::{Command, CommandError, CommandOutput, resolve_canvas_mut};
 use crate::deck::canvas::RemovedElement;
@@ -22,16 +11,7 @@ pub struct RemoveElementCommand {
 }
 
 impl Command for RemoveElementCommand {
-    // apply
-    // Inputs: &self, &mut Deck.
-    // Output: CommandOutput with a RemoveElement patch and an
-    // InsertElement inverse holding the removed subtree.
-    // Errors:
-    //   SlideNotFound     — slide_id absent
-    //   InvalidOperation  — element_id equals the slide root
-    //   ElementNotFound   — element_id is not in the tree
-    // Dataflow: locate slide -> reject root removal -> call
-    // remove_non_root_element -> wrap captured subtree as InsertElement.
+
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.target.id().is_empty(),

@@ -1,17 +1,9 @@
-// Virtual filesystem mapping for agent reads/writes.
-// Translates between the Deck and a flat HTML file view the agent reads/writes.
-// Parse-only: never mutates the Deck.
-
 use crate::deck::element::ElementNode;
 use crate::deck::{Deck, SlideId};
 use crate::html::parse;
 use crate::html::serialize::serialize_slide;
 use std::fmt;
 
-// SlideWrite
-// Result of parsing an agent write: the slide_id, the elements that parsed, and
-// `skipped` — how many child elements were dropped because they did not match
-// the slide element format (so the caller can advise the user).
 #[derive(Debug, Clone)]
 pub struct SlideWrite {
     pub slide_id: SlideId,
@@ -19,8 +11,6 @@ pub struct SlideWrite {
     pub skipped: usize,
 }
 
-// VfsError
-// Variants for unwritable path. Derive Debug and implement Display for messaging.
 #[derive(Debug)]
 pub enum VfsError {
     UnwritablePath,
@@ -34,12 +24,6 @@ impl fmt::Display for VfsError {
     }
 }
 
-// render_index
-// Build /deck/index.md: one line per slide (id, title, element count).
-// Inputs: &Deck.
-// Output: String with markdown content.
-// Errors: none.
-// Dataflow: iterate slide_order, fetch each slide, format as markdown line.
 pub fn render_index(deck: &Deck) -> String {
     assert!(
         !deck.slide_order.is_empty() || deck.slides.is_empty(),
@@ -74,11 +58,6 @@ pub fn render_index(deck: &Deck) -> String {
     out
 }
 
-// resolve_slide_ref
-// Map a path segment to a real slide id. Accepts the exact slide id, or a
-// positional reference "slide<N>" / "<N>" (1-based into slide_order) so an
-// agent that guesses conventional filenames still hits the right slide.
-// Inputs: &Deck, the raw segment. Output: the real slide id, or None.
 pub fn resolve_slide_ref(deck: &Deck, segment: &str) -> Option<SlideId> {
     assert!(!segment.is_empty(), "segment must not be empty");
     if deck.slides.contains_key(segment) {
@@ -92,12 +71,6 @@ pub fn resolve_slide_ref(deck: &Deck, segment: &str) -> Option<SlideId> {
     deck.slide_order.get(n - 1).cloned()
 }
 
-// render_slide
-// Serialize one slide to HTML for a read.
-// Inputs: &Deck, a slide reference (real id or positional slide<N>/<N>).
-// Output: Option<String> - Some(html) if the slide resolves, None otherwise.
-// Errors: none.
-// Dataflow: resolve the reference to a real id, look it up, serialize.
 pub fn render_slide(deck: &Deck, slide_id: &str) -> Option<String> {
     assert!(!slide_id.is_empty(), "slide_id must not be empty");
 
@@ -105,12 +78,6 @@ pub fn render_slide(deck: &Deck, slide_id: &str) -> Option<String> {
     deck.slides.get(&real).map(serialize_slide)
 }
 
-// resolve_read
-// Dispatch a read path to index or slide content.
-// Inputs: &Deck, path as &str.
-// Output: Option<String> - Some(content) for valid paths, None otherwise.
-// Errors: none.
-// Dataflow: match path against /deck/index.md and /deck/slides/<id>.html patterns.
 pub fn resolve_read(deck: &Deck, path: &str) -> Option<String> {
     assert!(!path.is_empty(), "path must not be empty");
 
@@ -126,26 +93,12 @@ pub fn resolve_read(deck: &Deck, path: &str) -> Option<String> {
     None
 }
 
-// is_write_allowed_path
-// True only for /deck/slides/<id>.html (reject writes to index or unknown).
-// Inputs: path as &str.
-// Output: bool.
-// Errors: none.
-// Dataflow: check prefix and suffix.
 pub fn is_write_allowed_path(path: &str) -> bool {
     assert!(!path.is_empty(), "path must not be empty");
 
     path.starts_with("/deck/slides/") && path.ends_with(".html")
 }
 
-// parse_slide_write
-// Path → slide id, HTML → slide children via the lenient slide parser.
-// Inputs: path as &str, contents (HTML) as &str.
-// Output: Result<SlideWrite, VfsError>.
-// Errors: UnwritablePath if path is not a slide path. Individual malformed
-// elements do not error — they are dropped and reported via SlideWrite.skipped.
-// Dataflow: check is_write_allowed_path, extract slide_id, parse all child
-// elements leniently, return them with the skipped count.
 pub fn parse_slide_write(path: &str, contents: &str) -> Result<SlideWrite, VfsError> {
     assert!(!path.is_empty(), "path must not be empty");
 
@@ -164,12 +117,6 @@ pub fn parse_slide_write(path: &str, contents: &str) -> Result<SlideWrite, VfsEr
     })
 }
 
-// slide_id_from_path
-// Extract <id> from a slide path /deck/slides/<id>.html.
-// Inputs: path as &str.
-// Output: Option<SlideId>.
-// Errors: none.
-// Dataflow: check prefix and suffix, extract middle segment.
 pub fn slide_id_from_path(path: &str) -> Option<SlideId> {
     assert!(!path.is_empty(), "path must not be empty");
 
@@ -265,16 +212,16 @@ mod tests {
     fn resolve_slide_ref_accepts_id_and_positional() {
         let deck = Deck::sample();
         let first: &String = deck.slide_order.first().unwrap();
-        // exact id resolves to itself
+
         assert_eq!(resolve_slide_ref(&deck, first).as_ref(), Some(first));
-        // positional "slide1" and "1" resolve to the first slide
+
         assert_eq!(resolve_slide_ref(&deck, "slide1").as_ref(), Some(first));
         assert_eq!(resolve_slide_ref(&deck, "1").as_ref(), Some(first));
-        // out-of-range / zero / garbage -> None
+
         assert!(resolve_slide_ref(&deck, "0").is_none());
         assert!(resolve_slide_ref(&deck, "slide999").is_none());
         assert!(resolve_slide_ref(&deck, "nope").is_none());
-        // a guessed positional path reads back the same slide as its real id
+
         assert_eq!(
             resolve_read(&deck, "/deck/slides/slide1.html"),
             render_slide(&deck, first)

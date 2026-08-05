@@ -1,25 +1,6 @@
-// SetMorphTransition command.
-//
-// Enables or disables the morphing transition for an element on forward
-// slide advances. The morph is opt-in per element, stored as three
-// data-* attributes that both playback engines consume:
-//   - `data-morph-next` = "1" (presence flag; absence = disabled)
-//   - `data-morph-dur`  = duration in milliseconds (integer string)
-//   - `data-morph-ease` = CSS easing token (e.g., "ease-in-out")
-//
-// When enabled, the command validates that the next slide (by `slide_order`)
-// contains an element with the same id; if not, a warning is added to the
-// output but the attributes are still written (never refuse).
-//
-// The morph is forward-only; backward advance snapshots without animation.
-// A flagged element morphs as a single box (geometry only); its children ride
-// along and the new element's content fades in over the moving box.
-
 use crate::commands::{Command, CommandError, CommandOutput, resolve_canvas_mut};
 use crate::deck::{Canvas, CanvasTarget, Deck, ElementId, SlideId};
 
-// MORPH_ATTRIBUTES: The three attribute keys used by both authoring and
-// playback. Keep synchronized with assets/morph.js and other playback layers.
 const MORPH_NEXT: &str = "data-morph-next";
 const MORPH_DUR: &str = "data-morph-dur";
 const MORPH_EASE: &str = "data-morph-ease";
@@ -34,16 +15,7 @@ pub struct SetMorphTransition {
 }
 
 impl Command for SetMorphTransition {
-    // apply
-    // Inputs: &self, &mut Deck.
-    // Output: CommandOutput with no patches (requires_remount re-serializes),
-    // an inverse SetMorphTransition that restores prior attrs, the canvas
-    // marked dirty.
-    // Errors:
-    //   SlideNotFound   — canvas not found.
-    //   ElementNotFound — element id not found.
-    // Dataflow: locate element -> save prior attrs -> set or clear attrs ->
-    // check next slide (if enabled) -> build inverse with saved attrs.
+
     fn apply(&self, deck: &mut Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.element_id.is_empty(),
@@ -54,12 +26,10 @@ impl Command for SetMorphTransition {
             .find_element_mut(&self.element_id)
             .ok_or_else(|| CommandError::ElementNotFound(self.element_id.clone()))?;
 
-        // Save prior attribute values.
         let prior_next = element.attributes.get(MORPH_NEXT).cloned();
         let prior_dur = element.attributes.get(MORPH_DUR).cloned();
         let prior_ease = element.attributes.get(MORPH_EASE).cloned();
 
-        // Set or clear the attributes.
         if self.enabled {
             assert!(
                 self.duration_ms > 0,
@@ -84,7 +54,6 @@ impl Command for SetMorphTransition {
 
         canvas.mark_dirty();
 
-        // Check if enabled and the next slide has the element id.
         let mut warnings: Vec<String> = Vec::new();
         if self.enabled && !next_slide_has_id(deck, &self.target, &self.element_id) {
             warnings.push(format!(
@@ -126,13 +95,6 @@ impl Command for SetMorphTransition {
     }
 }
 
-// next_slide_has_id
-// Inputs: deck, a CanvasTarget (must be a Slide), an element id.
-// Output: true if the slide after the target's slide contains an element
-// with that id. Returns false when there is no next slide or the target
-// is not a Slide.
-// Dataflow: locate the target slide in slide_order -> check if a next
-// slide exists -> search the next slide for the id.
 fn next_slide_has_id(deck: &Deck, target: &CanvasTarget, id: &str) -> bool {
     let slide_id = match target {
         CanvasTarget::Slide(sid) => sid,
@@ -233,7 +195,6 @@ mod tests {
         let sid: SlideId = deck.slide_order[0].clone();
         let eid: ElementId = deck.slides[&sid].root.children[0].id.clone();
 
-        // Add a second slide without a matching element.
         let sid2: SlideId = "s_second".into();
         let root2 = crate::deck::builders::group_element("el_rt2", vec![]);
         let slide2 = crate::deck::slide::SlideNode::new("s_second".into(), "blank".into(), root2);
@@ -258,7 +219,6 @@ mod tests {
         let sid: SlideId = deck.slide_order[0].clone();
         let eid: ElementId = deck.slides[&sid].root.children[0].id.clone();
 
-        // Add a second slide WITH a matching element.
         let sid2: SlideId = "s_second".into();
         let matching_el = text_element(&eid, "matched");
         let root2 = crate::deck::builders::group_element("el_rt2", vec![matching_el]);
@@ -283,7 +243,6 @@ mod tests {
         let sid: SlideId = deck.slide_order[0].clone();
         let eid: ElementId = deck.slides[&sid].root.children[0].id.clone();
 
-        // Add a second slide WITHOUT a matching element, but disable the morph.
         let sid2: SlideId = "s_second".into();
         let root2 = crate::deck::builders::group_element("el_rt2", vec![]);
         let slide2 = crate::deck::slide::SlideNode::new("s_second".into(), "blank".into(), root2);

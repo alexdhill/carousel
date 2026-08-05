@@ -1,18 +1,3 @@
-// SwapTheme command.
-//
-// Theme save/load — the undoable import. Replaces `deck.theme` wholesale
-// (theme_css + globals_css + layouts + order) and merges the imported theme's
-// assets into the deck's registry. Slides are NOT restructured: their element
-// trees are untouched; they simply re-render under the new theme/globals CSS on
-// remount. Reversible via a self-inverse that carries the prior theme plus the
-// mirror asset delta (so undo removes exactly what the import added, and redo
-// re-adds it).
-//
-// It emits no DOM patches; it reports requires_remount + affects_layout_list +
-// affects_globals + affects_assets so the editor re-mounts the active canvas,
-// refreshes the layouts row / globals editor, and resends the asset bundle on
-// apply, undo, and redo. `manifest_dirty` flags that a save is needed.
-
 use crate::bundle::assets::AssetEntry;
 use crate::commands::{Command, CommandError, CommandOutput};
 use crate::deck::ThemeData;
@@ -25,15 +10,7 @@ pub struct SwapTheme {
 }
 
 impl Command for SwapTheme {
-    // apply
-    // Inputs: &self, &mut Deck.
-    // Output: CommandOutput with no patches, manifest_dirty=true, and an inverse
-    // SwapTheme carrying the prior theme + the mirror asset delta.
-    // Errors: none — installing a theme is always valid (trusted, validated on
-    // load).
-    // Dataflow: snapshot prior theme -> install -> add absent assets (recording
-    // which were actually added) -> remove requested assets (capturing their
-    // bytes) -> build the inverse from those captures.
+
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         let prior_theme: ThemeData = deck.theme.clone();
         deck.theme = self.install_theme.clone();
@@ -103,7 +80,6 @@ mod tests {
     use crate::deck::builders::{group_element, image_element};
     use crate::deck::{Deck, LayoutNode};
 
-    // new_theme_with_layout: a distinct ThemeData carrying one extra layout.
     fn new_theme_with_layout(img_asset_id: &str) -> ThemeData {
         let img = image_element("el_img", img_asset_id);
         let root = group_element("el_layout_root", vec![img]);
@@ -120,8 +96,6 @@ mod tests {
         theme
     }
 
-    // one_asset: an (entry, bytes) pair built through a real registry so the id
-    // is content-derived like production.
     fn one_asset() -> (AssetEntry, Vec<u8>) {
         let mut reg = AssetRegistry::new_empty();
         let entry = reg.insert_blob(
@@ -150,9 +124,9 @@ mod tests {
         assert!(deck.theme.theme_css.contains("--new"));
         assert!(deck.theme.layout_order.contains(&"custom".to_string()));
         assert!(deck.assets.find_by_id(&entry.id).is_some());
-        // Slides untouched.
+
         assert_eq!(deck.slides[&sid].root.children.len(), slide_children_before);
-        // Flags.
+
         assert!(cmd.requires_remount());
         assert!(cmd.affects_layout_list());
         assert!(cmd.affects_globals());
@@ -177,7 +151,7 @@ mod tests {
         out.inverse.apply(&mut deck).unwrap();
         assert_eq!(deck.theme.theme_css, prior_css);
         assert_eq!(deck.theme.layout_order, prior_layouts);
-        // The added asset was removed by the inverse.
+
         assert!(deck.assets.find_by_id(&entry.id).is_none());
     }
 

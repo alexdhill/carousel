@@ -1,17 +1,3 @@
-// Patch buffer.
-//
-// `PatchBuffer` accumulates patches emitted by commands within a single
-// event-loop iteration. Draining the buffer applies §8.4 coalescing:
-// repeated `SetStyle` or `SetAttribute` writes targeting the same
-// (element_id, property|attribute) keep only the last write; all other
-// patches pass through in their original order.
-//
-// The buffer itself does not know how to flush. The owner (ApplicationCore)
-// checks `add()`'s return value — true means the buffer transitioned from
-// empty to non-empty — and posts a UserEvent::FlushPatches so the flush
-// happens on the next event-loop iteration (per SPEC §8.4 / Stage 4
-// debugging note about deferring flush).
-
 use crate::ipc::{ElementId, Patch};
 use std::collections::HashMap;
 
@@ -21,35 +7,21 @@ pub struct PatchBuffer {
 }
 
 impl PatchBuffer {
-    // new
-    // Inputs: none.
-    // Output: an empty PatchBuffer.
+
     pub fn new() -> Self {
         Self {
             pending: Vec::new(),
         }
     }
 
-    // is_empty
-    // Inputs: self.
-    // Output: true if no patches are buffered.
     pub fn is_empty(&self) -> bool {
         self.pending.is_empty()
     }
 
-    // len
-    // Inputs: self.
-    // Output: count of buffered (un-coalesced) patches.
     pub fn len(&self) -> usize {
         self.pending.len()
     }
 
-    // add
-    // Inputs: a vector of patches produced by a command.
-    // Output: true if the buffer was empty before this call and is now
-    // non-empty (the signal callers use to schedule a flush).
-    // Dataflow: append-only; coalescing is deferred to drain time so
-    // multiple add() calls in one iteration can still cancel each other.
     pub fn add(&mut self, patches: Vec<Patch>) -> bool {
         let was_empty: bool = self.pending.is_empty();
         if patches.is_empty() {
@@ -59,32 +31,15 @@ impl PatchBuffer {
         was_empty && !self.pending.is_empty()
     }
 
-    // take_coalesced
-    // Inputs: self.
-    // Output: the buffered patches in original order, with redundant
-    // SetStyle/SetAttribute writes elided. The buffer is left empty.
     pub fn take_coalesced(&mut self) -> Vec<Patch> {
         let raw: Vec<Patch> = std::mem::take(&mut self.pending);
         coalesce_patches(raw)
     }
 }
 
-// CoalesceKind
-// Tag bytes used to keep SetStyle and SetAttribute namespaces distinct
-// inside the dedup map. Using a `&'static str` avoids allocating per key.
 const STYLE_KIND: &str = "style";
 const ATTR_KIND: &str = "attr";
 
-// coalesce_patches
-// Inputs: the raw pending vector.
-// Output: filtered vector where any (element, property) reached by
-// multiple SetStyle writes retains only the last; same for SetAttribute.
-// Dataflow:
-//   pass 1: scan left-to-right, remember the last index touching each key.
-//   pass 2: keep only patches whose index is the last for their key (or
-//           are not coalescable at all).
-// Non-coalescable variants (SetText, Remove, Insert, Batch, etc.) pass
-// through untouched. Ordering is preserved.
 fn coalesce_patches(patches: Vec<Patch>) -> Vec<Patch> {
     let n: usize = patches.len();
     if n <= 1 {
@@ -190,7 +145,7 @@ mod tests {
         buf.add(patches);
         let out = buf.take_coalesced();
         assert_eq!(out.len(), 2);
-        // Last left write survives; top write also.
+
         match &out[0] {
             Patch::SetStyle {
                 property, value, ..
@@ -221,8 +176,7 @@ mod tests {
         let mut buf = PatchBuffer::new();
         buf.add(patches);
         let out = buf.take_coalesced();
-        // b/top was second in input; after dedup the surviving a/left is
-        // the third input, so order becomes [b/top, a/left(200)].
+
         assert_eq!(out.len(), 2);
         match &out[0] {
             Patch::SetStyle {
@@ -295,8 +249,7 @@ mod tests {
         let mut buf = PatchBuffer::new();
         buf.add(patches);
         let out = buf.take_coalesced();
-        // SetText is not coalesced — both writes survive; RemoveElement
-        // also passes through.
+
         assert_eq!(out.len(), 3);
     }
 
@@ -310,7 +263,7 @@ mod tests {
         let mut buf = PatchBuffer::new();
         buf.add(patches);
         let out = buf.take_coalesced();
-        // Only the latest left=200 SetStyle survives, plus the SetText.
+
         assert_eq!(out.len(), 2);
     }
 
@@ -351,9 +304,7 @@ mod tests {
         let mut buf = PatchBuffer::new();
         buf.add(patches);
         let out = buf.take_coalesced();
-        // Batch is opaque — coalescing doesn't peek inside, so the Batch
-        // itself stays, and the latest a/left=2px wins between the outer
-        // SetStyle pair.
+
         assert_eq!(out.len(), 2);
         assert!(matches!(out[0], Patch::Batch { .. }));
     }

@@ -1,39 +1,24 @@
-/* =========================================================================
-   host.css — Slide Editor chrome
-   Warm "paper" design system (Claude Design: Slide Editor.dc.html).
-   The functional DOM (ids/classes) is driven by host.js and must not change;
-   this file only styles it. Tokens + usage: docs/UI-DESIGN.md. Structural
-   plan + binding constraints: docs/UI-REBUILD-SPEC.md.
-   ========================================================================= */
-
 :root {
-    /* accent (Claude clay) */
     --acc: #f19035;
     --acc-hover: #e08631;
     --acc-soft: #fbe0c7;
     --acc-ink: #c3742b;
     --acc-line: #f9d3ae;
-    /* surfaces */
     --bg: #f2f0eb;
     --panel: #ffffff;
     --canvas: color-mix(in srgb, var(--bg) 67%, var(--panel));
-    /* ink (text) */
     --ink: #362a28;
     --ink2: color-mix(in srgb, var(--ink) 80%, var(--panel));
     --ink3: color-mix(in srgb, var(--ink) 66%, var(--panel));
     --label: color-mix(in srgb, var(--ink) 50%, var(--panel));
-    /* fields / lines / hover */
     --field: var(--bg);
     --field-on: color-mix(in srgb, var(--field) 50%, var(--panel));
     --hover: color-mix(in srgb, var(--field) 95%, var(--acc));
     --line: #f2f0eb;
-    /* guides (transient measurement overlays) */
     --guide: var(--acc);
-    /* radii */
-    --r-panel: 13px;
-    --r-field: 8px;
-    --r-btn: 9px;
-    /* elevation */
+    --r-panel: 10px; /*13*/
+    --r-field: 5px; /*8*/
+    --r-btn: 6px; /*9*/
     --shadow: 0 2px 5px rgba(40, 35, 30, 0.1), 0 1px 3px rgba(40, 35, 30, 0.08);
     --shadow-slide: 0 10px 34px rgba(40, 35, 30, 0.16), 0 2px 8px rgba(40, 35, 30, 0.08);
     --gap: 7px;
@@ -62,7 +47,6 @@ body {
     overflow: hidden;
 }
 
-/* App shell: fixed flex column, panels float with a uniform gutter. */
 body {
     position: fixed;
     inset: 0;
@@ -81,9 +65,6 @@ body {
     overflow: hidden;
 }
 
-/* Pane focus is shown by the active selection (accent bounding box / object
-   label / current-slide border), not by an inner glow on the focused pane. */
-
 .middle-row {
     flex: 1 1 auto;
     min-height: 0;
@@ -91,9 +72,6 @@ body {
     gap: var(--gap);
 }
 
-/* Pane resize dividers — absolutely positioned over the inter-pane gutters by
-   JS (positionDividers). The element is the hit area; ::before is the thin
-   accent line shown on hover/drag. Hidden until JS gives them a box. */
 .divider {
     position: absolute;
     z-index: 50;
@@ -107,13 +85,10 @@ body {
     cursor: row-resize;
 }
 
-/* ===================== Shared chrome utilities ===================== */
-
 button {
     font-family: inherit;
 }
 
-/* Ghost square icon button. */
 .icon-btn {
     width: 30px;
     height: 30px;
@@ -149,7 +124,6 @@ button {
     height: 32px;
 }
 
-/* Toggle pressed state (grid-toggle uses .is-active). */
 .icon-btn.is-active {
     background: var(--acc);
     color: #fff;
@@ -160,7 +134,6 @@ button {
     color: #fff;
 }
 
-/* A field-tinted pill wrapping a row of buttons (tool clusters). */
 .tbar-group {
     display: inline-flex;
     align-items: center;
@@ -190,7 +163,6 @@ button {
     color: var(--ink);
 }
 
-/* Selected tool: raised white pill. */
 .tbar-btn.is-on {
     background: var(--field-on);
     color: var(--acc-ink);
@@ -209,7 +181,6 @@ button {
     margin: 0 2px;
 }
 
-/* Accent (primary) button. */
 .btn--accent {
     display: inline-flex;
     align-items: center;
@@ -230,7 +201,6 @@ button {
     background: var(--acc-hover);
 }
 
-/* Ghost text button (Share). */
 .btn--ghost {
     display: inline-flex;
     align-items: center;
@@ -250,7 +220,6 @@ button {
     background: var(--hover);
 }
 
-/* Segmented control base (mode toggle). */
 .seg {
     display: inline-flex;
     padding: 0;
@@ -261,7 +230,6 @@ button {
     cursor: pointer;
 }
 
-/* Hover tooltip (ported from the mockup). data-tip + optional data-key. */
 .tt {
     position: relative;
 }
@@ -310,7 +278,6 @@ button {
     opacity: 1;
 }
 
-/* Tooltip above (bottom strip). */
 .tt-up::after {
     top: auto;
     bottom: calc(100% + 9px);
@@ -327,8 +294,6 @@ button {
 .tt-up:hover::after {
     transform: translateX(-50%) translateY(0);
 }
-
-/* ===================== Top bar ===================== */
 
 .top-bar {
     height: 48px;
@@ -374,9 +339,6 @@ button {
     padding-left: 10px;
 }
 
-/* Accent dot to the left of the title. Absolutely positioned in the gap so
-   it never shifts the title; a faint accent glow makes it read as lit.
-   Invisible until the deck has unsaved changes (.doc-meta--dirty). */
 .doc-meta__dot {
     position: absolute;
     left: -3px;
@@ -401,8 +363,6 @@ button {
     color: var(--ink);
 }
 
-/* Editable title: a chromeless input that reads as the title text until
-   hovered/focused, when it gains a subtle field affordance. */
 .doc-meta__title--edit {
     border: 1px solid transparent;
     border-radius: 5px;
@@ -447,8 +407,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     display: inline-flex;
     align-items: center;
 }
-
-/* ===================== Panel headers ===================== */
 
 .panel-head,
 .canvas-head,
@@ -556,11 +514,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     white-space: nowrap;
 }
 
-/* ===================== Left column: Agent + Objects ===================== */
-
-/* Side-by-side (agent beside objects) layout is disabled for now: too
-   cluttered. The panes always stack and use the accordion collapse instead.
-   To re-enable side-by-side, set `flex-direction: row` here. */
 .left-col {
     display: flex;
     flex-direction: column;
@@ -568,14 +521,10 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     flex: 0 0 auto;
 }
 
-/* Accordion collapse chevron shown next to each pane's title. */
 .pane-collapse {
     margin-right: auto;
 }
 
-/* Agent panel hidden until toggled from the top bar. While hidden, the objects
-   pane fills the column and the accordion collapse chevrons are pointless, so
-   they are hidden too. */
 .left-col[data-agent-visible="false"] .panel--agent {
     display: none;
 }
@@ -601,8 +550,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     flex: 1 1 auto;
     min-width: 0;
 }
-
-/* ===================== Objects / Layers (left) ===================== */
 
 .panel--objects {
     width: 240px;
@@ -737,7 +684,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     outline: none;
 }
 
-/* floatingEdit() overlay input. */
 .floating-edit {
     position: fixed;
     z-index: 1000;
@@ -759,8 +705,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     margin-left: 16px;
 }
 
-/* Collapsed group: hide its child subtree (children stay built for cheap
-   toggling). */
 .objects__node-wrap[data-collapsed="true"] > .objects__children {
     display: none;
 }
@@ -771,8 +715,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     font-size: 12px;
     font-style: italic;
 }
-
-/* ===================== Agent panel ===================== */
 
 .panel--agent {
     width: 240px;
@@ -791,7 +733,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     display: none;
 }
 
-/* Collapsed layers pane: header only, hide the tree + header tools. */
 .panel--objects.panel--collapsed .objects__scroll,
 .panel--objects.panel--collapsed .panel-head__tools {
     display: none;
@@ -913,8 +854,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     color: var(--ink3);
 }
 
-/* Send button morphs into a stop button while the agent is running: swap the
-   two glyphs and tint it. */
 .agent__glyph {
     display: inline-flex;
     align-items: center;
@@ -997,7 +936,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     background: var(--hover);
 }
 
-/* Agent log messages */
 .agent__message {
     padding: 6px 8px;
     border-radius: var(--r-field);
@@ -1028,7 +966,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     color: #c1584d;
 }
 
-/* Spinner keyframe animation */
 @keyframes agent_spin {
     from {
         transform: rotate(0deg);
@@ -1051,7 +988,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     animation: agent_spin 0.8s linear infinite;
 }
 
-/* Status row: compact, dimmed background, inline spinner + label */
 #agent-status {
     display: flex;
     align-items: center;
@@ -1075,7 +1011,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     white-space: nowrap;
 }
 
-/* Thinking area: dimmed, collapsible */
 .agent-thinking {
     display: flex;
     flex-direction: column;
@@ -1136,7 +1071,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     display: none;
 }
 
-/* Tool row state variants */
 .agent__tool-row {
     display: flex;
     align-items: center;
@@ -1188,8 +1122,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     font-size: 12px;
     flex: 0 0 auto;
 }
-
-/* ===================== Add-agent modal ===================== */
 
 .agent-modal {
     position: fixed;
@@ -1252,7 +1184,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     margin-top: 4px;
 }
 
-/* Collapsed panel state: header only, hidden content */
 .panel--collapsed {
     flex: 0 0 42px;
 }
@@ -1260,8 +1191,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 .panel--collapsed .panel-head {
     border-bottom: none;
 }
-
-/* ===================== Narrow window accordion ===================== */
 
 @media (max-width: 1100px) {
     .left-col {
@@ -1301,8 +1230,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
         flex: 0 0 42px;
     }
 }
-
-/* ===================== Canvas (center) ===================== */
 
 .panel--canvas {
     flex: 1 1 auto;
@@ -1362,8 +1289,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     position: absolute;
     inset: 0;
     pointer-events: none;
-    /* Above the canvas scrim so handles/boxes stay crisp over off-slide
-       (greyed) elements. */
     z-index: 8;
 }
 
@@ -1374,8 +1299,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     z-index: 5;
 }
 
-/* ===================== Inspector (right) ===================== */
-
 .panel--inspector {
     width: 300px;
     flex: 0 0 auto;
@@ -1384,13 +1307,8 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     overflow: hidden;
 }
 
-/* Single scroll region for the whole styles pane: the slide/layout box, the
-   dynamic element sections, globals, and the theme actions all scroll together
-   below the fixed header. */
 .inspector__body {
     flex: 1 1 auto;
-    /* min-height:0 lets this flex child shrink below its content height so it
-       actually scrolls instead of growing and being clipped by the panel. */
     min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
@@ -1400,9 +1318,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     padding: 4px 0 6px;
 }
 
-/* Conditional overscroll: while an in-DOM dropdown/popover is open, lock the
-   styles pane so a wheel over the pane can't scroll the anchored list out from
-   under its input. The popovers keep their own internal scroll. */
 .panel--inspector:has(.inspector__fontcombo-pop:not([hidden])) .inspector__body,
 .panel--inspector:has(.animations__add-menu:not([hidden])) .inspector__body {
     overflow-y: hidden;
@@ -1458,8 +1373,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     gap: 8px 10px;
 }
 
-/* Flow body: wraps a relocated panel (Custom CSS / Animations) rather than the
-   field grid, so it stacks and the inner node supplies its own padding. */
 .inspector__section-body--flow {
     display: block;
     padding: 0;
@@ -1482,14 +1395,10 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     grid-column: 1 / -1;
 }
 
-/* The transition timing group stacks Duration + Easing as two labelled rows. */
 .slide-transition__timing {
     gap: 10px;
 }
 
-/* Slide-only fields (title/layout/notes) are hidden in layout mode via the
-   `hidden` attribute; the class rule above sets display:flex, so restore the
-   hide with a matching-specificity attribute rule. */
 [data-slide-only][hidden] {
     display: none;
 }
@@ -1528,7 +1437,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     cursor: not-allowed;
 }
 
-/* ---- Unit chip (px ▾) + unit-number field ---- */
 .inspector__unitchip {
     position: relative;
     display: inline-flex;
@@ -1648,7 +1556,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     color: var(--ink3);
 }
 
-/* Existing custom declarations, as removable chips. */
 .inspector__decls {
     display: flex;
     flex-direction: column;
@@ -1716,7 +1623,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     gap: 6px;
 }
 
-/* Dashed "add new" inputs. */
 .inspector__decl-input {
     min-width: 0;
     height: 30px;
@@ -1758,7 +1664,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     background: var(--acc-ink);
 }
 
-/* ---- Segmented selector (text-align / vertical align) ---- */
 .inspector__segment {
     display: flex;
     gap: 2px;
@@ -1794,7 +1699,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     box-shadow: 0 1px 2px rgba(40, 35, 30, 0.1);
 }
 
-/* ---- Text-style toggle group (B / I / U / S) ---- */
 .inspector__tstyle {
     display: flex;
     gap: 2px;
@@ -1843,7 +1747,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     text-decoration: line-through;
 }
 
-/* ---- Color: swatch + hex readout ---- */
 .inspector__color {
     display: flex;
     align-items: center;
@@ -1859,7 +1762,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     background: #efebe3;
 }
 
-/* Checkerboard behind any partly-transparent colour fill. */
 :root {
     --checker: repeating-conic-gradient(#cfcabf 0% 25%, #ffffff 0% 50%) 0 / 8px 8px;
 }
@@ -1914,7 +1816,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     cursor: pointer;
 }
 
-/* None state: white box with a diagonal red slash, "None" label. */
 .inspector__color--none .inspector__color-fill {
     background: #fff
         linear-gradient(
@@ -1951,7 +1852,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     width: 200px;
 }
 
-/* ---- Swatch row (Fill, Border colour) ---- */
 .inspector__swatchrow {
     display: flex;
     align-items: center;
@@ -1963,7 +1863,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     min-width: 0;
 }
 
-/* ---- Colour picker popover ---- */
 .colorpop {
     position: fixed;
     z-index: 2000;
@@ -1982,7 +1881,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     display: flex;
 }
 
-/* Caret pointing back at the anchor (swatch / percentage) that opened it. */
 .colorpop::before {
     content: "";
     position: absolute;
@@ -2100,7 +1998,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     border-color: var(--acc);
 }
 
-/* ---- Fill image picker (no preview) ---- */
 .inspector__fillimage {
     display: flex;
     align-items: center;
@@ -2151,7 +2048,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     color: var(--acc-ink);
 }
 
-/* ---- Style presets section ---- */
 .inspector__presets {
     display: flex;
     flex-direction: column;
@@ -2190,7 +2086,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     background: var(--acc-line);
 }
 
-/* ---- Font-family searchable combobox ---- */
 .inspector__fontcombo {
     position: relative;
 }
@@ -2209,8 +2104,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     list-style: none;
     max-height: 220px;
     overflow-y: auto;
-    /* Keep the wheel inside the dropdown; don't chain to the styles pane and
-       scroll the user away from the open list at the top/bottom boundary. */
     overscroll-behavior: contain;
     background: var(--panel);
     border: 1px solid var(--line);
@@ -2243,7 +2136,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     color: var(--acc-ink);
 }
 
-/* ---- 4-cell cluster (border width, corner radius) ---- */
 .inspector__cluster {
     position: relative;
 }
@@ -2333,7 +2225,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     padding: 0 4px 0 0;
 }
 
-/* ---- Shadow grid + colour ---- */
 .inspector__shadow {
     display: flex;
     flex-direction: column;
@@ -2346,7 +2237,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     gap: 6px;
 }
 
-/* Shadow cell: label stacked above the value (multi-char names need the room). */
 .inspector__shadow-cell {
     display: flex;
     flex-direction: column;
@@ -2376,7 +2266,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     border-color: var(--acc);
 }
 
-/* ---- Transform Width [chain] Height row ---- */
 .inspector__sizerow {
     display: grid;
     grid-template-columns: 1fr 24px 1fr;
@@ -2460,7 +2349,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     appearance: none;
     -webkit-appearance: none;
     padding-right: 26px;
-    /* Custom chevron drawn as an inline SVG background, tinted via --ink3. */
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none' stroke='%239a9384' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1l4 4 4-4'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: right 9px center;
@@ -2474,8 +2362,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     background: var(--field);
     cursor: pointer;
 }
-
-/* ===================== Bottom strip ===================== */
 
 .panel--thumbs {
     height: 160px;
@@ -2554,8 +2440,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     overflow-y: hidden;
 }
 
-/* Reorder drag: live insertion marker snapped into the gap between slides,
-   and a dimmed source thumbnail while it is being dragged. */
 .thumb-drop-line {
     display: none;
     position: absolute;
@@ -2572,7 +2456,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     opacity: 0.4;
 }
 
-/* Off-screen node snapshotted as the drag ghost: a single 160×90 slide. */
 .thumb-drag-ghost {
     position: fixed;
     top: 0;
@@ -2621,8 +2504,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     border-color: var(--acc-line);
 }
 
-/* Slide-level selection: when nothing is selected at element level, the
-   focus is on the slide — the current thumbnail gets the accent border. */
 #thumbnail-row[data-slide-focus="true"] .thumb[aria-current="true"] .thumb__preview {
     border-color: var(--acc);
 }
@@ -2632,11 +2513,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     top: 0;
     left: 0;
     transform-origin: top left;
-    /* The mount is the slide shadow's HOST; inherited properties (notably
-       text-align) cross into the shadow. The enclosing <button.thumb> defaults
-       text-align:center, which would centre default-aligned slide text. Reset to
-       match the viewport's .slide-host (start/left) so thumbnails render
-       identically. */
     text-align: left;
 }
 
@@ -2724,21 +2600,15 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     background: var(--acc-soft);
 }
 
-/* ===================== Selection handles ===================== */
-
-/* Union bounding box around a multi-selection (corner-scale handles sit on it).
-   Dashed to distinguish from the per-element solid boxes. */
 .selection-box--multi {
     border: 1.5px dashed var(--acc);
 }
 
-/* Per-cell selection inside a focused table: solid accent fill tint. */
 .selection-box--cell {
     border: 1.5px solid var(--acc);
     background: color-mix(in srgb, var(--acc) 16%, transparent);
 }
 
-/* Table inspector section. */
 .table-box__grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -2829,8 +2699,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     border-radius: 5px;
     margin: -10px 0 0 -5px;
 }
-
-/* ===================== Crop ===================== */
 
 #crop-overlay {
     position: absolute;
@@ -2970,14 +2838,11 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     background: var(--hover);
 }
 
-/* ===================== Snap guides ===================== */
-
 .snap-guide {
     position: absolute;
     pointer-events: none;
 }
 
-/* ---- rulers & guides (editor-only overlay) ---- */
 .ruler {
     position: absolute;
     z-index: 20;
@@ -3018,10 +2883,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     pointer-events: none;
 }
 
-/* Canvas scrim — greys content positioned outside the slide bounds (edit
-   mode). Four rects fill the viewport minus the slide rect. Below the
-   selection/guide/marquee overlays so those stay crisp over off-slide
-   elements; above the slide content (z 0). */
 #canvas-scrim {
     position: absolute;
     inset: 0;
@@ -3035,10 +2896,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     opacity: 0.72;
 }
 
-/* ===================== New-slide layout picker ===================== */
-
-/* Modal overlay shown when the user adds a slide: a grid of layout previews
-   (reusing the thumbnail mount machinery) over a dimmed backdrop. */
 .layout-picker {
     position: fixed;
     inset: 0;
@@ -3097,8 +2954,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     color: var(--ink2);
 }
 
-/* ===================== Chromium download modal ===================== */
-
 .chromium-dl {
     position: fixed;
     inset: 0;
@@ -3153,8 +3008,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     }
 }
 
-/* ===================== Quit confirmation dialog ===================== */
-
 .quit-dlg {
     position: fixed;
     inset: 0;
@@ -3196,7 +3049,7 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     font-weight: 600;
     cursor: pointer;
 }
-/* Cancel — light neutral pill. */
+
 .quit-dlg__btn--cancel {
     border: 0;
     background: var(--field);
@@ -3205,7 +3058,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 .quit-dlg__btn--cancel:hover {
     background: var(--hover);
 }
-/* Exit without saving — outlined, accent text. */
 .quit-dlg__btn--discard {
     border: 1px solid var(--acc);
     background: transparent;
@@ -3214,7 +3066,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 .quit-dlg__btn--discard:hover {
     background: var(--acc-soft);
 }
-/* Save and exit — filled accent (primary). */
 .quit-dlg__btn--save {
     border: 0;
     background: var(--acc);
@@ -3224,8 +3075,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 .quit-dlg__btn--save:hover {
     background: var(--acc-hover);
 }
-
-/* ===================== Share / export dropdown ===================== */
 
 .share-menu {
     position: fixed;
@@ -3292,8 +3141,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     font-size: 11px;
     color: var(--label);
 }
-
-/* ===================== Code-block (embed) editor ===================== */
 
 .embed-editor {
     position: fixed;
@@ -3365,7 +3212,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     color: #fff;
 }
 
-/* Drag-to-select marquee box (editor overlay). */
 #marquee-box {
     position: absolute;
     display: none;
@@ -3375,8 +3221,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     background: color-mix(in srgb, var(--acc) 14%, transparent);
 }
 
-/* The guide div IS the visible accent line; a transparent ::before widens the
-   grab/hit area. Selected guides thicken from 1px to 2px. */
 .guide {
     position: absolute;
     background: var(--acc);
@@ -3421,8 +3265,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     width: 2px;
 }
 
-/* Inherited (layout) guides: read-only, muted + dashed so they read as
-   reference lines distinct from the slide's own editable guides. */
 .guide--inherited {
     background: transparent;
     pointer-events: none;
@@ -3490,8 +3332,6 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     bottom: 0;
 }
 
-/* ===================== Layout-mode sections ===================== */
-
 .globals {
     display: none;
     flex-direction: column;
@@ -3531,9 +3371,6 @@ body[data-mode="layout"] .globals {
     border-color: var(--acc);
 }
 
-/* Slide box: an inspector section shown only in slide mode with no
-   selection. JS toggles display (none ↔ block); chrome reuses the
-   .inspector__* field system. */
 .slide-box {
     display: none;
 }
@@ -3607,10 +3444,6 @@ body[data-mode="layout"] .theme-actions {
     color: var(--acc-ink);
 }
 
-/* ===================== Animations ===================== */
-
-/* Visibility is owned by the wrapping collapsible section; the panel itself is
-   always laid out (its section is hidden when no element is selected). */
 .animations {
     display: flex;
     flex-direction: column;
@@ -3756,7 +3589,6 @@ body[data-mode="layout"] .theme-actions {
     gap: 8px;
 }
 
-/* Slide animation controller (styles pane) */
 .sac {
     display: flex;
     flex-direction: column;
@@ -3770,7 +3602,6 @@ body[data-mode="layout"] .theme-actions {
     padding: 2px 0;
 }
 
-/* One state change (a "with previous" run) = one rounded box. */
 .sac-group {
     border: 1px solid var(--line);
     border-radius: var(--r-field);
@@ -3782,7 +3613,6 @@ body[data-mode="layout"] .theme-actions {
     position: relative;
 }
 
-/* Subtle separator between animations that share a state change. */
 .sac-item + .sac-item {
     border-top: 1px solid var(--line);
 }
@@ -3811,8 +3641,6 @@ body[data-mode="layout"] .theme-actions {
     text-overflow: ellipsis;
 }
 
-/* Drop hints: accent underline = "next step after"; full accent ring + tint =
-   "join this group (with previous)". */
 .sac-item__head[data-sac-drop="after"] {
     box-shadow: inset 0 -2px 0 0 var(--acc);
 }
@@ -3879,7 +3707,6 @@ body[data-mode="layout"] .theme-actions {
     z-index: 20;
     max-height: 280px;
     overflow-y: auto;
-    /* Keep the wheel inside the menu; don't chain to the pane behind it. */
     overscroll-behavior: contain;
     background: var(--panel);
     border: 1px solid var(--line);
@@ -3936,7 +3763,6 @@ body[data-mode="layout"] .theme-actions {
     font-weight: 600;
 }
 
-/* ---- Unified dropdown (trigger + menu) ---- */
 .dropdown-menu {
     position: fixed;
     z-index: 2000;
@@ -4001,8 +3827,6 @@ body[data-mode="layout"] .theme-actions {
     border-color: var(--line);
 }
 
-/* ===================== Toasts ===================== */
-
 #toast-stack {
     position: fixed;
     top: 16px;
@@ -4052,8 +3876,6 @@ body[data-mode="layout"] .theme-actions {
     white-space: normal;
     word-break: break-word;
 }
-
-/* ===================== Morph Transition Controls ===================== */
 
 #morph-control-container {
     display: flex;
@@ -4121,8 +3943,6 @@ body[data-mode="layout"] .theme-actions {
         opacity: 1;
     }
 }
-
-/* ===================== Scrollbars ===================== */
 
 ::-webkit-scrollbar {
     width: 9px;

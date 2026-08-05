@@ -1,19 +1,3 @@
-// Commands and the dispatcher.
-//
-// SPEC §9.1–9.6. Each Command knows how to (a) mutate the deck and (b)
-// describe its inverse, returning both alongside a list of `Patch`es and
-// the slides that became dirty.
-//
-// Stage 5 added Transaction tracking: while a transaction is open, every
-// dispatched command's patches and dirty-slide set are folded into the
-// transaction's accumulators.
-//
-// Stage 6 adds the history stack. Outside of an open transaction, each
-// undoable dispatch pushes its inverse onto CommandHistory; transaction
-// commit builds a composite inverse from the start snapshot and pushes a
-// single history entry. `undo` / `redo` on the dispatcher delegate to the
-// history with the deck reference.
-
 #![allow(dead_code, unused_imports)]
 
 pub mod animation;
@@ -65,7 +49,7 @@ pub use resize_element::ResizeElement;
 pub use scale_elements::{ElementTransform, SetElementsTransform};
 pub use set_geometry::{GeometryProperty, SetGeometryProperty};
 pub use set_inline_style::{RemoveInlineStyle, SetInlineStyle};
-// FileAction is re-exported below via the public InterpretResult enum.
+
 pub use insert_element::InsertElement;
 pub use layout_lifecycle::{
     InsertLayout, RemoveLayout, SetLayoutBackground, SetLayoutBackgroundImage, SetLayoutName,
@@ -90,19 +74,6 @@ pub use table_commands::{
 pub use theme_globals::SetGlobalsCss;
 pub use transactions::{Transaction, TransactionSnapshot};
 
-// Command
-// SPEC §9.1. Every editor mutation implements this trait. `apply` runs the
-// mutation and returns the inverse so a future history stack can record it.
-//
-// Default-false trait methods declare cross-cutting effects the dispatcher
-// reacts to after apply:
-//   - `affects_object_tree` (Stage 9) — a SetAttribute(data-name) edit
-//     does not change DOM geometry, but the object panel still needs to
-//     refresh. Insert / Remove / Reparent / Rename override to true.
-//   - `requires_remount` (Stage 9) — when the element tree's child order
-//     or membership changed, the slide must be re-serialised and
-//     re-mounted so the per-child z-index stack and DOM parentage match
-//     the tree. Insert / Remove / Reparent override to true.
 pub trait Command: Send + Sync + std::fmt::Debug {
     fn apply(&self, deck: &mut Deck) -> Result<CommandOutput, CommandError>;
     fn label(&self) -> &'static str;
@@ -115,76 +86,46 @@ pub trait Command: Send + Sync + std::fmt::Debug {
     fn requires_remount(&self) -> bool {
         false
     }
-    // affects_slide_list (Stage 10) — the command changed the deck's
-    // set or order of slides (add / remove / reorder / duplicate). The
-    // dispatcher reacts by rebroadcasting SlideListUpdate and, if the
-    // active slide was the one removed, re-anchoring it to a valid
-    // slide before remounting.
+
     fn affects_slide_list(&self) -> bool {
         false
     }
-    // affects_layout_list (Stage 11) — the command changed the theme's set
-    // or order of layouts, or a layout's display name. The editor reacts by
-    // rebroadcasting the layout list.
+
     fn affects_layout_list(&self) -> bool {
         false
     }
-    // affects_globals (Stage 11) — the command changed the deck-wide
-    // globals CSS blob. The editor reacts by re-mounting the active canvas
-    // so the new CSS is visible immediately.
+
     fn affects_globals(&self) -> bool {
         false
     }
-    // affects_animations (animations) — the command changed a slide's
-    // animation timeline. The editor reacts by rebroadcasting
-    // SlideAnimationsUpdate for the active slide.
+
     fn affects_animations(&self) -> bool {
         false
     }
-    // affects_assets (theme save/load) — the command changed the deck's asset
-    // registry (e.g. a theme swap merged in or removed assets). The editor
-    // reacts by rebroadcasting the asset bundle so the JS blob cache stays
-    // correct on apply, undo, and redo.
+
     fn affects_assets(&self) -> bool {
         false
     }
-    // affects_slide_meta (smart styles pane) — the command changed a slide's
-    // inspector-visible metadata (background / notes / layout). The editor
-    // reacts by rebroadcasting SlideInspectorUpdate so the Slide box resyncs on
-    // apply, undo, and redo.
+
     fn affects_slide_meta(&self) -> bool {
         false
     }
-    // affects_guides (saveable guides) — the command changed the active
-    // canvas's guide set. The editor reacts by rebroadcasting GuidesUpdate so
-    // the overlay redraws on apply, undo, and redo.
+
     fn affects_guides(&self) -> bool {
         false
     }
 }
 
-// CommandOutput
-// The four artifacts every command produces:
-// - patches: DOM mutations to be shipped to the webview.
-// - inverse: a Command that, when applied, undoes this one.
-// - dirty_targets: canvas targets whose persistence state changed. Slide
-//   targets feed `deck.dirty_slides` (quicksave); layout targets set the
-//   layout's `dirty` flag. Slide- and layout-level lifecycle commands
-//   report the canvas they touched here too.
-// - manifest_dirty: true if deck-level metadata changed.
 #[derive(Debug)]
 pub struct CommandOutput {
     pub patches: Vec<Patch>,
     pub inverse: Box<dyn Command>,
     pub dirty_targets: Vec<CanvasTarget>,
     pub manifest_dirty: bool,
-    // Non-fatal advisory messages (e.g. an add-time ordering accommodation).
-    // The command still applied; the dispatcher surfaces these as Notices.
+
     pub warnings: Vec<String>,
 }
 
-// CommandError
-// Per SPEC §9.1. Wraps the failure modes that any command might surface.
 #[derive(Debug, thiserror::Error)]
 pub enum CommandError {
     #[error("element {0} not found")]
@@ -203,12 +144,6 @@ pub enum CommandError {
     Conflict(String),
 }
 
-// resolve_canvas_mut
-// Inputs: the deck and a CanvasTarget.
-// Output: a `&mut dyn Canvas` for the target, or the variant-appropriate
-// CommandError (SlideNotFound / LayoutNotFound) when the target is absent.
-// Shared by every element command so the resolve-or-error step is written
-// once.
 pub fn resolve_canvas_mut<'a>(
     deck: &'a mut Deck,
     target: &CanvasTarget,
@@ -217,9 +152,6 @@ pub fn resolve_canvas_mut<'a>(
         .ok_or_else(|| canvas_not_found(target))
 }
 
-// canvas_not_found
-// Inputs: the missing target.
-// Output: the matching not-found CommandError variant.
 pub fn canvas_not_found(target: &CanvasTarget) -> CommandError {
     match target {
         CanvasTarget::Slide(s) => CommandError::SlideNotFound(s.clone()),
@@ -227,21 +159,6 @@ pub fn canvas_not_found(target: &CanvasTarget) -> CommandError {
     }
 }
 
-// DispatchOutcome
-// Returned to the caller of `CommandDispatcher::dispatch` (and of
-// `undo`/`redo`) so the event loop can decide what follow-up work to
-// schedule:
-//   - needs_flush: the patch buffer transitioned empty → non-empty;
-//     post a FlushPatches user event.
-//   - affects_object_tree: the dispatched command (or its inverse, on
-//     undo/redo) reports that the slide's element tree shape or names
-//     changed; the ApplicationCore should rebroadcast ObjectTreeUpdate.
-//   - requires_remount: the dispatched command (or its inverse) reports
-//     that the slide must be re-serialised and re-mounted because
-//     z-index ordering or DOM parentage changed; the ApplicationCore
-//     should re-send MountSlide for the active slide.
-// `warnings` makes this non-`Copy`; callers move or clone it (they already
-// read its bool fields before handing the whole outcome to react_to_outcome).
 #[derive(Debug, Default, Clone)]
 pub struct DispatchOutcome {
     pub needs_flush: bool,
@@ -257,37 +174,21 @@ pub struct DispatchOutcome {
     pub warnings: Vec<String>,
 }
 
-// FileAction
-// Direction tag for InterpretResult::FileAction. One variant per
-// File-menu accelerator the JS host can fire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileAction {
     New,
     Open,
     Save,
     SaveAs,
-    // Theme save/load — export the current theme / import a theme file.
+
     SaveTheme,
     LoadTheme,
-    // Export the deck as a self-contained playable HTML folder.
+
     ExportHtml,
-    // Export the deck as a PDF (one page per animation stage) via the webview
-    // print path.
+
     ExportPdf,
 }
 
-// InterpretResult
-// The output of `ApplicationCore::interpret`. Maps an inbound
-// InteractionEvent to a concrete next-step instruction:
-//   Command            — apply as a one-shot mutation.
-//   Selection          — replace editor selection state and notify JS.
-//   TransactionBegin   — open a transaction with a label + snapshot.
-//   TransactionUpdate  — apply a command inside the open transaction.
-//   TransactionCommit  — close the open transaction.
-//   CommitTransactionWith — apply, then close. Drag-end's path.
-//   Undo / Redo        — pop the next history entry (Stage 6).
-//   FileAction         — New / Open / Save / SaveAs (Stage 7).
-//   Nothing            — event is currently a no-op (e.g., unhandled).
 pub enum InterpretResult {
     Command(Box<dyn Command>),
     Selection(SelectionState),
@@ -301,25 +202,15 @@ pub enum InterpretResult {
     Undo,
     Redo,
     FileAction(FileAction),
-    // SetActiveSlide
-    // Stage 10 — thumbnail navigation. Non-undoable: switching slides
-    // is an editor-state change, not a deck-state change. The handler
-    // flushes pending patches, swaps active_slide, clears selection,
-    // and remounts the new slide.
+
     SetActiveSlide(SlideId),
-    // SetEditorMode (Stage 11) — toolbar mode toggle. Non-undoable editor
-    // state: the handler switches the dispatcher's mode and rebroadcasts the
-    // active canvas + the relevant list.
+
     SetEditorMode(EditorMode),
-    // SetActiveLayout (Stage 11) — layout-thumbnail navigation, the layout
-    // analogue of SetActiveSlide.
+
     SetActiveLayout(LayoutId),
-    // StartPresentation — request to enter fullscreen presentation mode from
-    // the active slide. Non-undoable editor action: the handler asks the event
-    // loop (via a wake) to build the presentation window.
+
     StartPresentation,
-    // SendSlideLayoutPicker — ship the theme layouts to JS so the new-slide
-    // layout picker can render previews. Non-undoable editor request.
+
     SendSlideLayoutPicker,
     Nothing,
 }
@@ -346,11 +237,6 @@ impl std::fmt::Debug for InterpretResult {
     }
 }
 
-// EditorMode
-// Which editing surface the dispatcher is currently driving. This is
-// editor state (not deck state): it selects which undo/redo stack a
-// dispatch/undo/redo routes through, and (via ApplicationCore) which
-// canvas element commands target. Default is Slide.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EditorMode {
     #[default]
@@ -358,12 +244,6 @@ pub enum EditorMode {
     Layout,
 }
 
-// CommandDispatcher
-// Owns the deck, the patch buffer, the in-flight Transaction (Stage 5), and
-// two mode-scoped CommandHistory stacks (Stage 11). The active `mode`
-// selects which stack dispatch/undo/redo operate on, so editing a layout
-// can never reach into the slide's history or vice versa (the isolation
-// requirement). Selection state remains in ApplicationCore.
 pub struct CommandDispatcher {
     deck: Deck,
     patch_buffer: PatchBuffer,
@@ -374,19 +254,11 @@ pub struct CommandDispatcher {
 }
 
 impl CommandDispatcher {
-    // new
-    // Inputs: an initial Deck (typically `Deck::sample()` at startup).
-    // Output: a dispatcher wrapping the deck, an empty patch buffer, no
-    // open transaction, Slide mode, and two DEFAULT_HISTORY_DEPTH stacks.
+
     pub fn new(deck: Deck) -> Self {
         Self::with_history(deck, CommandHistory::default())
     }
 
-    // with_history
-    // Inputs: an initial Deck and a preconfigured CommandHistory.
-    // Output: a dispatcher whose *slide* history is the supplied one and
-    // whose layout history is a default — useful in tests that pin a small
-    // max_depth and operate in the default Slide mode.
     pub fn with_history(deck: Deck, history: CommandHistory) -> Self {
         Self {
             deck,
@@ -418,10 +290,6 @@ impl CommandDispatcher {
         self.transaction.is_some()
     }
 
-    // mode / set_mode
-    // The active editor mode selects the live history stack. Switching
-    // modes does not touch either stack — it just changes which one
-    // subsequent dispatch/undo/redo calls operate on.
     pub fn mode(&self) -> EditorMode {
         self.mode
     }
@@ -430,9 +298,6 @@ impl CommandDispatcher {
         self.mode = mode;
     }
 
-    // active_history_mut
-    // The history stack for the current mode. All push/undo/redo routing
-    // goes through here so the two stacks stay isolated.
     fn active_history_mut(&mut self) -> &mut CommandHistory {
         match self.mode {
             EditorMode::Slide => &mut self.slide_history,
@@ -440,9 +305,6 @@ impl CommandDispatcher {
         }
     }
 
-    // history
-    // The active mode's history stack (read-only). UI overlays and tests
-    // read undo/redo depth and labels from here.
     pub fn history(&self) -> &CommandHistory {
         match self.mode {
             EditorMode::Slide => &self.slide_history,
@@ -458,11 +320,6 @@ impl CommandDispatcher {
         self.history().can_redo()
     }
 
-    // begin_transaction
-    // Inputs: label, start snapshot.
-    // Output: side-effect; opens a transaction. If one is already open,
-    // logs and replaces it — the policy layer must not begin twice but
-    // we recover defensively.
     pub fn begin_transaction(&mut self, label: &'static str, snapshot: TransactionSnapshot) {
         assert!(!label.is_empty(), "begin_transaction: label is empty");
         if self.transaction.is_some() {
@@ -472,15 +329,6 @@ impl CommandDispatcher {
         self.transaction = Some(Transaction::new(label, snapshot));
     }
 
-    // commit_transaction
-    // Inputs: none.
-    // Output: the closed Transaction, or None if none was open.
-    // Dataflow: take the in-flight transaction, then build a composite
-    // inverse from its start snapshot. The composite restores every
-    // element the transaction touched to its pre-transaction state. If
-    // any sub-inverses exist, push a single history entry labelled with
-    // the transaction's label (one drag = one undo). If the snapshot is
-    // empty (no element was actually touched), skip the push.
     pub fn commit_transaction(&mut self) -> Option<Transaction> {
         let txn: Transaction = self.transaction.take()?;
         debug!(
@@ -494,32 +342,12 @@ impl CommandDispatcher {
         Some(txn)
     }
 
-    // abort_transaction
-    // Inputs: none.
-    // Output: drops the in-flight transaction without producing a history
-    // entry. Stage 5 does not call this; included for symmetry and Stage
-    // 6's escape hatch (e.g., command failure mid-transaction).
     pub fn abort_transaction(&mut self) {
         if self.transaction.take().is_some() {
             debug!("transaction abort");
         }
     }
 
-    // dispatch
-    // Inputs: a boxed Command.
-    // Output: a DispatchOutcome describing whether the patch buffer became
-    // non-empty as a result.
-    // Errors: any CommandError raised by `apply`.
-    // Dataflow:
-    //   1. apply against the deck
-    //   2. if a transaction is open, extend its patches + dirty-slide set
-    //      (the inverse is discarded; the transaction's commit will build
-    //      one composite inverse from the start snapshot)
-    //   3. else if the command is undoable, push its inverse onto history
-    //      as a single entry
-    //   4. fold dirty_slides + manifest_dirty into the deck's bookkeeping
-    //   5. append patches to the patch buffer; signal flush on empty →
-    //      non-empty
     pub fn dispatch(&mut self, command: Box<dyn Command>) -> Result<DispatchOutcome, CommandError> {
         let label: &'static str = command.label();
         let undoable: bool = command.undoable();
@@ -534,8 +362,7 @@ impl CommandDispatcher {
         let affects_guides: bool = command.affects_guides();
         debug!("dispatching: {}", label);
         let output: CommandOutput = command.apply(&mut self.deck)?;
-        // Reparent emits no patches yet still touches the tree, so the
-        // strict "any side effect" assertion must allow that case.
+
         assert!(
             !output.dirty_targets.is_empty()
                 || output.manifest_dirty
@@ -571,17 +398,9 @@ impl CommandDispatcher {
         })
     }
 
-    // undo
-    // Inputs: none.
-    // Output: Ok(Some(DispatchOutcome)) when an entry was applied;
-    // Ok(None) when the undo stack was empty.
-    // Errors: any CommandError raised by the recorded inverse's apply.
-    // Dataflow: delegate to CommandHistory::undo, then fold the resulting
-    // dirty_slides into the deck and queue the patches.
     pub fn undo(&mut self) -> Result<Option<DispatchOutcome>, CommandError> {
         assert!(self.transaction.is_none(), "undo while transaction is open");
-        // Inline the mode→stack selection so the history borrow stays
-        // field-disjoint from the `&mut self.deck` the inverse needs.
+
         let history: &mut CommandHistory = match self.mode {
             EditorMode::Slide => &mut self.slide_history,
             EditorMode::Layout => &mut self.layout_history,
@@ -607,12 +426,6 @@ impl CommandDispatcher {
         }))
     }
 
-    // redo
-    // Inputs: none.
-    // Output: Ok(Some(DispatchOutcome)) when an entry was applied;
-    // Ok(None) when the redo stack was empty.
-    // Errors: any CommandError raised by the recorded inverse's apply.
-    // Dataflow: symmetric with undo.
     pub fn redo(&mut self) -> Result<Option<DispatchOutcome>, CommandError> {
         assert!(self.transaction.is_none(), "redo while transaction is open");
         let history: &mut CommandHistory = match self.mode {
@@ -640,33 +453,11 @@ impl CommandDispatcher {
         }))
     }
 
-    // take_patches
-    // Inputs: self.
-    // Output: the buffered patches with §8.4 coalescing applied.
     pub fn take_patches(&mut self) -> Vec<Patch> {
         self.patch_buffer.take_coalesced()
     }
 }
 
-// build_composite_inverse
-// Inputs: a closed Transaction (its snapshot is the source of truth for
-// pre-transaction state).
-// Output: Some(Box<dyn Command>) when at least one element-restoring
-// sub-command can be constructed; None when the snapshot is empty.
-// Dataflow:
-//   1. For each (slide, element) in snapshot.geometry, emit a
-//      ResizeElement to restore the prior (x, y, width, height). We use
-//      ResizeElement rather than MoveElement so both move-only
-//      transactions (drag) and resize transactions get their full rect
-//      restored from one snapshot type. For move-only transactions
-//      width/height are unchanged so the extra patches are no-ops the
-//      patch buffer will coalesce on the next flush.
-//   2. For each (slide, element) in snapshot.content with text content,
-//      emit a SetTextContent to restore the prior RichText. Non-text
-//      content is skipped (no command yet covers re-asserting it).
-//   3. If exactly one sub-command was built, return it directly (avoid an
-//      unnecessary CompositeCommand wrapper). If multiple, wrap them under
-//      the transaction's label. If none, return None.
 fn build_composite_inverse(txn: &Transaction) -> Option<Box<dyn Command>> {
     let mut subs: Vec<Box<dyn Command>> = Vec::new();
     for ((target, eid), geom) in &txn.start_snapshot.geometry {
@@ -699,11 +490,6 @@ fn build_composite_inverse(txn: &Transaction) -> Option<Box<dyn Command>> {
     }
 }
 
-// fold_dirty_targets
-// Inputs: the deck and the dirty targets a command (or undo/redo) reported.
-// Output: side-effect — slide targets join `deck.dirty_slides` (quicksave
-// set); layout targets set that layout's `dirty` flag. Absent layouts are
-// ignored (the command that produced the target already resolved it).
 fn fold_dirty_targets(deck: &mut Deck, targets: &[CanvasTarget]) {
     for target in targets {
         match target {
@@ -821,7 +607,7 @@ mod tests {
             previous_position: None,
         }))
         .unwrap();
-        // Two patches buffered (left + top) AND two patches in transaction.
+
         assert_eq!(d.patch_buffer_len(), 2);
         assert_eq!(d.transaction().unwrap().patches.len(), 2);
         assert!(
@@ -848,8 +634,6 @@ mod tests {
         d.begin_transaction("second", TransactionSnapshot::empty());
         assert_eq!(d.transaction().unwrap().label, "second");
     }
-
-    // ---------- Stage 6: history wiring ----------
 
     fn move_to(sid: &SlideId, eid: &ElementId, x: f64, y: f64) -> Box<dyn Command> {
         Box::new(MoveElement {
@@ -900,7 +684,6 @@ mod tests {
         );
         d.begin_transaction("Move Element", snap);
 
-        // 50 mid-drag dispatches should collapse to ONE history entry on commit.
         let mut i: f64 = 0.0;
         while i < 50.0 {
             d.dispatch(move_to(&sid, &eid, i, i)).unwrap();
@@ -1093,8 +876,6 @@ mod tests {
         let _ = d.redo();
     }
 
-    // ---------- Stage 11: two mode-scoped history stacks ----------
-
     #[test]
     fn default_mode_is_slide() {
         let d = CommandDispatcher::new(Deck::sample());
@@ -1106,8 +887,7 @@ mod tests {
         let mut d = CommandDispatcher::new(Deck::sample());
         let (sid, eid) = first_child_id(d.deck());
         d.dispatch(move_to(&sid, &eid, 1.0, 2.0)).unwrap();
-        // Slide stack has one entry; switching to Layout shows an empty stack
-        // but does NOT discard the slide stack.
+
         assert!(d.can_undo());
         d.set_mode(EditorMode::Layout);
         assert!(!d.can_undo());
@@ -1118,7 +898,7 @@ mod tests {
     #[test]
     fn undo_in_each_mode_only_touches_that_modes_tree() {
         let mut d = CommandDispatcher::new(Deck::sample());
-        // Seed an element into the default "blank" layout to edit.
+
         d.deck_mut()
             .theme
             .layouts
@@ -1130,10 +910,8 @@ mod tests {
         let (sid, eid) = first_child_id(d.deck());
         let slide_start = d.deck().slides[&sid].find_element(&eid).unwrap().geometry.x;
 
-        // Slide-mode edit (default).
         d.dispatch(move_to(&sid, &eid, 111.0, 222.0)).unwrap();
 
-        // Layout-mode edit on a separate tree.
         d.set_mode(EditorMode::Layout);
         d.dispatch(Box::new(MoveElement {
             target: CanvasTarget::Layout("blank".into()),
@@ -1143,7 +921,6 @@ mod tests {
         }))
         .unwrap();
 
-        // Undo in Layout mode restores only the layout; the slide is intact.
         d.undo().unwrap().expect("layout undo applies");
         assert_eq!(
             d.deck().theme.layouts["blank"]
@@ -1158,7 +935,6 @@ mod tests {
             111.0
         );
 
-        // Undo in Slide mode restores only the slide; the layout is intact.
         d.set_mode(EditorMode::Slide);
         d.undo().unwrap().expect("slide undo applies");
         assert_eq!(

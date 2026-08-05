@@ -1,10 +1,5 @@
 use crate::bundle::BundleError;
 
-// AppError
-// One error type for the bootstrap, IPC, and bundle I/O layers. Implements
-// From for the underlying crate errors so call-sites can use `?`.
-// Downstream layers (commands, deck) define their own error enums and
-// bubble up via dedicated variants here.
 #[derive(thiserror::Error, Debug)]
 pub enum AppError {
     #[error("serde_json: {0}")]

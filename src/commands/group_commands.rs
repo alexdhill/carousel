@@ -1,7 +1,3 @@
-// Group layout commands: SetGroupLayout (direction/distribution/alignment) and
-// SetGroupScale (uniform scale). Both patch the group's GroupStyle, relayout
-// the group (and its ancestors), and emit the resulting geometry patches.
-
 use crate::commands::{Command, CommandError, CommandOutput, relayout_patches, resolve_canvas_mut};
 use crate::deck::element::ElementStyle;
 use crate::deck::style::{GroupAlignment, GroupDirection, GroupDistribution};
@@ -18,8 +14,7 @@ pub struct SetGroupLayout {
 }
 
 impl Command for SetGroupLayout {
-    // apply — patch the present fields on the group's GroupStyle, relayout, and
-    // emit geometry patches. Inverse restores the prior props.
+
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.element_id.is_empty(),
@@ -79,7 +74,7 @@ pub struct SetGroupScale {
 }
 
 impl Command for SetGroupScale {
-    // apply — set the group's uniform scale. Inverse restores the prior scale.
+
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.element_id.is_empty(),

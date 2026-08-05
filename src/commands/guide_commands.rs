@@ -1,20 +1,7 @@
-// AddGuide / MoveGuide / RemoveGuide — editing a canvas's saveable guides.
-//
-// Guides are not part of the element tree, so these commands emit no DOM
-// patches. They mutate the target canvas's `guides` vec, mark it dirty, and
-// report `affects_guides()` so the dispatcher re-broadcasts the guide set to
-// the editor (which redraws the overlay). Indices address the *target* canvas's
-// own guides; a slide never edits its layout's (inherited) guides through these.
-
 use crate::commands::{Command, CommandError, CommandOutput, resolve_canvas_mut};
 use crate::deck::guide::{Guide, GuideAxis};
 use crate::deck::{CanvasTarget, Deck};
 
-// AddGuide
-// Adds a guide to the target canvas. `index` is None for the normal "drag a new
-// guide off the ruler" gesture (append); Some(i) is used only as the inverse of
-// RemoveGuide, restoring a removed guide at its original position so undo does
-// not reorder the list.
 #[derive(Debug, Clone)]
 pub struct AddGuide {
     pub target: CanvasTarget,
@@ -60,10 +47,6 @@ impl Command for AddGuide {
     }
 }
 
-// MoveGuide
-// Repositions the guide at `index` to `new_pos`. The inverse carries the prior
-// position; consecutive moves of the same guide coalesce in the patch buffer so
-// a drag is a single undo step.
 #[derive(Debug, Clone)]
 pub struct MoveGuide {
     pub target: CanvasTarget,
@@ -111,9 +94,6 @@ impl Command for MoveGuide {
     }
 }
 
-// RemoveGuide
-// Deletes the guide at `index`. The inverse re-adds it at the same index so
-// undo restores both the guide and its list position.
 #[derive(Debug, Clone)]
 pub struct RemoveGuide {
     pub target: CanvasTarget,

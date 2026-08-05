@@ -1,8 +1,3 @@
-// Animation catalog — the user-facing effect list. One source of truth for
-// the add-menu and effect picker; shipped to the client in EditorConfig.
-// `kind`: "named" (canned @keyframes) or "property" (property-change). For
-// directional effects the named keyframe is the UP variant; the client maps
-// the chosen direction to fly-<dir> at author time.
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -15,10 +10,6 @@ pub struct AnimCatalogItem {
     pub directional: bool,
 }
 
-// named
-// Inputs: catalog id, display label, category string, keyframe name, and
-// whether the effect is directional.
-// Output: a "named" AnimCatalogItem (canned @keyframes effect).
 fn named(id: &str, label: &str, cat: &str, kf: &str, dir: bool) -> AnimCatalogItem {
     assert!(!id.is_empty(), "catalog id must not be empty");
     AnimCatalogItem {
@@ -31,11 +22,6 @@ fn named(id: &str, label: &str, cat: &str, kf: &str, dir: bool) -> AnimCatalogIt
     }
 }
 
-// animation_catalog
-// Inputs: none.
-// Output: the full effect list in menu order — 15 canned effects plus one
-// property-change entry. The list is the single source of truth shared with
-// the client.
 pub fn animation_catalog() -> Vec<AnimCatalogItem> {
     let items: Vec<AnimCatalogItem> = vec![
         named("appear", "Appear", "entrance", "appear", false),

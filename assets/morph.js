@@ -1,23 +1,8 @@
-// morph.js — shared FLIP animation engine for slide-element transitions.
-//
-// Reads data-morph-* attributes (data-morph-next, data-morph-dur,
-// data-morph-ease) off elements in the OLD slide root and animates the
-// same-id element in the NEW slide root from the old box to the new box.
-// The new element itself is transformed in place inside its own shadow root
-// (never cloned into the light DOM), so theme CSS and font custom properties
-// stay applied; the old element is hidden so no ghost is left behind. Pure
-// DOM — no IPC or deck-model knowledge. Both playback engines call run_morph
-// on a forward cross-slide advance with the two overlapping shadow roots.
 (function () {
     "use strict";
 
     var MAX_MORPH = 512;
 
-    // stage_scale
-    // Output: the #stage CSS scale factor (both engines scale the stage to fit
-    // the window). getBoundingClientRect returns post-scale screen pixels, so a
-    // transform applied in an element's local space must divide screen deltas by
-    // this factor. Defaults to 1 when absent/unparseable.
     function stage_scale() {
         var stage = document.getElementById("stage");
         if (!stage || !stage.style.transform) {
@@ -31,11 +16,6 @@
         return value > 0 ? value : 1;
     }
 
-    // collect_morph_pairs
-    // Inputs: old_root, new_root (shadow roots or DOM nodes).
-    // Output: array of {old_el, new_el, duration_ms, easing} for each morph
-    // element in old_root that has a matching data-element-id in new_root.
-    // Skips any morph element with no match (does not throw).
     function collect_morph_pairs(old_root, new_root) {
         var pairs = [];
         var old_els = old_root.querySelectorAll("[data-morph-next='1']");
@@ -61,12 +41,6 @@
         return pairs;
     }
 
-    // animate_pair
-    // Inputs: pair {old_el, new_el, duration_ms, easing}, done callback.
-    // Output: side-effect; hides old_el, parks new_el over old_el's box via an
-    // inverse transform, then transitions the transform to identity so new_el
-    // slides/scales into its real position. Calls done() on transitionend or a
-    // timeout guard. Restores new_el's prior transform state on finish.
     function animate_pair(pair, done) {
         var new_el = pair.new_el;
         var o = pair.old_el.getBoundingClientRect();
@@ -109,11 +83,6 @@
         new_el.addEventListener("transitionend", on_end);
     }
 
-    // run_morph
-    // Inputs: old_root, new_root (overlapping shadow roots — new stacked over
-    //         old), on_done (called exactly once when all morphs finish, or
-    //         immediately when there are no morph pairs).
-    // Output: side-effect; animates each matched pair from old box to new box.
     window.run_morph = function (old_root, new_root, on_done) {
         var pairs = collect_morph_pairs(old_root, new_root);
         var pair_count = pairs.length;

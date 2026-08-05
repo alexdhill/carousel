@@ -1,17 +1,3 @@
-// SetElementId command.
-//
-// Renames an element's `id` — the value that keys the per-slide element
-// index and appears as `data-element-id` in the rendered DOM. Editing the
-// id from the object panel routes here so the change lands in the true
-// deck model, not just the webview.
-//
-// The id is a per-slide primary key, so the new id must be non-empty and
-// must not already belong to another element on the same slide. The
-// command re-mounts the slide (requires_remount) so the serialized
-// `data-element-id` and the object panel rebuild together, and reports
-// affects_object_tree so the panel label refreshes. Its inverse swaps the
-// ids back.
-
 use crate::commands::{Command, CommandError, CommandOutput, resolve_canvas_mut};
 use crate::deck::{Canvas, CanvasTarget, ElementId, SlideId};
 
@@ -23,17 +9,7 @@ pub struct SetElementId {
 }
 
 impl Command for SetElementId {
-    // apply
-    // Inputs: &self, &mut Deck.
-    // Output: CommandOutput with no patches (the remount re-serializes the
-    // slide), an inverse SetElementId that swaps the ids back, the slide
-    // marked dirty.
-    // Errors:
-    //   SlideNotFound    — slide_id absent.
-    //   ElementNotFound  — old_id absent on the slide.
-    //   Conflict         — new_id already names a different element.
-    // Dataflow: locate slide -> guard collision -> locate element by old
-    // id -> overwrite its id -> invalidate index -> build inverse.
+
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.target.id().is_empty(),

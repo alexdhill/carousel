@@ -1,17 +1,3 @@
-// ResizeElement command.
-//
-// Stage 8/10 — Resize handles. Writes an element's full (x, y, width,
-// height) rect in a single atomic mutation, emitting four SetStyle
-// patches (left, top, width, height). Used by the selection overlay's
-// 8-handle resize gesture; one transaction wraps one ElementResizeEnded
-// event, so the user sees a single undo entry per resize regardless of
-// how many mid-drag frames fired.
-//
-// Width and height are clamped to MIN_DIMENSION_PX (1.0). The JS host
-// clamps too — this clamp here is the safety net for malformed IPC.
-// Negative or near-zero dimensions on the wire would otherwise produce
-// a degenerate element that's hard to select again.
-
 use crate::commands::{Command, CommandError, CommandOutput, resolve_canvas_mut};
 use crate::deck::{Canvas, CanvasTarget, ElementId, SlideId};
 use crate::ipc::Patch;
@@ -29,15 +15,7 @@ pub struct ResizeElement {
 }
 
 impl Command for ResizeElement {
-    // apply
-    // Inputs: &self, &mut Deck.
-    // Output: CommandOutput with four SetStyle patches (left, top,
-    // width, height), an inverse ResizeElement carrying the prior rect,
-    // and the slide marked dirty.
-    // Errors: SlideNotFound, ElementNotFound.
-    // Dataflow: locate slide -> locate element -> snapshot prior rect ->
-    // clamp width/height to MIN_DIMENSION_PX -> overwrite -> invalidate
-    // index -> build the four CSS patches + inverse.
+
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.target.id().is_empty(),

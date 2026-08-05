@@ -1,17 +1,4 @@
-// Application core.
-
 #![allow(dead_code, unused_imports)]
-
-//
-// Stage 5: owns the CommandDispatcher (and through it the Deck), the
-// editor's SelectionState, the egress WebviewSender, and a closure that
-// schedules a patch-buffer flush on the event loop.
-//
-// `interpret` (SPEC §9.4, ROADMAP Stage 5) is the policy layer that maps
-// an InteractionEvent to an InterpretResult. `handle_interaction` is the
-// effects layer that turns the result into dispatcher calls and outbound
-// IPC messages. Splitting them keeps `interpret` purely functional so it
-// can be unit-tested without touching the webview.
 
 use crate::bundle::assets::{AssetDimensions, AssetEntry};
 use crate::bundle::{
@@ -68,14 +55,11 @@ const CROP_TRANSACTION_LABEL: &str = "Crop Image";
 const PASTE_LABEL: &str = "Paste";
 const CUT_LABEL: &str = "Cut";
 
-// Clipboard: the in-app copy buffer. Holds typed clones (no serde round-trip;
-// serialization would only matter for a future OS clipboard).
 enum Clipboard {
     Elements(Vec<ElementNode>),
     Slide(Box<SlideNode>),
 }
 
-// AssetImport: the AssetImported event payload, bundled for one-arg passing.
 struct AssetImport {
     content_base64: String,
     original_filename: String,
@@ -87,14 +71,11 @@ struct AssetImport {
     as_element_fill: Option<String>,
 }
 
-// PasteOutcome: what build_paste_command wants selected/activated afterward.
 enum PasteOutcome {
     Elements(Vec<ElementId>),
     Slide(SlideId),
 }
-// Synthetic key names the JS host posts for accelerator shortcuts. Kept as
-// constants so both interpret() and any future platform-specific shortcut
-// layer reference the same strings.
+
 const UNDO_KEY: &str = "undo";
 const REDO_KEY: &str = "redo";
 const NEW_KEY: &str = "new_deck";
@@ -103,22 +84,14 @@ const SAVE_KEY: &str = "save_deck";
 const SAVE_AS_KEY: &str = "save_as_deck";
 const EXPORT_HTML_KEY: &str = "export_html";
 const EXPORT_PDF_KEY: &str = "export_pdf";
-// Synthetic accelerator the JS host posts for ⌘↩ / the toolbar Play button.
+
 const PRESENT_KEY: &str = "present";
 const BUNDLE_FILE_EXTENSION: &str = "deck";
 const THEME_FILE_EXTENSION: &str = "slidetheme";
-// Keys forwarded by the JS host that should trigger element deletion.
-// Both names cover the two physical keys users reach for: macOS users
-// typically press Delete (which the platform reports as "Backspace"),
-// while Windows / external keyboards distinguish a forward-delete.
+
 const DELETE_KEY_BACKSPACE: &str = "Backspace";
 const DELETE_KEY_DELETE: &str = "Delete";
 
-// PdfJob
-// A unit of work for the Chromium render worker thread: the print-HTML, the
-// pages that must raster (from export::pdf::raster_page_rects), the resolved
-// chrome binary, and the destination .pdf path. Moves across the thread
-// boundary, so all fields are owned.
 pub struct PdfJob {
     pub html: String,
     pub raster: Vec<crate::export::pdf::PageRect>,
@@ -126,110 +99,65 @@ pub struct PdfJob {
     pub dest: PathBuf,
 }
 
-// HistoryStep
-// Direction tag for run_history_step. A two-variant enum (rather than a
-// bool) so the logger and any future telemetry can distinguish undo from
-// redo by name.
 #[derive(Debug, Clone, Copy)]
 enum HistoryStep {
     Undo,
     Redo,
 }
 
-// ApplicationCore
-// Owns dispatcher, selection, the egress channel, the patch-flush wake,
-// and (Stage 7) a handle to the IoThread for background bundle I/O.
 pub struct ApplicationCore {
     dispatcher: CommandDispatcher,
     active_slide: Option<SlideId>,
-    // The layout currently being edited in layout mode. Joins `active_slide`
-    // so the editor remembers each mode's selection independently. The
-    // dispatcher's mode decides which one `active_canvas()` returns.
+
     active_layout: Option<LayoutId>,
     selection: SelectionState,
     sender: WebviewSender,
     schedule_flush: Box<dyn Fn()>,
     io_thread: IoThread,
-    // Presentation mode (None unless presenting). Holds the cursor + the
-    // presentation WebviewSender. The two wakes ask the event loop to build /
-    // tear down the fullscreen window (window creation needs the event-loop
-    // target, only available inside the run closure).
+
     present: Option<PresentationSession>,
     request_present_open: Box<dyn Fn()>,
     request_present_close: Box<dyn Fn()>,
-    // Set by start_presentation to the slide index the presentation should open
-    // on; consumed by begin_presentation once main.rs has built the webview.
+
     pending_present_index: Option<usize>,
-    // Set by interpret_asset_imported just before it returns the
-    // InsertElement command. handle_interaction consumes it after the
-    // command dispatches successfully — at that point the asset is
-    // both in the deck and referenced by a slide element, so JS needs
-    // a copy of the bytes to render the image.
+
     pending_asset_broadcast: Option<String>,
-    // Set by the AddSlideRequested interpret arm to the id of the
-    // freshly-built slide. react_to_outcome consumes it on the
-    // affects_slide_list path to switch the active slide to the new
-    // one once the InsertSlide command has applied.
+
     pending_new_active_slide: Option<SlideId>,
-    // Layout-mode analogue of pending_new_active_slide: set by the
-    // AddLayoutRequested arm so react_to_outcome switches to the freshly
-    // created layout once InsertLayout has applied.
+
     pending_new_active_layout: Option<LayoutId>,
-    // Session-lived copy/cut buffer (None until first copy).
+
     clipboard: Option<Clipboard>,
-    // Set by the Paste arm to the freshly-inserted element ids; consumed by
-    // react_to_outcome to select them once the insert has applied.
+
     pending_paste_selection: Option<Vec<ElementId>>,
-    // Hands a render job to the Chromium worker thread (owns the headless
-    // browser). The worker writes the PDF and posts completion to the loop.
+
     dispatch_pdf_job: Box<dyn Fn(PdfJob)>,
-    // Asks the Chromium worker thread to download a private Chromium build. The
-    // worker reports progress + completion to the loop and saves the path to
-    // config on success.
+
     dispatch_chromium_download: Box<dyn Fn()>,
-    // Set when a PDF export triggered a Chromium download; on the worker's
-    // success the loop calls on_chromium_ready, which re-runs the export so the
-    // save dialog finally appears (the original invocation returned early).
+
     pending_export_after_chrome: bool,
-    // Lazily-enumerated installed font families for the styles pane combobox.
-    // Computed on first send_font_list (the Ready handler) and cached for the
-    // session.
+
     font_families: Option<Vec<String>>,
-    // True only when launched as a new deck from a layout; consumed once by the
-    // Ready handler to tell the client to focus the title field, then cleared.
+
     focus_title: bool,
-    // Set when the user chose "Save and exit" in the quit dialog; consumed by
-    // handle_io_response on IoResponse::Saved to arm quit_requested (the save is
-    // async). Cleared if a fall-through Save-As is cancelled.
+
     pending_quit: bool,
-    // Raised when the app should exit after the current handler returns. main.rs
-    // drains it via take_quit_requested and sets ControlFlow::Exit.
+
     quit_requested: bool,
-    // Live agent session handle (None when not running). Spawned lazily on the
-    // first prompt and torn down on panel close.
+
     agent: Option<crate::agent::acp::AgentHandle>,
-    // Display name of the currently running agent (None when none running).
-    // Used to decide whether a prompt should reuse or switch the session.
+
     agent_name: Option<String>,
-    // Posts agent events from the worker thread into the main event loop.
-    // Passed to spawn_agent as the callback.
+
     agent_sink: std::sync::Arc<dyn Fn(crate::agent::AgentEvent) + Send + Sync>,
-    // Pending write approvals: request_id -> (path, contents) awaiting
-    // on_agent_permission_reply with allow=true.
+
     agent_pending: std::collections::HashMap<String, (String, String)>,
-    // Real-file mirror of the live deck used as the agent cwd. Present only
-    // while an agent session is running; dropped (temp dir removed) on teardown.
+
     agent_workspace: Option<crate::agent::workspace::Workspace>,
 }
 
 impl ApplicationCore {
-    // new
-    // Inputs: a WebviewSender, a no-arg closure that posts
-    // UserEvent::FlushPatches on the event loop, an IoThread handle
-    // used for all background bundle reads/writes, and an agent_sink
-    // closure for posting agent events to the event loop.
-    // Output: an ApplicationCore preloaded with `Deck::sample()` and the
-    // first slide selected as active.
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         sender: WebviewSender,
@@ -255,11 +183,6 @@ impl ApplicationCore {
         )
     }
 
-    // new_with_deck
-    // Like `new`, but starts from a caller-supplied deck (the landing window
-    // builds the editor on a chosen template / placeholder deck). The deck must
-    // contain at least one slide. Accepts an agent_sink closure for posting
-    // agent events to the event loop.
     #[allow(clippy::too_many_arguments)]
     pub fn new_with_deck(
         deck: Deck,
@@ -308,12 +231,8 @@ impl ApplicationCore {
         }
     }
 
-    // send_font_list
-    // Inputs: none. Output: Ok(()) after sending one FontList envelope with the
-    // installed font families. Enumerates once (font-kit) and caches the result
     // for the session. ponytail: enumeration is synchronous on the main thread;
-    // if it ever lags first paint, move it to a worker thread delivering via an
-    // EventLoopProxy user event (WebviewSender is main-thread-only).
+
     fn send_font_list(&mut self) -> AppResult<()> {
         if self.font_families.is_none() {
             self.font_families = Some(crate::fonts::enumerate_families());
@@ -322,13 +241,6 @@ impl ApplicationCore {
         self.sender.send(MessageKind::FontList { families })
     }
 
-    // active_canvas
-    // Inputs: none.
-    // Output: the CanvasTarget for the current editor mode — the active
-    // slide in Slide mode, the active layout in Layout mode — or None when
-    // that mode has no active canvas. This is the single source of truth for
-    // "which surface do mounts, the object tree, and element commands act
-    // on"; `active_target` is its alias used by command builders.
     fn active_canvas(&self) -> Option<CanvasTarget> {
         match self.dispatcher.mode() {
             EditorMode::Slide => self.active_slide.clone().map(CanvasTarget::Slide),
@@ -336,10 +248,6 @@ impl ApplicationCore {
         }
     }
 
-    // active_canvas_id
-    // The active canvas's id as a String (used as SelectionState.slide_id so
-    // the JS overlay scopes to whichever surface — slide or layout — is
-    // mounted in the viewport).
     fn active_canvas_id(&self) -> Option<String> {
         self.active_canvas().map(|t| t.id().to_string())
     }
@@ -352,20 +260,12 @@ impl ApplicationCore {
         self.active_slide.as_ref()
     }
 
-    // handle_ipc
-    // Inputs: a fully-parsed IpcMessage from the webview.
-    // Output: Ok(()) on success.
-    // Errors: forwarded from any outbound send or command dispatch.
     pub fn handle_ipc(&mut self, msg: IpcMessage) -> AppResult<()> {
         assert!(!msg.id.is_empty(), "ipc message missing id");
         debug!(id = %msg.id, "ipc <- webview");
         match msg.kind {
             MessageKind::Ready => {
-                // First contact from JS: deliver one-shot config (the built-in
-                // animation keyframes), announce the full slide list so the
-                // thumbnail row can render every slide, dump every asset's
-                // bytes so embedded images resolve to blob URLs, then mount
-                // the active slide and its animation timeline.
+
                 self.sender.send(MessageKind::Configure(EditorConfig {
                     debug: false,
                     animation_keyframes_css: ANIMATION_KEYFRAMES_CSS.to_string(),
@@ -403,12 +303,6 @@ impl ApplicationCore {
         }
     }
 
-    // flush_patches
-    // Inputs: none.
-    // Output: Ok(()) after the patch buffer has been drained (or was
-    // already empty).
-    // Dataflow: take coalesced patches from the dispatcher; wrap one in
-    // ApplyPatch directly, multiple in Patch::Batch; ship via the sender.
     pub fn flush_patches(&mut self) -> AppResult<()> {
         let patches: Vec<Patch> = self.dispatcher.take_patches();
         if patches.is_empty() {
@@ -426,14 +320,6 @@ impl ApplicationCore {
         self.sender.send(MessageKind::ApplyPatch(payload))
     }
 
-    // send_active_slide
-    // Inputs: none.
-    // Output: Ok(()) after sending one MountSlide envelope AND one
-    // ObjectTreeUpdate envelope (the panel always rebuilds alongside a
-    // remount, so it cannot drift out of sync with the shadow DOM).
-    // Dataflow: lookup active slide -> serialize via html::serialize_slide
-    // -> bundle slide_html + theme_css into MountSlideArgs -> dispatch
-    // -> build the matching ObjectTreeData -> dispatch.
     fn send_active_slide(&mut self) -> AppResult<()> {
         let target: CanvasTarget = match self.active_canvas() {
             Some(t) => t,
@@ -460,17 +346,10 @@ impl ApplicationCore {
         };
         self.sender.send(MessageKind::MountSlide(args))?;
         self.sender.send(MessageKind::ObjectTreeUpdate(tree))?;
-        // Refresh the Slide box (no-op outside slide mode) so it tracks the
-        // active slide on every mount / switch.
+
         self.send_slide_inspector()
     }
 
-    // interpret_nudge
-    // Inputs: a per-axis pixel delta (dx, dy) from an arrow keypress.
-    // Output: an absolute-target MoveElement for the single selected element, a
-    // CompositeCommand for several, or Nothing when the selection is empty or no
-    // canvas is active. Each element's new position is its CURRENT geometry plus
-    // the delta (MoveElement targets are absolute), read from the active canvas.
     fn interpret_nudge(&self, dx: f64, dy: f64) -> InterpretResult {
         let target: CanvasTarget = match self.active_canvas() {
             Some(t) => t,
@@ -497,15 +376,10 @@ impl ApplicationCore {
         if cmds.is_empty() {
             return InterpretResult::Nothing;
         }
-        // A CompositeCommand of one is harmless (one undo step either way) and
-        // lets this path stay unwrap-free for both the single and multi case.
+
         InterpretResult::Command(Box::new(CompositeCommand::new(cmds, "Nudge Elements")))
     }
 
-    // interpret_navigate_slide
-    // Inputs: `forward` (true = next slide, false = previous).
-    // Output: SetActiveSlide for the adjacent slide, or Nothing at the deck ends
-    // / outside Slide mode (no wrap-around). Indexes the canonical slide_order.
     fn interpret_navigate_slide(&self, forward: bool) -> InterpretResult {
         if self.dispatcher.mode() != EditorMode::Slide {
             return InterpretResult::Nothing;
@@ -530,11 +404,6 @@ impl ApplicationCore {
         }
     }
 
-    // send_slide_inspector
-    // Inputs: none.
-    // Output: Ok(()) after sending one SlideInspectorUpdate for the active
-    // slide. No-op outside Slide mode (layout mode's no-selection state shows
-    // the globals editor, not the Slide box) or when there is no active slide.
     fn send_slide_inspector(&self) -> AppResult<()> {
         if self.dispatcher.mode() != EditorMode::Slide {
             return Ok(());
@@ -547,12 +416,6 @@ impl ApplicationCore {
         self.sender.send(MessageKind::SlideInspectorUpdate(data))
     }
 
-    // canvas_mount_artifacts
-    // Inputs: a CanvasTarget.
-    // Output: (id, serialized HTML, object tree) for the target canvas, or
-    // None if it no longer exists. Layouts serialize through a transient
-    // SlideNode wrapper so they reuse the exact, tested slide serializer and
-    // object-tree builder (a layout root is a Group, like a slide root).
     fn canvas_mount_artifacts(
         &self,
         target: &CanvasTarget,
@@ -595,13 +458,6 @@ impl ApplicationCore {
         }
     }
 
-    // send_object_tree
-    // Inputs: none.
-    // Output: Ok(()) after sending one ObjectTreeUpdate. Used when a
-    // command changes the object panel's payload but not the shadow DOM
-    // — RenameElement is the only Stage 9 example (data-name patch
-    // updates the DOM; the panel needs the new label string).
-    // Dataflow: lookup active slide -> build ObjectTreeData -> dispatch.
     fn send_object_tree(&self) -> AppResult<()> {
         let target: CanvasTarget = match self.active_canvas() {
             Some(t) => t,
@@ -614,55 +470,25 @@ impl ApplicationCore {
         self.sender.send(MessageKind::ObjectTreeUpdate(tree))
     }
 
-    // send_save_state
-    // Inputs: none. Output: Ok(()) after shipping one SaveStateUpdate with
-    // the deck's current unsaved-changes flag so JS toggles the title dot.
     fn send_save_state(&self) -> AppResult<()> {
         let dirty: bool = self.dispatcher.deck().has_unsaved_changes();
         self.sender.send(MessageKind::SaveStateUpdate(dirty))
     }
 
-    // wants_quit_confirmation
-    // Inputs: none. Output: true when a close should raise the quit dialog
-    // (the deck has unsaved changes) rather than exiting immediately. Read by
-    // main.rs on WindowEvent::CloseRequested for the editor window.
     pub fn wants_quit_confirmation(&self) -> bool {
         self.dispatcher.deck().has_unsaved_changes()
     }
 
-    // show_quit_dialog
-    // Inputs: none. Output: Ok(()) after asking the webview to raise the
-    // unsaved-changes confirmation. Errors: IPC send failure.
     pub fn show_quit_dialog(&self) -> AppResult<()> {
         self.sender.send(MessageKind::ShowQuitDialog)
     }
 
-    // take_quit_requested
-    // Inputs: none. Output: the quit_requested flag, cleared to false. main.rs
-    // calls this after each ipc / io handler and exits when it returns true.
     pub fn take_quit_requested(&mut self) -> bool {
         let requested: bool = self.quit_requested;
         self.quit_requested = false;
         requested
     }
 
-    // send_slide_list
-    // Inputs: none.
-    // Output: Ok(()) after sending one SlideListUpdate envelope carrying
-    // every slide's id + title + serialized HTML. Stage 10 calls this on
-    // app start and after each file Open / New; future slide-level
-    // commands (add / remove / reorder) will call it too. The active
-    // slide's individual MountSlide events keep its thumbnail HTML fresh
-    // after structural edits, so this message is intentionally rare.
-    // Dataflow: iterate the deck's slide_order -> serialize each slide
-    // -> pair with its manifest title -> ship.
-    // send_assets_bundle
-    // Inputs: none.
-    // Output: Ok(()) after sending one AssetsUpdate envelope containing
-    // every registered asset's bytes (base64-encoded). Called on app
-    // start and after file Open / New so JS can rebuild its blob URL
-    // cache from scratch. Skipped silently when no assets exist (the
-    // empty payload is harmless but the noise isn't worth it).
     fn send_assets_bundle(&self) -> AppResult<()> {
         let bundle: AssetsBundle = match build_assets_bundle(self.dispatcher.deck()) {
             Some(b) => b,
@@ -672,11 +498,6 @@ impl ApplicationCore {
         self.sender.send(MessageKind::AssetsUpdate(bundle))
     }
 
-    // send_asset_added
-    // Inputs: an asset id known to be present in deck.assets.
-    // Output: Ok(()) after sending one AssetAdded envelope. Used as an
-    // incremental delivery vehicle after AssetImported so JS picks up
-    // just the new asset rather than re-receiving every existing one.
     fn send_asset_added(&self, asset_id: &str) -> AppResult<()> {
         let registry = &self.dispatcher.deck().assets;
         let entry: &AssetEntry = match registry.find_by_id(asset_id) {
@@ -707,12 +528,6 @@ impl ApplicationCore {
         self.sender.send(MessageKind::SlideListUpdate(data))
     }
 
-    // send_slide_animations
-    // Inputs: none.
-    // Output: Ok(()) after sending one SlideAnimationsUpdate carrying the
-    // active slide's timeline (id / element / category per entry). The
-    // inspector's Appear/Disappear toggles reflect this. No-op when there is
-    // no active slide (animations are slide-only).
     fn send_slide_animations(&self) -> AppResult<()> {
         let sid: SlideId = match &self.active_slide {
             Some(s) => s.clone(),
@@ -757,12 +572,6 @@ impl ApplicationCore {
             }))
     }
 
-    // send_guides
-    // Inputs: none.
-    // Output: Ok(()) after sending one GuidesUpdate carrying the active
-    // canvas's own guides plus the guides it inherits from its layout (empty
-    // when editing a layout). The editor redraws the ruler overlay from this.
-    // No-op when there is no active canvas.
     fn send_guides(&self) -> AppResult<()> {
         let target: CanvasTarget = match self.active_canvas() {
             Some(t) => t,
@@ -787,19 +596,6 @@ impl ApplicationCore {
         }))
     }
 
-    // set_active_slide
-    // Inputs: the target slide id.
-    // Output: Ok(()) on success; Ok(()) (no-op) when the id is empty,
-    // unknown, or already active.
-    // Dataflow:
-    //   1. Reject empty / unknown / same-as-active inputs early.
-    //   2. Flush any pending patches so they apply to the OLD slide's
-    //      shadow DOM before it is replaced.
-    //   3. Swap `active_slide` and clear selection (selection is
-    //      per-slide editor state, not deck state).
-    //   4. Send a fresh MountSlide + ObjectTreeUpdate for the new
-    //      active slide. Unsaved edits to the previous slide live on
-    //      in `dispatcher.deck.slides[<old_id>]` untouched.
     fn set_active_slide(&mut self, slide_id: SlideId) -> AppResult<()> {
         if slide_id.is_empty() {
             return Ok(());
@@ -809,8 +605,7 @@ impl ApplicationCore {
             return Ok(());
         }
         if self.active_slide.as_deref() == Some(slide_id.as_str()) {
-            // Same slide: a thumbnail click is a slide-level select, so still
-            // drop any element selection to return focus to the slide.
+
             if !self.selection.is_empty() {
                 self.selection = SelectionState::empty();
                 self.sender
@@ -819,28 +614,18 @@ impl ApplicationCore {
             return Ok(());
         }
         info!(target = %slide_id, "switching active slide");
-        // Step 2: flush so the OLD slide's shadow DOM receives any
-        // queued patches before we tear it down.
+
         self.flush_patches()?;
-        // Step 3: swap state.
+
         self.active_slide = Some(slide_id);
         self.selection = SelectionState::empty();
-        // Step 4: announce the swap. send_active_slide also re-sends
-        // the object tree, so the panel resyncs in one shot.
+
         self.sender
             .send(MessageKind::SetSelection(SelectionState::empty()))?;
         self.send_active_slide()?;
         self.send_guides()
     }
 
-    // set_editor_mode
-    // Inputs: the mode to switch to.
-    // Output: Ok(()); no-op when already in that mode.
-    // Dataflow: flush pending patches to the OLD canvas -> switch the
-    // dispatcher's mode -> ensure the new mode has an active canvas (lazily
-    // adopt the first layout when entering Layout mode with none) -> clear
-    // selection -> echo SetMode to JS -> broadcast the relevant list and
-    // remount the active canvas.
     fn set_editor_mode(&mut self, mode: EditorMode) -> AppResult<()> {
         if self.dispatcher.mode() == mode {
             return Ok(());
@@ -869,11 +654,6 @@ impl ApplicationCore {
         self.send_guides()
     }
 
-    // set_active_layout
-    // Inputs: the target layout id.
-    // Output: Ok(()); no-op when empty, unknown, or already active.
-    // The layout-mode analogue of set_active_slide: flush, swap the active
-    // layout, clear selection, then remount the active canvas.
     fn set_active_layout(&mut self, layout_id: LayoutId) -> AppResult<()> {
         if layout_id.is_empty() {
             return Ok(());
@@ -897,20 +677,12 @@ impl ApplicationCore {
         self.selection = SelectionState::empty();
         self.sender
             .send(MessageKind::SetSelection(SelectionState::empty()))?;
-        // Re-ship the layout list so JS refreshes the active-layout inspector
-        // data (Name + background) and re-highlights the active thumbnail; the
-        // slide-mode analogue is send_slide_inspector inside send_active_slide.
+
         self.send_layout_list()?;
         self.send_active_slide()?;
         self.send_guides()
     }
 
-    // send_layout_list
-    // Inputs: none.
-    // Output: Ok(()) after sending one LayoutListUpdate carrying every
-    // layout's id + name + serialized HTML, the active layout id, and the
-    // shared theme/globals CSS. Sent on entering layout mode and after any
-    // command reporting affects_layout_list / affects_globals.
     fn send_layout_list(&self) -> AppResult<()> {
         let data: LayoutListData =
             build_layout_list_data(self.dispatcher.deck(), self.active_layout.as_ref());
@@ -922,12 +694,6 @@ impl ApplicationCore {
         self.sender.send(MessageKind::LayoutListUpdate(data))
     }
 
-    // send_slide_layout_picker
-    // Inputs: none.
-    // Output: Ok(()) after sending one SlideLayoutPickerData — the same layout
-    // payload as send_layout_list but a distinct kind so JS pops the new-slide
-    // layout picker. Works in any editor mode (the picker is reachable from the
-    // slide thumbnail row).
     fn send_slide_layout_picker(&self) -> AppResult<()> {
         let data: LayoutListData =
             build_layout_list_data(self.dispatcher.deck(), self.active_layout.as_ref());
@@ -938,11 +704,6 @@ impl ApplicationCore {
         self.sender.send(MessageKind::SlideLayoutPickerData(data))
     }
 
-    // interpret
-    // Inputs: an InteractionEvent.
-    // Output: an InterpretResult describing what should happen next.
-    // Dataflow: pure — reads selection, active slide, and dispatcher
-    // state but does not mutate. Side effects belong to the caller.
     pub fn interpret(&mut self, event: InteractionEvent) -> InterpretResult {
         match event {
             InteractionEvent::ElementClicked {
@@ -970,12 +731,7 @@ impl ApplicationCore {
                     snapshot,
                 }
             }
-            // ElementDragged is intentionally a no-op on the Rust side.
-            // The optimistic transform on the JS host carries the visual
-            // state of the drag; mutating the deck on every event would
-            // emit SetStyle patches that double-translate the element
-            // (the JS host already moved it via transform). The deck is
-            // updated once at ElementDragEnded with the full delta.
+
             InteractionEvent::ElementDragged { .. } => InterpretResult::Nothing,
             InteractionEvent::ElementDragEnded { element_id, delta } => {
                 let target: CanvasTarget = match self.active_canvas() {
@@ -1048,11 +804,7 @@ impl ApplicationCore {
                     snapshot,
                 }
             }
-            // ElementResized is the throttled mid-resize update. Same
-            // rationale as ElementDragged: the JS host has already
-            // applied an optimistic style write to the element, so
-            // mutating the deck here would double-apply on the next
-            // patch flush.
+
             InteractionEvent::ElementResized { .. } => InterpretResult::Nothing,
             InteractionEvent::ElementResizeEnded {
                 element_id,
@@ -1065,9 +817,7 @@ impl ApplicationCore {
                     Some(t) => t,
                     None => return InterpretResult::Nothing,
                 };
-                // Verify we actually have a snapshot for this element — a
-                // ResizeEnded without a matching Started is a host bug
-                // and we drop it rather than risk a no-op commit.
+
                 if self
                     .dispatcher
                     .transaction()
@@ -1147,9 +897,7 @@ impl ApplicationCore {
                     None => InterpretResult::Nothing,
                 }
             }
-            // Inline text editing (SPEC §8.5). The webview owns the text
-            // during the session, so Started / Edited are no-ops on the
-            // Rust side; only the commit produces a mutation.
+
             InteractionEvent::TextEditStarted { .. } => InterpretResult::Nothing,
             InteractionEvent::TextEdited { .. } => InterpretResult::Nothing,
             InteractionEvent::TextEditEnded { element_id, text } => {
@@ -1174,7 +922,7 @@ impl ApplicationCore {
                     None => InterpretResult::Nothing,
                 }
             }
-            // ---- Table editing ----
+
             InteractionEvent::CellTextEditRequested {
                 element_id,
                 row,
@@ -1354,8 +1102,7 @@ impl ApplicationCore {
                     &layout_id,
                 ) {
                     Some((cmd, new_id)) => {
-                        // react_to_outcome switches to this slide once
-                        // the InsertSlide command has applied.
+
                         self.pending_new_active_slide = Some(new_id);
                         InterpretResult::Command(cmd)
                     }
@@ -1390,7 +1137,7 @@ impl ApplicationCore {
                     None => InterpretResult::Nothing,
                 }
             }
-            // ---- Stage 11: layout editor ----
+
             InteractionEvent::SetEditorMode { mode } => match mode.as_str() {
                 "slide" => InterpretResult::SetEditorMode(EditorMode::Slide),
                 "layout" => InterpretResult::SetEditorMode(EditorMode::Layout),
@@ -1439,15 +1186,14 @@ impl ApplicationCore {
                 }
             }
             InteractionEvent::GlobalsCssEditRequested { new_css } => {
-                // No-op when unchanged so the globals textarea blur doesn't
-                // push a dead history entry.
+
                 if self.dispatcher.deck().theme.globals_css == new_css {
                     InterpretResult::Nothing
                 } else {
                     InterpretResult::Command(Box::new(SetGlobalsCss { new_css }))
                 }
             }
-            // ---- Stage: animations ----
+
             InteractionEvent::SetElementAnimation {
                 element_id,
                 category,
@@ -1518,8 +1264,7 @@ impl ApplicationCore {
                 InterpretResult::FileAction(FileAction::LoadTheme)
             }
             InteractionEvent::SetSlideBackgroundRequested { background } => {
-                // Routes to the active canvas: a layout in layout mode (theme
-                // background inherited by its slides), else the active slide.
+
                 match self.active_canvas() {
                     Some(CanvasTarget::Slide(sid)) => {
                         InterpretResult::Command(Box::new(SetSlideBackground {
@@ -1687,10 +1432,7 @@ impl ApplicationCore {
                 self.interpret_delete_selection()
             }
             InteractionEvent::KeyPressed { key, .. } if key.eq_ignore_ascii_case(DEBUG_KEY) => {
-                // Stage 4 debug shortcut preserved: build a +50px move
-                // against the first child of the active slide. Returned
-                // as a top-level Command (not a TransactionUpdate) so it
-                // remains independently undoable when history arrives.
+
                 match self.build_debug_nudge_command() {
                     Some(cmd) => InterpretResult::Command(cmd),
                     None => InterpretResult::Nothing,
@@ -1703,15 +1445,6 @@ impl ApplicationCore {
         }
     }
 
-    // handle_interaction
-    // Inputs: an InteractionEvent.
-    // Output: Ok(()) on success.
-    // Dataflow: route through interpret(), then realize each result
-    // variant via dispatcher calls and outbound IPC. Scheduling a flush
-    // happens whenever the patch buffer transitions empty → non-empty.
-    // ElementIdEditRequested is handled ahead of interpret() because it
-    // needs a multi-step follow-up (remap the selection onto the new id)
-    // that a single InterpretResult cannot express.
     fn handle_interaction(&mut self, event: InteractionEvent) -> AppResult<()> {
         if let InteractionEvent::ElementIdEditRequested { element_id, new_id } = &event {
             return self.handle_element_id_edit(element_id.clone(), new_id.clone());
@@ -1719,10 +1452,7 @@ impl ApplicationCore {
         let result: InterpretResult = self.interpret(event);
         match result {
             InterpretResult::Command(cmd) => {
-                // Ship any pending asset bytes BEFORE the dispatch's
-                // remount lands — otherwise JS would render the new
-                // image element with an unresolvable CSS variable for
-                // one frame.
+
                 if let Some(asset_id) = self.pending_asset_broadcast.take()
                     && let Err(e) = self.send_asset_added(&asset_id)
                 {
@@ -1734,9 +1464,7 @@ impl ApplicationCore {
             InterpretResult::Selection(sel) => {
                 self.selection = sel.clone();
                 self.sender.send(MessageKind::SetSelection(sel))?;
-                // Keep the inspector's animation toggles in sync with the
-                // newly-selected element (the panel filters the slide's
-                // timeline by the selected id client-side).
+
                 self.send_slide_animations()
             }
             InterpretResult::TransactionBegin { label, snapshot } => {
@@ -1785,11 +1513,6 @@ impl ApplicationCore {
         }
     }
 
-    // start_presentation
-    // Inputs: none (reads the deck + active slide).
-    // Output: side-effect; records the start slide index and asks the event
-    // loop to build the presentation window. No-op when already presenting or
-    // when the deck has no slides (nothing to present).
     fn start_presentation(&mut self) {
         if self.present.is_some() {
             debug!("start_presentation: already presenting; ignoring");
@@ -1808,11 +1531,6 @@ impl ApplicationCore {
         (self.request_present_open)();
     }
 
-    // begin_presentation
-    // Inputs: the presentation WebviewSender built by main.rs.
-    // Output: side-effect; constructs the PresentationSession at the pending
-    // start index. The reveal/mount happens later, when the presentation
-    // webview reports Ready.
     pub fn begin_presentation(&mut self, sender: WebviewSender) {
         let idx: usize = self.pending_present_index.take().unwrap_or(0);
         assert!(
@@ -1826,12 +1544,6 @@ impl ApplicationCore {
         self.present = Some(PresentationSession::new(sender, idx));
     }
 
-    // handle_present_control
-    // Inputs: a control posted by the presentation webview.
-    // Output: Ok(()) on success.
-    // Dataflow: Ready mounts the start slide; Advance/Back step the cursor and
-    // send the resulting reveal; Exit asks the event loop to tear the window
-    // down (main.rs owns the close path so the webview drops before the window).
     pub fn handle_present_control(&mut self, ctrl: PresentInbound) -> AppResult<()> {
         match ctrl {
             PresentInbound::Ready => self.handle_present_ready(),
@@ -1845,10 +1557,6 @@ impl ApplicationCore {
         }
     }
 
-    // handle_present_ready
-    // Inputs: none.
-    // Output: Ok(()) after sending PresentInit + PresentSlide + the snapped
-    // step-0 PresentReveal. No-op if there is no active session.
     fn handle_present_ready(&mut self) -> AppResult<()> {
         let session = match &self.present {
             Some(s) => s,
@@ -1861,8 +1569,7 @@ impl ApplicationCore {
             height: deck.manifest.dimensions.height,
         };
         session.sender().send(MessageKind::PresentInit(init))?;
-        // Ship asset bytes before the first mount so images resolve on the very
-        // first paint (the present webview mints its own blob URLs from these).
+
         if let Some(bundle) = build_assets_bundle(deck) {
             session.sender().send(MessageKind::PresentAssets(bundle))?;
         }
@@ -1875,12 +1582,6 @@ impl ApplicationCore {
         Ok(())
     }
 
-    // present_step
-    // Inputs: forward (true = Advance, false = Back).
-    // Output: Ok(()); advances/rewinds the cursor and sends the resulting
-    // reveal (and a slide mount when the step crossed slides). No-op without a
-    // session. The deck and the session live in disjoint fields of self, so the
-    // immutable deck borrow and the mutable session borrow coexist.
     fn present_step(&mut self, forward: bool) -> AppResult<()> {
         let deck: &Deck = self.dispatcher.deck();
         let session = match self.present.as_mut() {
@@ -1904,21 +1605,12 @@ impl ApplicationCore {
         }
     }
 
-    // end_presentation
-    // Inputs: none.
-    // Output: side-effect; drops the session (and with it the presentation
-    // WebviewSender / WebView). main.rs drops the Window afterwards.
     pub fn end_presentation(&mut self) {
         if self.present.take().is_some() {
             info!("presentation session ended");
         }
     }
 
-    // run_file_action
-    // Inputs: which File-menu action was triggered.
-    // Output: side-effect; routes to the matching ApplicationCore method.
-    // Errors: forwarded from the underlying file method (serialization or
-    // IPC send failure). File-dialog cancellation is silent and returns Ok.
     fn run_file_action(&mut self, action: FileAction) -> AppResult<()> {
         match action {
             FileAction::New => self.file_new(),
@@ -1932,15 +1624,6 @@ impl ApplicationCore {
         }
     }
 
-    // run_history_step
-    // Inputs: which direction (Undo or Redo).
-    // Output: side-effect; delegates to dispatcher.undo() or
-    // dispatcher.redo() and schedules a patch flush iff the patch buffer
-    // transitioned empty → non-empty. Logs on no-op (empty stack) and on
-    // command failure; never propagates errors because keyboard-driven
-    // undo failing is a UX event, not a fatal one.
-    // Dataflow: dispatcher returns Ok(Some(DispatchOutcome)) on success,
-    // Ok(None) on empty stack, or Err on inverse-apply failure.
     fn run_history_step(&mut self, step: HistoryStep) {
         assert!(
             !self.dispatcher.has_open_transaction(),
@@ -1963,12 +1646,6 @@ impl ApplicationCore {
         }
     }
 
-    // dispatch_and_maybe_flush
-    // Inputs: a boxed Command.
-    // Output: side-effect; dispatches via the dispatcher, logs failures,
-    // schedules a flush if the patch buffer just became non-empty, and
-    // (Stage 9) reacts to the outcome's structural flags by remounting
-    // the slide and/or rebroadcasting the object tree.
     fn dispatch_and_maybe_flush(&mut self, cmd: Box<dyn Command>) {
         let label: &'static str = cmd.label();
         match self.dispatcher.dispatch(cmd) {
@@ -1983,19 +1660,6 @@ impl ApplicationCore {
         }
     }
 
-    // handle_element_id_edit
-    // Inputs: the element's current id and the raw replacement text typed
-    // in the object panel.
-    // Output: Ok(()). Validates and sanitizes the new id, dispatches
-    // SetElementId (which remounts the canvas and rebuilds the object
-    // tree), then remaps the selection so the renamed element stays
-    // selected. No-ops (empty/unchanged id, missing element, collision)
-    // re-send the object tree so the panel's edit-in-place input reverts
-    // to the real id. Resolves against the active canvas so the rename
-    // works in both slide and layout modes.
-    // Dataflow: sanitize -> resolve active canvas -> guard empty/unchanged
-    // -> guard missing element / id collision -> dispatch -> remap
-    // selection -> SetSelection.
     fn handle_element_id_edit(&mut self, old_id: ElementId, raw_new_id: String) -> AppResult<()> {
         let new_id: ElementId = sanitize_element_id(&raw_new_id);
         let target: CanvasTarget = match self.active_canvas() {
@@ -2003,8 +1667,7 @@ impl ApplicationCore {
             None => return Ok(()),
         };
         if new_id.is_empty() || new_id == old_id {
-            // Nothing to change; refresh the panel so the inline editor
-            // reverts to the element's real id.
+
             return self.send_object_tree();
         }
         let canvas = match self.dispatcher.deck().canvas(&target) {
@@ -2039,23 +1702,8 @@ impl ApplicationCore {
         Ok(())
     }
 
-    // react_to_outcome
-    // Inputs: a DispatchOutcome from dispatch / undo / redo.
-    // Output: side-effect; honors the structural flags:
-    //   affects_slide_list → re-anchor the active slide (to the pending
-    //                        new slide, else validate the current one),
-    //                        clear selection, rebroadcast SlideListUpdate,
-    //                        and remount. Takes precedence over the
-    //                        remount / tree paths because it remounts too.
-    //   requires_remount → send_active_slide (which also re-sends the
-    //                      tree, keeping panel and DOM atomically in sync).
-    //   affects_object_tree (no remount) → send_object_tree alone.
-    // Errors logged, not propagated — these are housekeeping sends that
-    // should never fail a primary edit.
     fn react_to_outcome(&mut self, outcome: crate::commands::DispatchOutcome) {
-        // Surface any non-fatal advisories first (an accommodation warning
-        // still applied the command), regardless of which structural branch
-        // the outcome takes below.
+
         for msg in &outcome.warnings {
             if let Err(e) = self.sender.send(MessageKind::Notice {
                 message: msg.clone(),
@@ -2064,18 +1712,13 @@ impl ApplicationCore {
                 warn!("notice send failed: {}", e);
             }
         }
-        // Asset registry changes (e.g. a theme swap) ride alongside the
-        // structural branches below — a SwapTheme also sets affects_layout_list
-        // / requires_remount, which early-return — so resend the bundle FIRST,
-        // additively, so the JS blob cache is correct before the remount lands.
+
         if outcome.affects_assets
             && let Err(e) = self.send_assets_bundle()
         {
             warn!("assets broadcast after dispatch failed: {}", e);
         }
-        // Slide-metadata changes (background / notes / layout) resync the Slide
-        // box. Additive like affects_assets: a background/layout change also sets
-        // requires_remount below, so this does not early-return.
+
         if outcome.affects_slide_meta
             && let Err(e) = self.send_slide_inspector()
         {
@@ -2090,9 +1733,7 @@ impl ApplicationCore {
             return;
         }
         if outcome.affects_globals {
-            // Remount the active canvas so the new globals CSS is visible,
-            // and (in layout mode) refresh the layout list so the globals
-            // textarea + thumbnails reflect the committed value.
+
             if let Err(e) = self.send_active_slide() {
                 warn!("remount after globals change failed: {}", e);
             }
@@ -2104,16 +1745,14 @@ impl ApplicationCore {
             return;
         }
         if outcome.affects_animations {
-            // The timeline changed; rebroadcast it so the inspector toggles
-            // resync. No remount (animations have no static visual effect).
+
             if let Err(e) = self.send_slide_animations() {
                 warn!("animations broadcast after dispatch failed: {}", e);
             }
             return;
         }
         if outcome.affects_guides {
-            // Guides changed; rebroadcast the active canvas's set so the ruler
-            // overlay redraws. No remount (guides are editor overlay only).
+
             if let Err(e) = self.send_guides() {
                 warn!("guides broadcast after dispatch failed: {}", e);
             }
@@ -2128,7 +1767,7 @@ impl ApplicationCore {
         {
             warn!("object tree broadcast after dispatch failed: {}", e);
         }
-        // Paste selects the freshly-inserted elements once the insert applied.
+
         if let Some(ids) = self.pending_paste_selection.take() {
             let mut sel = SelectionState::empty();
             sel.slide_id = self.active_slide.clone();
@@ -2138,26 +1777,12 @@ impl ApplicationCore {
                 warn!("paste selection broadcast failed: {}", e);
             }
         }
-        // Any mutation may have changed the unsaved-changes state.
+
         if let Err(e) = self.send_save_state() {
             warn!("save-state broadcast after dispatch failed: {}", e);
         }
     }
 
-    // resync_after_slide_list_change
-    // Inputs: none (consumes self.pending_new_active_slide).
-    // Output: side-effect; re-establishes a coherent active slide after
-    // the deck's slide set changed, then rebroadcasts the slide list,
-    // clears selection, and remounts.
-    // Dataflow:
-    //   1. If a pending new active slide was set (slide just added) and
-    //      it exists, adopt it.
-    //   2. Otherwise, if the current active slide vanished (slide just
-    //      removed, e.g. via undo), fall back to the first slide in
-    //      order — or None when the deck is empty.
-    //   3. Clear selection (it referenced the prior slide's elements).
-    //   4. Broadcast SlideListUpdate + SetSelection(empty), then mount
-    //      the active slide (which also re-sends its object tree).
     fn resync_after_slide_list_change(&mut self) {
         if let Some(pending) = self.pending_new_active_slide.take()
             && self.dispatcher.deck().slides.contains_key(&pending)
@@ -2187,11 +1812,6 @@ impl ApplicationCore {
         }
     }
 
-    // resync_after_layout_list_change
-    // Layout-mode analogue of resync_after_slide_list_change: re-establish a
-    // coherent active layout after the theme's layout set changed (add /
-    // remove / rename / undo), then rebroadcast the layout list, clear
-    // selection, and remount the active canvas.
     fn resync_after_layout_list_change(&mut self) {
         if let Some(pending) = self.pending_new_active_layout.take()
             && self.dispatcher.deck().theme.layouts.contains_key(&pending)
@@ -2224,12 +1844,6 @@ impl ApplicationCore {
         }
     }
 
-    // snapshot_for_drag
-    // Inputs: the element id being dragged (the primary).
-    // Output: a TransactionSnapshot pre-loaded with the geometry of the primary
-    // AND every currently-selected element, so a multi-select drag can read
-    // each element's start position at commit (ElementsDragEnded). Single drags
-    // still record just the one element.
     fn snapshot_for_drag(&self, element_id: &str) -> TransactionSnapshot {
         let mut snap: TransactionSnapshot = TransactionSnapshot::empty();
         let target: CanvasTarget = match self.active_canvas() {
@@ -2252,37 +1866,10 @@ impl ApplicationCore {
         snap
     }
 
-    // interpret_delete_selection
-    // Inputs: none.
-    // Output: an InterpretResult that, when executed, removes every
-    // selected non-root element from the active slide. Zero-selection
-    // and selection-of-root cases are no-ops. Multi-element selections
-    // wrap into a CompositeCommand so a single undo reverses the entire
-    // delete.
     fn interpret_delete_selection(&self) -> InterpretResult {
         interpret_delete_selection(&self.dispatcher, self.active_canvas(), &self.selection)
     }
 
-    // interpret_asset_imported
-    // Takes an AssetImport (the AssetImported event payload, bundled).
-    // Inputs: the AssetImported event payload — base64 bytes, file
-    // metadata, natural pixel dimensions, optional slide-space drop
-    // position.
-    // Output: InterpretResult dispatching one InsertElement that
-    // references the registered asset. The registry is mutated in this
-    // method (deduping by content hash) BEFORE the command is built;
-    // the `AssetAdded` IPC broadcast is fired by handle_interaction
-    // after a successful dispatch so JS can resolve the new asset id.
-    // Errors: returns Nothing on base64 decode failure or when there is no
-    // active canvas (slide or layout).
-    // Dataflow:
-    //   1. Decode base64 → bytes. Bail on error.
-    //   2. registry.insert_blob → AssetEntry (deduped).
-    //   3. Remember the asset id so handle_interaction can broadcast it.
-    //   4. Build an Image ElementNode (natural dimensions, centered or
-    //      at the drop point, inline-style background-size:cover so the
-    //      object-fit semantic carries through the <div> render path).
-    //   5. Construct InsertElement targeting the active canvas's root.
     fn interpret_asset_imported(&mut self, a: AssetImport) -> InterpretResult {
         let AssetImport {
             content_base64,
@@ -2294,8 +1881,7 @@ impl ApplicationCore {
             as_slide_background,
             as_element_fill,
         } = a;
-        // Target the active canvas (slide OR layout) so media drops into the
-        // layout being edited in layout mode, not the hidden active slide.
+
         let target: CanvasTarget = match self.active_canvas() {
             Some(t) => t,
             None => return InterpretResult::Nothing,
@@ -2323,12 +1909,9 @@ impl ApplicationCore {
             media_type,
             dims,
         );
-        // Snapshot the id for the post-dispatch AssetAdded broadcast.
+
         self.pending_asset_broadcast = Some(entry.id.clone());
 
-        // Background import: set the active canvas's background image to a var()
-        // referencing the new asset instead of inserting a picture. In layout
-        // mode this themes the layout (inherited by its slides).
         if as_slide_background {
             let img: String = format!("var(--asset-{})", entry.id);
             return match self.active_canvas() {
@@ -2348,9 +1931,6 @@ impl ApplicationCore {
             };
         }
 
-        // Element fill: write the asset as the named element's background image
-        // (over its background-color) plus sane fit defaults, in one undoable
-        // op. The object-fit panel later edits background-size.
         if let Some(element_id) = as_element_fill {
             if element_id.is_empty() {
                 return InterpretResult::Nothing;
@@ -2399,10 +1979,6 @@ impl ApplicationCore {
         }))
     }
 
-    // build_debug_nudge_command
-    // Inputs: none.
-    // Output: a MoveElement for the active slide's first child shifted
-    // +50px on x, or None if no element is available.
     fn build_debug_nudge_command(&self) -> Option<Box<dyn Command>> {
         let slide_id: SlideId = self.active_slide.clone()?;
         let slide = self.dispatcher.deck().slides.get(&slide_id)?;
@@ -2419,14 +1995,6 @@ impl ApplicationCore {
         Some(Box::new(cmd))
     }
 
-    // file_new
-    // Inputs: none.
-    // Output: side-effect; replaces the in-memory deck with a fresh blank
-    // one (single empty slide) and remounts the viewport.
-    // Errors: only an IPC failure forwarding the new mount.
-    // Dataflow: build Deck::new_blank -> swap into the dispatcher
-    // (which also clears history because it owns the dispatcher) -> ship
-    // a SetSelection clear + MountSlide of the new blank slide.
     pub fn file_new(&mut self) -> AppResult<()> {
         info!("file: new (blank deck)");
         let deck: Deck = Deck::new_blank();
@@ -2439,12 +2007,6 @@ impl ApplicationCore {
         self.send_guides()
     }
 
-    // file_save
-    // Inputs: none.
-    // Output: Ok(()) when the save was queued (or Save-As was triggered).
-    // Errors: serialization failure.
-    // Dataflow: if the deck has a bundle_path, serialize and submit a Save
-    // IoRequest. Otherwise fall through to file_save_as.
     pub fn file_save(&mut self) -> AppResult<()> {
         let target: PathBuf = match self.dispatcher.deck().bundle_path.clone() {
             Some(p) => p,
@@ -2456,11 +2018,6 @@ impl ApplicationCore {
         self.submit_save(target)
     }
 
-    // file_export_html
-    // Inputs: none. Output: Ok(()) whether or not a folder was chosen
-    // (cancellation is silent). Builds the export bundle on the main thread and
-    // queues the folder write on the io thread; completion surfaces a toast via
-    // handle_io_response.
     pub fn file_export_html(&mut self) -> AppResult<()> {
         let dest: PathBuf = match rfd::FileDialog::new().pick_folder() {
             Some(p) => p,
@@ -2489,16 +2046,10 @@ impl ApplicationCore {
         Ok(())
     }
 
-    // file_export_pdf
-    // Inputs: none. Output: Ok(()) whether or not the export ran (cancel is
-    // silent). Resolves a Chromium binary (config → system → locate/download
-    // dialog), prompts for a .pdf destination, then dispatches a render job to
-    // the Chromium worker thread (off the UI thread). Completion arrives later
-    // via notify_pdf_export.
     pub fn file_export_pdf(&mut self) -> AppResult<()> {
         let chrome: PathBuf = match self.resolve_chrome_for_export() {
             Some(p) => p,
-            None => return Ok(()), // cancelled / downloading / failed; user notified
+            None => return Ok(()),
         };
         let mut dest: PathBuf = match rfd::FileDialog::new()
             .add_filter("PDF", &["pdf"])
@@ -2522,18 +2073,9 @@ impl ApplicationCore {
         Ok(())
     }
 
-    // Button labels for the resolve dialog. rfd's plain YesNoCancel renders as
-    // "Yes"/"No"/"Cancel" on macOS, which gives the user no way to tell Locate
-    // from Download — so the buttons are labeled explicitly (Custom variants).
     const LOCATE_LABEL: &'static str = "Locate…";
     const DOWNLOAD_LABEL: &'static str = "Download Chromium";
 
-    // resolve_chrome_for_export
-    // Output: a usable Chromium path, driving the locate/download dialog when
-    // none is auto-resolved. None means: cancelled, validation failed, or a
-    // download was started — in the download case pending_export_after_chrome is
-    // set so on_chromium_ready re-runs the export once the worker finishes. In
-    // every None case the user has been told or a follow-up is scheduled.
     fn resolve_chrome_for_export(&mut self) -> Option<PathBuf> {
         use crate::export::chromium::{
             Resolved, is_valid_chrome, normalize_chrome_path, resolve_from_config_or_system,
@@ -2555,8 +2097,7 @@ private copy (~150 MB).",
             .show();
         match choice {
             rfd::MessageDialogResult::Custom(label) if label == Self::LOCATE_LABEL => {
-                // The picker returns a .app bundle on macOS; resolve it to the
-                // inner executable before validating.
+
                 let picked = normalize_chrome_path(rfd::FileDialog::new().pick_file()?);
                 if !is_valid_chrome(&picked) {
                     self.toast(
@@ -2571,8 +2112,7 @@ private copy (~150 MB).",
                 Some(picked)
             }
             rfd::MessageDialogResult::Custom(label) if label == Self::DOWNLOAD_LABEL => {
-                // The download is async; remember to resume the export when the
-                // worker reports success (on_chromium_ready).
+
                 self.pending_export_after_chrome = true;
                 (self.dispatch_chromium_download)();
                 None
@@ -2581,11 +2121,6 @@ private copy (~150 MB).",
         }
     }
 
-    // on_chromium_ready
-    // Called by the event loop after the Chromium worker reports a successful
-    // download. If an export was waiting on it, re-run file_export_pdf — config
-    // now holds the downloaded path, so resolution succeeds and the .pdf save
-    // dialog finally appears.
     pub fn on_chromium_ready(&mut self) {
         if !self.pending_export_after_chrome {
             return;
@@ -2596,9 +2131,6 @@ private copy (~150 MB).",
         }
     }
 
-    // send_chromium_progress / send_chromium_done
-    // Outbound bridges driven by the Chromium worker thread (via the event
-    // loop) so the download modal in the webview can update.
     pub fn send_chromium_progress(&self, received: u64, total: Option<u64>) {
         if let Err(e) = self
             .sender
@@ -2617,8 +2149,6 @@ private copy (~150 MB).",
         }
     }
 
-    // toast
-    // A small Notice helper for one-off advisories (e.g. an invalid binary).
     fn toast(&self, message: &str, detail: &str) {
         if let Err(e) = self.sender.send(MessageKind::Notice {
             message: message.to_string(),
@@ -2628,10 +2158,6 @@ private copy (~150 MB).",
         }
     }
 
-    // notify_pdf_export
-    // Inputs: the destination path and whether the write succeeded. Output:
-    // side-effect; surfaces a success/failure toast. Called by the event loop
-    // after the headless print operation returns.
     pub fn notify_pdf_export(&self, dest: &std::path::Path, ok: bool) {
         let message = if ok {
             "Exported PDF"
@@ -2646,14 +2172,6 @@ private copy (~150 MB).",
         }
     }
 
-    // file_save_as
-    // Inputs: none.
-    // Output: Ok(()) regardless of whether the user picked a path
-    // (cancellation is silent).
-    // Errors: serialization failure.
-    // Dataflow: show the OS Save dialog (blocking call; OK because the
-    // dialog itself is modal) -> if a path was picked, serialize and
-    // submit a Save IoRequest.
     pub fn file_save_as(&mut self) -> AppResult<()> {
         let picked: Option<PathBuf> = prompt_save_as(self.dispatcher.deck().bundle_path.as_deref());
         let target: PathBuf = match picked {
@@ -2667,14 +2185,6 @@ private copy (~150 MB).",
         self.submit_save(target)
     }
 
-    // file_open
-    // Inputs: none.
-    // Output: Ok(()) regardless of whether the user picked a path.
-    // Errors: none direct (load failures arrive asynchronously as
-    // IoResponse::Error and are reported from handle_io_response).
-    // Dataflow: show the OS Open dialog -> if a path was picked, submit
-    // a Load IoRequest. The deck is replaced when the IoResponse::Loaded
-    // comes back.
     pub fn file_open(&mut self) -> AppResult<()> {
         let path: PathBuf = match prompt_open() {
             Some(p) => p,
@@ -2694,10 +2204,6 @@ private copy (~150 MB).",
         Ok(())
     }
 
-    // load_path
-    // Inputs: a bundle path. Output: side-effect; queues a Load IoRequest for
-    // that path (the deck is swapped in when IoResponse::Loaded returns). Used
-    // by the landing window when opening a recent deck.
     pub fn load_path(&mut self, path: PathBuf) {
         info!(path = %path.display(), "landing: open recent");
         if self.io_thread.submit(IoRequest::Load { path }).is_err() {
@@ -2705,13 +2211,6 @@ private copy (~150 MB).",
         }
     }
 
-    // theme_save
-    // Inputs: none.
-    // Output: Ok(()) once the export was queued (or the dialog cancelled).
-    // Errors: serialize_theme failure (BundleError → AppError).
-    // Dataflow: show the OS Save dialog (.slidetheme) -> serialize the current
-    // theme + its referenced assets -> submit a SaveTheme IoRequest. Never
-    // touches history (export is side-effect only).
     pub fn theme_save(&mut self) -> AppResult<()> {
         let picked: Option<PathBuf> = prompt_save_theme();
         let target: PathBuf = match picked {
@@ -2739,13 +2238,6 @@ private copy (~150 MB).",
         Ok(())
     }
 
-    // theme_load
-    // Inputs: none.
-    // Output: Ok(()) regardless of whether the user picked a path.
-    // Errors: none direct (load failures arrive asynchronously as
-    // IoResponse::Error / a deserialize failure handled in handle_io_response).
-    // Dataflow: show the OS Open dialog (.slidetheme) -> submit a LoadTheme
-    // IoRequest. The theme is applied (undoably) when ThemeLoaded comes back.
     pub fn theme_load(&mut self) -> AppResult<()> {
         let path: PathBuf = match prompt_open_theme() {
             Some(p) => p,
@@ -2765,16 +2257,6 @@ private copy (~150 MB).",
         Ok(())
     }
 
-    // handle_io_response
-    // Inputs: an IoResponse posted by the IoThread.
-    // Output: Ok(()) on success.
-    // Errors: deserialize failures on a Loaded response; IPC send
-    // failures forwarding MountSlide to the webview.
-    // Dataflow:
-    //   Saved   → record the bundle_path, clear dirty flags.
-    //   Loaded  → deserialize the SerializedDeck, swap into the
-    //             dispatcher, remount the active slide.
-    //   Error   → log and continue (the editor stays on the current deck).
     pub fn handle_io_response(&mut self, response: IoResponse) -> AppResult<()> {
         match response {
             IoResponse::Exported { dest } => {
@@ -2824,9 +2306,7 @@ private copy (~150 MB).",
                 info!(path = %path.display(), "theme: load received");
                 match deserialize_theme(serialized) {
                     Ok((theme, assets)) => {
-                        // Apply undoably: replace the theme + merge its assets.
-                        // The SwapTheme outcome flags drive the remount + layout
-                        // list + globals + assets rebroadcast (react_to_outcome).
+
                         let add_assets = collect_loaded_assets(&assets);
                         self.dispatch_and_maybe_flush(Box::new(SwapTheme {
                             install_theme: theme,
@@ -2855,12 +2335,6 @@ private copy (~150 MB).",
         }
     }
 
-    // submit_save
-    // Inputs: target file path.
-    // Output: Ok(()) when the request was enqueued.
-    // Errors: BundleError from serialize_deck.
-    // Dataflow: serialize the current deck -> hand the owned bytes to the
-    // IoThread; the I/O happens off-thread.
     fn submit_save(&mut self, target: PathBuf) -> AppResult<()> {
         info!(target = %target.display(), "file: save queued");
         let serialized = serialize_deck(self.dispatcher.deck())?;
@@ -2877,12 +2351,6 @@ private copy (~150 MB).",
         Ok(())
     }
 
-    // adopt_deck
-    // Inputs: an owned Deck (typically Deck::new_blank() or a freshly-
-    // deserialised one).
-    // Output: side-effect; replaces the dispatcher (and thus the deck +
-    // history + transaction state), resets the active slide pointer, and
-    // empties the selection.
     fn adopt_deck(&mut self, deck: Deck) {
         let active: Option<SlideId> = deck.slide_order.first().cloned();
         self.dispatcher = CommandDispatcher::new(deck);
@@ -2890,13 +2358,6 @@ private copy (~150 MB).",
         self.selection = SelectionState::empty();
     }
 
-    // on_agent_panel_toggled
-    // Inputs: open flag indicating whether the panel is opening or closing.
-    // Output: Ok(()) after publishing the agent list + panel state (open) or
-    // tearing the running agent down (close). Errors: IPC send failures.
-    // Dataflow: open ships the configured agent names for the dropdown and an
-    // idle (or "no agents") state; no agent is spawned until the first prompt.
-    // Close shuts down any running agent and clears the selected name.
     fn on_agent_panel_toggled(&mut self, open: bool) -> AppResult<()> {
         if open {
             let mut cfg: crate::config::Config = crate::config::load();
@@ -2936,14 +2397,6 @@ private copy (~150 MB).",
         Ok(())
     }
 
-    // ensure_agent
-    // Inputs: the display name of the agent to run.
-    // Output: Ok(true) when a matching agent is running afterwards, Ok(false)
-    // when the name is blank/unknown or the spawn failed (an error state is
-    // sent to the webview in those cases). Errors: IPC send failures.
-    // Dataflow: reuse the running agent when its name already matches; else
-    // shut it down, look the name up in Config, and spawn it with a cwd derived
-    // from the open deck path (temp_dir fallback) and the shared event sink.
     fn ensure_agent(&mut self, name: &str) -> AppResult<bool> {
         if name.is_empty() {
             self.send_agent_error("Select an agent from the dropdown.")?;
@@ -2994,11 +2447,6 @@ private copy (~150 MB).",
         }
     }
 
-    // send_activity
-    // Inputs: phase (non-empty activity phase string) and label (status text).
-    // Output: Ok(()) after sending AgentActivityUpdate. Errors: IPC send failures.
-    // Dataflow: construct AgentActivity with the provided phase and label,
-    // convert to strings, and send via IPC.
     fn send_activity(&self, phase: &str, label: &str) -> AppResult<()> {
         assert!(!phase.is_empty(), "send_activity called with empty phase");
         self.sender.send(MessageKind::AgentActivityUpdate(
@@ -3009,9 +2457,6 @@ private copy (~150 MB).",
         ))
     }
 
-    // send_agent_error
-    // Inputs: a human-readable message. Output: Ok(()) after pushing an idle
-    // panel state carrying the error. Errors: IPC send failures.
     fn send_agent_error(&self, message: &str) -> AppResult<()> {
         assert!(
             !message.is_empty(),
@@ -3024,14 +2469,6 @@ private copy (~150 MB).",
             }))
     }
 
-    // on_agent_prompt
-    // Inputs: user-supplied prompt text and the selected agent's display name.
-    // Output: Ok(()) after ensuring the named agent runs and forwarding the
-    // prompt, or after an error state when it could not be started. Errors:
-    // IPC send or agent send failures.
-    // Dataflow: capture whether agent was already running, ensure_agent
-    // spawns/switches to the named agent (or reports an error and returns false),
-    // on success send_prompt + running=true state and emit activity.
     fn on_agent_prompt(&mut self, text: String, agent: String) -> AppResult<()> {
         let was_ready: bool =
             self.agent.is_some() && self.agent_name.as_deref() == Some(agent.as_str());
@@ -3054,13 +2491,6 @@ private copy (~150 MB).",
         Ok(())
     }
 
-    // on_agent_add
-    // Inputs: a new agent's display name, spawnable command, and args from the
-    // add-agent modal. Output: Ok(()) after persisting the agent to config.json
-    // and re-publishing the agent list. Errors: IPC send failures (a config
-    // save failure is logged, not fatal).
-    // Dataflow: reject blank name/command with an error state; load Config,
-    // replace any same-named entry, append, save, and broadcast the new list.
     fn on_agent_add(&mut self, name: String, command: String, args: Vec<String>) -> AppResult<()> {
         if name.is_empty() || command.is_empty() {
             return self.send_agent_error("Agent name and command are required.");
@@ -3081,10 +2511,6 @@ private copy (~150 MB).",
             }))
     }
 
-    // on_agent_cancel
-    // Inputs: none.
-    // Output: Ok(()) after sending cancel to the agent if present and emitting
-    // idle activity. Errors: agent send or IPC send failures.
     fn on_agent_cancel(&mut self) -> AppResult<()> {
         if let Some(agent) = &self.agent {
             agent.cancel()?;
@@ -3093,14 +2519,6 @@ private copy (~150 MB).",
         Ok(())
     }
 
-    // on_agent_permission_reply
-    // Inputs: request_id and allow flag.
-    // Output: Ok(()) after processing the permission reply.
-    // Errors: IPC send, agent send, or command dispatch failures.
-    // Dataflow: if request_id is in agent_pending, this is a slide write gate.
-    // If allow, parse and dispatch ReplaceSlideContent, respond with success,
-    // rebroadcast slide list and object tree. Else send error. If request_id
-    // not in pending, it's an ACP permission request: relay to agent.
     fn on_agent_permission_reply(&mut self, request_id: String, allow: bool) -> AppResult<()> {
         if let Some((path, contents)) = self.agent_pending.remove(&request_id) {
             if allow {
@@ -3153,13 +2571,6 @@ private copy (~150 MB).",
         Ok(())
     }
 
-    // __ingest_agent_changes
-    // Inputs: &mut self. Output: Ok after pulling any slide files the agent
-    // edited or created this turn back into the deck. Errors: IPC broadcast
-    // failures. Dataflow: collect SlideChanges from the workspace; for each,
-    // append a new slide (InsertSlide, updates slide_order + manifest) or replace
-    // an existing slide's content (ReplaceSlideContent). Both are undoable. Then
-    // rebroadcast the slide list and object tree once.
     fn __ingest_agent_changes(&mut self) -> AppResult<()> {
         let changes: Vec<crate::agent::workspace::SlideChange> = match self.agent_workspace.as_mut()
         {
@@ -3208,10 +2619,6 @@ private copy (~150 MB).",
         Ok(())
     }
 
-    // __handle_agent_fs_read
-    // Inputs: request_id and path from FsRead event.
-    // Output: Ok(()) after resolving and responding. Errors: IPC send failures.
-    // Dataflow: resolve the read request via VFS, respond to agent, send tool notice.
     fn __handle_agent_fs_read(&mut self, request_id: String, path: String) -> AppResult<()> {
         match crate::agent::vfs::resolve_read(self.dispatcher.deck(), &path) {
             Some(c) => {
@@ -3234,14 +2641,6 @@ private copy (~150 MB).",
         }))
     }
 
-    // handle_agent_event
-    // Inputs: an AgentEvent from the worker thread.
-    // Output: Ok(()) after dispatching the event. Errors: IPC send failures.
-    // Dataflow: match on event variant, emit activity, and forward/apply.
-    // SessionReady -> activity thinking. Thought -> activity + thought msg.
-    // StreamChunk -> activity streaming + stream msg. ToolStatus -> activity tool.
-    // FsRead/FsWrite -> activity tool + existing handlers. PermissionRequest ->
-    // activity awaiting + perm msg. TurnEnded/Failed -> activity + state update.
     pub fn handle_agent_event(&mut self, ev: crate::agent::AgentEvent) -> AppResult<()> {
         match ev {
             crate::agent::AgentEvent::SessionReady => {
@@ -3335,9 +2734,6 @@ private copy (~150 MB).",
     }
 }
 
-// recent_title
-// Inputs: a bundle path. Output: the display title for the recents list — the
-// file stem, falling back to the file name, then "Untitled".
 fn recent_title(path: &std::path::Path) -> String {
     path.file_stem()
         .or_else(|| path.file_name())
@@ -3345,12 +2741,6 @@ fn recent_title(path: &std::path::Path) -> String {
         .unwrap_or_else(|| "Untitled".to_string())
 }
 
-// prompt_save_as
-// Inputs: optional current bundle path used to seed the dialog's initial
-// directory + filename.
-// Output: the user's chosen path, or None on cancel.
-// Dataflow: build an rfd::FileDialog, set the .slidedeck filter, show
-// `save_file()` (blocks on the main thread; OK — modal dialog).
 fn prompt_save_as(current: Option<&std::path::Path>) -> Option<PathBuf> {
     let mut dialog = rfd::FileDialog::new().add_filter("Slide Deck", &[BUNDLE_FILE_EXTENSION]);
     if let Some(p) = current {
@@ -3366,19 +2756,12 @@ fn prompt_save_as(current: Option<&std::path::Path>) -> Option<PathBuf> {
     dialog.save_file()
 }
 
-// prompt_open
-// Inputs: none.
-// Output: the user's chosen path, or None on cancel.
 fn prompt_open() -> Option<PathBuf> {
     rfd::FileDialog::new()
         .add_filter("Slide Deck", &[BUNDLE_FILE_EXTENSION, "slidedeck"])
         .pick_file()
 }
 
-// prompt_save_theme
-// Inputs: none.
-// Output: the user's chosen export path, or None on cancel. Seeds a default
-// filename so the dialog opens ready to confirm.
 fn prompt_save_theme() -> Option<PathBuf> {
     rfd::FileDialog::new()
         .add_filter("Slide Theme", &[THEME_FILE_EXTENSION])
@@ -3386,19 +2769,12 @@ fn prompt_save_theme() -> Option<PathBuf> {
         .save_file()
 }
 
-// prompt_open_theme
-// Inputs: none.
-// Output: the user's chosen theme path, or None on cancel.
 fn prompt_open_theme() -> Option<PathBuf> {
     rfd::FileDialog::new()
         .add_filter("Slide Theme", &[THEME_FILE_EXTENSION])
         .pick_file()
 }
 
-// collect_loaded_assets
-// Inputs: the AssetRegistry returned by deserialize_theme (entries + bytes).
-// Output: the (entry, bytes) pairs to hand SwapTheme as `add_assets`. An entry
-// whose bytes are missing is skipped (defensive; read_theme pairs them).
 fn collect_loaded_assets(registry: &AssetRegistry) -> Vec<(AssetEntry, Vec<u8>)> {
     let mut out: Vec<(AssetEntry, Vec<u8>)> = Vec::with_capacity(registry.assets.len());
     for entry in &registry.assets {
@@ -3411,11 +2787,6 @@ fn collect_loaded_assets(registry: &AssetRegistry) -> Vec<(AssetEntry, Vec<u8>)>
     out
 }
 
-// ensure_extension
-// Inputs: a chosen path, the canonical extension (no leading dot).
-// Output: the path with the extension appended if missing. Some OS save
-// dialogs return paths without an extension when the user types one in
-// the name field — this guarantees `.slidedeck` is always present.
 fn ensure_extension(path: PathBuf, ext: &str) -> PathBuf {
     assert!(!ext.is_empty(), "ensure_extension: empty extension");
     match path.extension().and_then(|e| e.to_str()) {
@@ -3424,14 +2795,6 @@ fn ensure_extension(path: PathBuf, ext: &str) -> PathBuf {
     }
 }
 
-// build_assets_bundle
-// Inputs: the deck (reads its asset registry).
-// Output: an AssetsBundle carrying every registered asset's bytes
-// (base64-encoded), or None when the deck has no assets (an empty bundle is
-// harmless but not worth the IPC). Shared by the editor's AssetsUpdate path and
-// the presentation webview's PresentAssets path so both build their blob-URL
-// caches from identical data — a `blob:` URL minted in one webview is invalid in
-// the other, so each context must receive the raw bytes and mint its own.
 fn build_assets_bundle(deck: &Deck) -> Option<AssetsBundle> {
     let registry = &deck.assets;
     if registry.is_empty() {
@@ -3459,11 +2822,6 @@ fn build_assets_bundle(deck: &Deck) -> Option<AssetsBundle> {
     Some(AssetsBundle { assets: payloads })
 }
 
-// present_start_index
-// Inputs: the deck and the editor's active slide id.
-// Output: the index into `deck.slide_order` the presentation should open on —
-// the active slide's position, falling back to the first slide, or None when
-// the deck has no slides (presentation is impossible).
 fn present_start_index(deck: &Deck, active: Option<&SlideId>) -> Option<usize> {
     if deck.slide_order.is_empty() {
         return None;
@@ -3476,32 +2834,6 @@ fn present_start_index(deck: &Deck, active: Option<&SlideId>) -> Option<usize> {
     Some(0)
 }
 
-// interpret_property_changed
-// Inputs: active slide id (the inspector targets the currently mounted
-// slide), element id, property name, value string.
-// Output: an InterpretResult describing the command (or Nothing on a no-
-// op, e.g. when no slide is active).
-// Errors: none direct; downstream command apply may fail and is logged
-// by handle_interaction.
-// Dataflow:
-//   - "x" / "y" / "width" / "height" / "rotation" / "opacity" parse as
-//     f64 and route to SetGeometryProperty.
-//   - Empty value on any property routes to RemoveInlineStyle.
-//   - Any other property name routes to SetInlineStyle with the value
-//     string passed through verbatim (CSS is the contract; we do not
-//     validate the value here — the parser would reject malformed CSS
-//     in a later pass).
-// interpret_crop_committed
-// Inputs: the active canvas, the image element id, the committed mask geometry
-// (position + size), and the two background-* values the webview computed for
-// the crop.
-// Output: an InterpretResult::Command wrapping one CompositeCommand that sets
-// background-size / background-position / background-repeat / overflow and the
-// mask geometry, so the whole crop session reverses in a single undo. Returns
-// Nothing when there is no active canvas.
-// Errors: asserts a non-empty element id.
-// A free function so both ApplicationCore (production) and the test mirror
-// `interpret_inline` call the identical logic.
 fn interpret_crop_committed(
     active: Option<CanvasTarget>,
     element_id: ElementId,
@@ -3558,14 +2890,6 @@ fn interpret_crop_committed(
     )))
 }
 
-// resize_commit_command
-// Inputs: the canvas target, element id, committed geometry, and the optional
-// proportionally-scaled background values (Some only when resizing a cropped
-// image).
-// Output: a ResizeElement alone, or — when the background pair is present — a
-// CompositeCommand bundling the two SetInlineStyle writes with the resize so
-// the picture scales with the box and the whole gesture is one undo step.
-// A free function so production and the test mirror build identical commands.
 fn resize_commit_command(
     target: CanvasTarget,
     element_id: ElementId,
@@ -3605,11 +2929,6 @@ fn resize_commit_command(
     }
 }
 
-// interpret_remove_slide
-// Inputs: the deck and a slide id. Output: a RemoveSlide command when the slide
-// exists and is not the last remaining one, else Nothing (guard so no dispatch
-// error). react_to_outcome's affects_slide_list path re-establishes a valid
-// active slide afterward.
 fn interpret_remove_slide(deck: &Deck, slide_id: &SlideId) -> InterpretResult {
     if deck.slide_order.len() <= 1 || !deck.slides.contains_key(slide_id) {
         return InterpretResult::Nothing;
@@ -3619,11 +2938,6 @@ fn interpret_remove_slide(deck: &Deck, slide_id: &SlideId) -> InterpretResult {
     }))
 }
 
-// collect_copy
-// Inputs: the focus-derived scope, the active canvas, the current selection,
-// the active slide id, and the deck. Output: clipboard contents per scope —
-// Elements(clones of the selection) or Slide(clone of the active slide); None
-// when nothing is resolvable. Pure: no App, no IPC.
 fn collect_copy(
     scope: crate::ipc::ClipboardScope,
     active: Option<CanvasTarget>,
@@ -3654,12 +2968,6 @@ fn collect_copy(
     }
 }
 
-// build_paste_command
-// Inputs: the active canvas, the clipboard contents, and the deck.
-// Output: the insertion command (one undo step) plus a PasteOutcome describing
-// what to select/activate afterward; None when nothing can be pasted (no
-// canvas / empty buffer). IDs are regenerated so a paste never collides with
-// its source or a prior paste. Elements paste at exact original geometry.
 fn build_paste_command(
     active: Option<CanvasTarget>,
     clipboard: &Clipboard,
@@ -3734,13 +3042,6 @@ fn build_paste_command(
     }
 }
 
-// build_cut_removal
-// Inputs: the focus-derived scope, the active canvas, selection, active slide
-// id, and deck. Output: the removal half of a cut per scope — a CompositeCommand
-// of RemoveElementCommand for each selected element (label "Cut"), or a
-// RemoveSlide for the active slide. Returns None when nothing is removable,
-// including the guard that the last remaining slide is never removed. The copy
-// half is collect_copy.
 fn build_cut_removal(
     scope: crate::ipc::ClipboardScope,
     active: Option<CanvasTarget>,
@@ -3781,8 +3082,6 @@ fn build_cut_removal(
     }
 }
 
-// The function is intentionally a free function so both ApplicationCore
-// (production) and the test mirror `interpret_inline` can call it.
 fn interpret_property_changed(
     active: Option<CanvasTarget>,
     element_id: ElementId,
@@ -3830,11 +3129,6 @@ fn interpret_property_changed(
     }))
 }
 
-// interpret_guide_added
-// Inputs: the active canvas target, the wire axis token ("h"|"v"), the new
-// guide's slide-px position.
-// Output: an AddGuide command (appended) for the active canvas, or Nothing when
-// there is no active canvas or the axis token is unrecognised.
 fn interpret_guide_added(active: Option<CanvasTarget>, axis: &str, pos: f64) -> InterpretResult {
     let target: CanvasTarget = match active {
         Some(t) => t,
@@ -3856,8 +3150,6 @@ fn interpret_guide_added(active: Option<CanvasTarget>, axis: &str, pos: f64) -> 
     }))
 }
 
-// guide_to_dto
-// Inputs: a model Guide. Output: its wire form (axis "h"/"v" + slide-px pos).
 fn guide_to_dto(g: &crate::deck::guide::Guide) -> GuideDto {
     GuideDto {
         axis: match g.axis {
@@ -3869,17 +3161,6 @@ fn guide_to_dto(g: &crate::deck::guide::Guide) -> GuideDto {
     }
 }
 
-// interpret_delete_selection
-// Inputs: dispatcher (to read slide membership + protect the root),
-// active slide id, the current selection state.
-// Output: an InterpretResult dispatching one RemoveElementCommand for a
-// single-element selection, or a CompositeCommand bundling N removes
-// for a multi-element selection. Nothing is dispatched when the
-// selection is empty, the active slide is absent, or every selected id
-// is the slide root.
-// Dataflow: filter selected ids → drop ones that don't exist or are
-// the slide root → build one boxed Command per remaining id → wrap or
-// unwrap based on count.
 fn interpret_delete_selection(
     dispatcher: &CommandDispatcher,
     active: Option<CanvasTarget>,
@@ -3896,9 +3177,7 @@ fn interpret_delete_selection(
         Some(c) => c,
         None => return InterpretResult::Nothing,
     };
-    // Filter out elements whose ancestor is also selected — removing
-    // the ancestor removes the descendant as part of its subtree, so
-    // explicitly deleting the descendant after would error out.
+
     let selected_set: std::collections::HashSet<&str> =
         selection.element_ids.iter().map(String::as_str).collect();
     let mut commands: Vec<Box<dyn Command>> = Vec::new();
@@ -3928,15 +3207,6 @@ fn interpret_delete_selection(
     }
 }
 
-// has_selected_ancestor
-// Inputs: a node to scan from (slide root), the target element id, the
-// set of selected ids.
-// Output: true when the target sits beneath an ancestor whose id is also
-// in `selected_set` (NOT counting the target itself — being selected does
-// not make you your own ancestor).
-// Dataflow: iterative DFS that tracks whether any node visited on the
-// current path is in selected_set. On reaching the target id, returns
-// true iff at least one path ancestor was selected.
 fn has_selected_ancestor(
     root: &ElementNode,
     target: &str,
@@ -3944,7 +3214,7 @@ fn has_selected_ancestor(
 ) -> bool {
     assert!(!target.is_empty(), "has_selected_ancestor: empty target id");
     const MAX_FRAMES: usize = 4_096;
-    // Stack frames: (node, depth, ancestor_selected_count).
+
     let mut stack: Vec<(&ElementNode, usize)> = Vec::with_capacity(16);
     stack.push((root, 0));
     let mut iter: usize = 0;
@@ -3970,12 +3240,6 @@ fn has_selected_ancestor(
     false
 }
 
-// build_object_tree
-// Inputs: a SlideNode (the active slide).
-// Output: the ObjectTreeData payload for the panel — slide id, the slide
-// root's element id, and a list of ObjectTreeNode trees representing
-// every non-root element in display order.
-// Dataflow: recurse over root.children with a bounded helper.
 fn build_object_tree(slide: &SlideNode) -> ObjectTreeData {
     let mut nodes: Vec<ObjectTreeNode> = Vec::with_capacity(slide.root.children.len());
     for child in &slide.root.children {
@@ -3988,13 +3252,6 @@ fn build_object_tree(slide: &SlideNode) -> ObjectTreeData {
     }
 }
 
-// build_object_tree_node
-// Inputs: an ElementNode.
-// Output: the ObjectTreeNode mirror — id, type token, and recursive
-// children. The panel labels each row with the id itself (no separate
-// display name), so the shown value and the editable identity match.
-// Dataflow: pure walk; iteration order matches the source children Vec,
-// which is the z-order shown in the panel.
 fn build_object_tree_node(node: &ElementNode) -> ObjectTreeNode {
     assert!(!node.id.is_empty(), "build_object_tree_node: empty id");
     let mut children: Vec<ObjectTreeNode> = Vec::with_capacity(node.children.len());
@@ -4008,14 +3265,6 @@ fn build_object_tree_node(node: &ElementNode) -> ObjectTreeNode {
     }
 }
 
-// build_slide_list_data
-// Inputs: the deck (for slide_order, slides, manifest titles, theme,
-// dimensions) and the currently active slide id.
-// Output: SlideListData ready to ship in SlideListUpdate. Iterates
-// slide_order so the wire payload matches canonical display order.
-// Dataflow: for each slide in slide_order, find the SlideNode and its
-// manifest entry, serialise the slide HTML, fall back to slide id when
-// the manifest title is empty.
 fn build_slide_list_data(deck: &Deck, active_slide: Option<&SlideId>) -> SlideListData {
     let mut slides: Vec<SlideListEntry> = Vec::with_capacity(deck.slide_order.len());
     let count: usize = deck.slide_order.len();
@@ -4058,12 +3307,6 @@ fn build_slide_list_data(deck: &Deck, active_slide: Option<&SlideId>) -> SlideLi
     }
 }
 
-// build_slide_inspector_data
-// Inputs: the deck and the active slide id.
-// Output: the SlideInspectorData for the active slide — title/notes/layout_id
-// from the manifest entry, background from the SlideNode metadata, and the
-// theme's layouts (id + name) in display order for the picker. None when there
-// is no active slide.
 fn build_slide_inspector_data(deck: &Deck, active: Option<&SlideId>) -> Option<SlideInspectorData> {
     let sid: &SlideId = active?;
     let entry = deck.manifest.slides.iter().find(|e| &e.id == sid);
@@ -4110,29 +3353,10 @@ fn build_slide_inspector_data(deck: &Deck, active: Option<&SlideId>) -> Option<S
     })
 }
 
-// empty_to_none
-// Inputs: a string from a Slide-box field.
-// Output: None when blank (clears the field), else Some(trimmed-preserving s).
 fn empty_to_none(s: String) -> Option<String> {
     if s.trim().is_empty() { None } else { Some(s) }
 }
 
-// build_image_element_from_asset
-// Inputs: the registry entry the element will reference, the natural
-// pixel dimensions of the image, the (optional) slide-space drop point,
-// and the slide's pixel dimensions for centering when no drop point
-// was supplied.
-// Output: a fully-formed Image ElementNode ready for InsertElement.
-// Dataflow:
-//   1. width / height: use natural dimensions verbatim ("initialized
-//      to their full size"). Width/height fall back to 320×180 when
-//      the natural size is unknown so the element is still selectable.
-//   2. position: clamp the drop point so the element sits inside the
-//      slide; otherwise center on the slide.
-//   3. inline_styles seed background-size / background-position /
-//      background-repeat so the rendered <div> behaves like an
-//      object-fit:cover <img>. background-color provides a placeholder
-//      tone while the image's blob URL is decoded by JS.
 fn build_image_element_from_asset(
     entry: &AssetEntry,
     natural_w: u32,
@@ -4196,10 +3420,6 @@ fn build_image_element_from_asset(
     }
 }
 
-// interpret_rename_request
-// Inputs: active slide id, element id, the new display name (empty → clear).
-// Output: an InterpretResult dispatching RenameElement, or Nothing when
-// there is no active slide / the element id is missing.
 fn interpret_rename_request(
     active: Option<CanvasTarget>,
     element_id: ElementId,
@@ -4222,10 +3442,6 @@ fn interpret_rename_request(
     }))
 }
 
-// interpret_reparent_request
-// Inputs: active slide id, the moving element id, the target parent id,
-// the post-removal position in the target parent's children list.
-// Output: an InterpretResult dispatching ReparentElement.
 fn interpret_reparent_request(
     active: Option<CanvasTarget>,
     element_id: ElementId,
@@ -4252,16 +3468,6 @@ fn interpret_reparent_request(
     }))
 }
 
-// interpret_insert_element_request
-// Inputs: dispatcher (to read the current slide tree for defaults),
-// active slide id, requested element type token, optional explicit
-// parent + position.
-// Output: an InterpretResult dispatching InsertElement with a fresh
-// ElementNode constructed via type-specific defaults. Unknown element
-// types log a warning and return Nothing.
-// Dataflow: resolve parent (defaulting to the slide root id when
-// omitted) -> resolve position (defaulting to end-of-children when
-// omitted) -> build the element via construct_default_element_for_type.
 fn interpret_insert_element_request(
     dispatcher: &CommandDispatcher,
     active: Option<CanvasTarget>,
@@ -4302,22 +3508,10 @@ fn interpret_insert_element_request(
     }))
 }
 
-// sanitize_element_id
-// Inputs: the raw id text the user typed.
-// Output: the id with every run of whitespace collapsed to a single '_'
-// (and leading/trailing whitespace dropped), e.g. "my  box \t" -> "my_box".
-// A new id that is all whitespace collapses to the empty string, which the
-// caller treats as "no change".
 fn sanitize_element_id(raw: &str) -> String {
     raw.split_whitespace().collect::<Vec<&str>>().join("_")
 }
 
-// build_set_slide_title_command
-// Inputs: read access to the deck, the target slide id, and the new title.
-// Output: Some(SetSlideTitle) when a manifest entry for the slide exists
-//   AND the title actually changed; None otherwise (unknown slide, or an
-//   unchanged title that would only add a dead history entry).
-// Errors: none — failures collapse to None.
 fn build_set_slide_title_command(
     dispatcher: &CommandDispatcher,
     slide_id: &SlideId,
@@ -4338,21 +3532,6 @@ fn build_set_slide_title_command(
     }))
 }
 
-// build_set_text_command
-// Inputs:
-//   dispatcher   — read access to the live deck.
-//   active_slide — the slide currently being edited, if any.
-//   element_id   — the text element whose content was committed.
-//   new_text     — the final plain text from the webview edit session.
-// Output: Some(SetTextContent) when the element exists, is a Text element,
-//   AND the text actually changed; None otherwise. Returning None for an
-//   unchanged edit keeps double-click-then-click-away from pushing an
-//   empty history entry.
-// Errors: none — every validation failure collapses to None so malformed
-//   inbound IPC can never panic the editor.
-// Control flow: resolve the active slide -> find the element -> confirm it
-//   carries Text content and that new_text differs from the current plain
-//   text -> build the command.
 fn build_set_text_command(
     dispatcher: &CommandDispatcher,
     active: Option<CanvasTarget>,
@@ -4380,11 +3559,6 @@ fn build_set_text_command(
     }))
 }
 
-// build_set_embed_command
-// Inputs: the dispatcher (read access), the active canvas target, the embed
-// element id, and the new raw HTML.
-// Output: Some(SetEmbedHtml) when the element exists, is an Embed element, and
-// the HTML actually changed; None otherwise (so a no-op commit is dropped).
 fn build_set_embed_command(
     dispatcher: &CommandDispatcher,
     active: Option<CanvasTarget>,
@@ -4412,9 +3586,6 @@ fn build_set_embed_command(
     }))
 }
 
-// interpret_set_element_animation
-// Inputs: the deck (read), editor mode, active slide, target element, the
-// parse_group_dir/dist/align — IPC token → enum (None token → keep via Option).
 fn parse_group_dir_opt(s: Option<&str>) -> Option<crate::deck::style::GroupDirection> {
     use crate::deck::style::GroupDirection::*;
     match s {
@@ -4447,11 +3618,6 @@ fn parse_group_align_opt(s: Option<&str>) -> Option<crate::deck::style::GroupAli
     }
 }
 
-// category string ("entrance"|"exit"), and the toggle state.
-// Output: an InsertAnimation when enabling an absent animation of that
-// category, a RemoveAnimation when disabling a present one, else Nothing.
-// Animations are slide-only, so this no-ops outside Slide mode. The minimal
-// UI uses the built-in "appear"/"disappear" keyframes with default timing.
 fn interpret_set_element_animation(
     deck: &Deck,
     mode: EditorMode,
@@ -4510,12 +3676,6 @@ fn interpret_set_element_animation(
     }
 }
 
-// interpret_add_animation
-// Inputs: the deck (read), editor mode, active slide, target element, a catalog
-// id, and an optional direction token.
-// Output: an InsertAnimation appending the resolved effect to the active
-// slide's timeline with default trigger/timing, or Nothing (wrong mode, no
-// active slide, or an unknown catalog id / missing slide).
 fn interpret_add_animation(
     deck: &Deck,
     mode: EditorMode,
@@ -4576,10 +3736,6 @@ fn interpret_add_animation(
     }))
 }
 
-// directional_keyframe
-// Inputs: a catalog item and an optional direction token.
-// Output: the per-direction keyframe name (fly-in-<dir> / fly-out-<dir>) for a
-// directional item, else the item's keyframe verbatim. Defaults to "top".
 fn directional_keyframe(
     item: &crate::deck::anim_catalog::AnimCatalogItem,
     dir: Option<&str>,
@@ -4601,11 +3757,6 @@ fn directional_keyframe(
     format!("{}-{}", prefix, d)
 }
 
-// interpret_update_animation
-// Inputs: the deck (read), active slide, target animation id, and the optional
-// patch fields (None = leave as-is). `targets` only applies to a Property entry.
-// Output: a SetAnimationProperty carrying the patched entry, or Nothing (no
-// active slide / unknown id).
 #[allow(clippy::too_many_arguments)]
 fn interpret_update_animation(
     deck: &Deck,
@@ -4669,12 +3820,6 @@ fn interpret_update_animation(
     }))
 }
 
-// interpret_move_animation
-// Inputs: deck (read), active slide, target id, new timeline index, and the new
-// trigger ("on_click"|"with_previous"|"after_previous").
-// Output: a CompositeCommand [ReorderAnimation, SetAnimationProperty] so a
-// drag both reorders and re-triggers in a single undo. Nothing on no active
-// slide / unknown id.
 fn interpret_move_animation(
     deck: &Deck,
     active_slide: Option<&SlideId>,
@@ -4727,12 +3872,6 @@ fn interpret_move_animation(
     InterpretResult::Command(Box::new(CompositeCommand::new(cmds, "Move Animation")))
 }
 
-// interpret_scale_elements
-// Inputs: deck (read), the active canvas, the selected ids, a uniform scale
-// factor, and the anchor (slide px). Output: a SetElementsTransform with each
-// element's absolute target geometry (scaled about the anchor), plus scaled
-// font-size for text and scaled uniform scale for groups. Nothing on no
-// canvas / non-positive factor / empty result.
 fn interpret_scale_elements(
     deck: &Deck,
     target_opt: Option<CanvasTarget>,
@@ -4783,23 +3922,6 @@ fn interpret_scale_elements(
     InterpretResult::Command(Box::new(SetElementsTransform { target, items }))
 }
 
-// build_insert_slide_after_active
-// Inputs:
-//   dispatcher   — read access to the live deck (slide_order is consulted
-//                  to derive the insert position).
-//   active_slide — the currently-mounted slide, if any. The new slide is
-//                  inserted directly after it; when None (or the active id
-//                  is somehow absent from the order) the slide is appended.
-// Output: Some((InsertSlide command, fresh slide id)). The caller stashes
-//   the id as the pending new active slide so react_to_outcome switches to
-//   it once the command applies. Never None in practice — construction
-//   cannot fail — but the Option keeps the interpret arm uniform with the
-//   other request builders.
-// Errors: none here; InsertSlide validates duplicate ids at apply time.
-// Control flow: mint a fresh slide id -> locate the active slide's index
-//   to derive position (+1), defaulting to append -> build an empty
-//   blank-layout SlideNode plus its matching manifest entry -> wrap them
-//   in an InsertSlide command.
 fn build_insert_slide_after_active(
     dispatcher: &CommandDispatcher,
     active_slide: Option<&SlideId>,
@@ -4820,9 +3942,6 @@ fn build_insert_slide_after_active(
         None => order.len(),
     };
 
-    // Seed from the chosen theme layout when given (clone its template
-    // elements with fresh ids so the slide is independently editable); empty
-    // or unknown layout id falls back to a blank slide.
     let layout = dispatcher.deck().theme.layouts.get(layout_id);
     let seed_layout: String = if layout.is_some() {
         layout_id.to_string()
@@ -4875,13 +3994,6 @@ fn build_insert_slide_after_active(
     Some((cmd, slide_id))
 }
 
-// __new_slide_command
-// Inputs: the append position (current slide count) and the parsed children of
-// an agent-created slide file. Output: an InsertSlide command that adds a
-// blank-layout slide carrying those children at `position`, minting a fresh
-// slide id and matching manifest entry. Used to fold agent-created slides back
-// into the deck. Control flow: mint id -> wrap children in a group root ->
-// build slide + manifest entry -> box InsertSlide.
 fn __new_slide_command(position: usize, children: Vec<ElementNode>) -> Box<dyn Command> {
     use crate::bundle::SlideEntry;
     use crate::bundle::manifest::slide_path_for;
@@ -4921,15 +4033,6 @@ fn __new_slide_command(position: usize, children: Vec<ElementNode>) -> Box<dyn C
     })
 }
 
-// build_insert_layout_after_active
-// Inputs: dispatcher (to read layout_order for the insert position and to
-// dedupe the new id) and the active layout id.
-// Output: Some((InsertLayout command, fresh layout id)). The caller stashes
-// the id as the pending new active layout. Mirrors
-// build_insert_slide_after_active.
-// Control flow: derive position (+1 after the active layout, else append)
-// -> mint a unique "Layout N" name / slugged id not already in the theme
-// -> build an empty blank-rooted LayoutNode -> wrap in InsertLayout.
 fn build_insert_layout_after_active(
     dispatcher: &CommandDispatcher,
     active_layout: Option<&LayoutId>,
@@ -4946,8 +4049,6 @@ fn build_insert_layout_after_active(
         None => order.len(),
     };
 
-    // Mint a unique display name + slugged id. Bounded by a generous cap so
-    // the search always terminates (CLAUDE.md: loops need a fixed bound).
     let mut n: usize = order.len() + 1;
     let mut layout_id: LayoutId = String::new();
     let mut name: String = String::new();
@@ -4973,13 +4074,6 @@ fn build_insert_layout_after_active(
     Some((cmd, layout_id))
 }
 
-// build_layout_list_data
-// Inputs: the deck (layout_order, layouts, theme/globals CSS, dimensions)
-// and the active layout id.
-// Output: LayoutListData ready to ship in LayoutListUpdate, iterating
-// layout_order so the wire payload matches display order. Each layout
-// serializes through a transient SlideNode so it reuses the slide
-// serializer (a layout root is a Group, like a slide root).
 fn build_layout_list_data(deck: &Deck, active_layout: Option<&LayoutId>) -> LayoutListData {
     let mut layouts: Vec<LayoutListEntry> = Vec::with_capacity(deck.theme.layout_order.len());
     for lid in &deck.theme.layout_order {
@@ -5009,13 +4103,6 @@ fn build_layout_list_data(deck: &Deck, active_layout: Option<&LayoutId>) -> Layo
     }
 }
 
-// construct_default_element_for_type
-// Inputs: an element-type token ("text", "shape", "group").
-// Output: Some(ElementNode) with reasonable defaults — centered on the
-// 1920×1080 slide, sensible content placeholder, fresh ULID; None for
-// unknown types (Stage 9 wires three; image / media / table land with
-// asset import later).
-// Dataflow: branch on the type token; each branch builds a fresh node.
 fn construct_default_element_for_type(element_type: &str) -> Option<ElementNode> {
     match element_type {
         "text" => Some(default_text_element()),
@@ -5078,8 +4165,7 @@ fn default_shape_element() -> ElementNode {
         attributes: BTreeMap::new(),
         inline_styles: {
             let mut m: BTreeMap<String, String> = BTreeMap::new();
-            // Give the empty shape a visible default so it doesn't look
-            // like nothing happened on insert.
+
             m.insert(
                 "background-color".into(),
                 "var(--theme-accent, #0066ff)".into(),
@@ -5113,11 +4199,6 @@ fn default_group_element() -> ElementNode {
     }
 }
 
-// default_table_element
-// A fresh 3x3 table with one header row. Cells carry placeholder text so the
-// grid is visible on insert; presentation (borders, padding) comes from the
-// built-in table CSS, and per-cell styling writes style_overrides. Spans are
-// 1 (merged cells are out of scope for v1).
 fn default_table_element() -> ElementNode {
     use crate::deck::element::{TableCell, TableData};
     let rows: usize = 3;
@@ -5170,10 +4251,6 @@ fn default_table_element() -> ElementNode {
     }
 }
 
-// default_embed_element
-// A fresh code block: an Embed whose raw HTML is a visible placeholder so the
-// element reads as "HTML block here" on insert (double-click edits the HTML).
-// A dashed border + padding keep an otherwise-empty block selectable.
 fn default_embed_element() -> ElementNode {
     let id: ElementId = new_element_id();
     let placeholder: &str = "<div style=\"font:14px ui-monospace,monospace;color:var(--theme-muted,#888);\
@@ -5214,12 +4291,6 @@ mod tests {
     use super::*;
     use crate::ipc::{Modifiers, Vec2};
 
-    // build_test_core
-    // Constructs an ApplicationCore without an actual webview. The
-    // `sender` field requires a WebviewSender, which owns a Wry WebView
-    // that cannot be constructed headlessly; therefore `interpret` is
-    // tested without going through `handle_interaction`. The dispatcher
-    // and selection are exercised directly for transaction tests.
     fn modifiers_default() -> Modifiers {
         Modifiers::default()
     }
@@ -5239,19 +4310,13 @@ mod tests {
         (dispatcher, SelectionState::empty(), sid, eid)
     }
 
-    // ApplicationCore::interpret is a method on `self`, but for tests we
-    // only need a value carrying selection + dispatcher + active_slide.
-    // The shared bits live in this helper that returns a tuple so we can
-    // call the inner interpretation logic without standing up a webview.
-    // Each test below re-implements the same dispatch using these parts.
     fn interpret_inline(
         dispatcher: &CommandDispatcher,
         selection: &SelectionState,
         active_slide: &Option<SlideId>,
         event: InteractionEvent,
     ) -> InterpretResult {
-        // Mirrors ApplicationCore::interpret's body. Kept in lock-step
-        // with the production method.
+
         match event {
             InteractionEvent::ElementClicked {
                 element_id,
@@ -5365,9 +4430,7 @@ mod tests {
                 background_size,
                 background_position,
             ),
-            // Clipboard ops are App-stateful (need the clipboard buffer); the
-            // production arms own them and the free helpers are tested directly.
-            // The mirror stays a no-op so the match remains exhaustive.
+
             InteractionEvent::CopyRequested { .. }
             | InteractionEvent::CutRequested { .. }
             | InteractionEvent::PasteRequested
@@ -5460,7 +4523,7 @@ mod tests {
                     selection,
                 )
             }
-            // Mirrors interpret_nudge (Slide mode only in the test harness).
+
             InteractionEvent::NudgeSelectionRequested { dx, dy } => {
                 let target: CanvasTarget = match active_slide.clone() {
                     Some(s) => CanvasTarget::Slide(s),
@@ -5489,7 +4552,7 @@ mod tests {
                 }
                 InterpretResult::Command(Box::new(CompositeCommand::new(cmds, "Nudge Elements")))
             }
-            // Mirrors interpret_navigate_slide (no wrap; clamps at deck ends).
+
             InteractionEvent::NavigateSlideRequested { forward } => {
                 let order: &[SlideId] = &dispatcher.deck().slide_order;
                 let cur: usize = match active_slide
@@ -5625,9 +4688,7 @@ mod tests {
 
     #[test]
     fn drag_dragged_is_a_no_op_on_rust_side() {
-        // Mid-drag tree mutations are suppressed to avoid echo patches
-        // that would double-translate the optimistically-transformed
-        // element. The Rust tree is updated once at ElementDragEnded.
+
         let (mut d, sel, sid, eid) = fixture();
         let geo = d.deck().slides[&sid]
             .find_element(&eid)
@@ -5715,7 +4776,6 @@ mod tests {
             .geometry
             .clone();
 
-        // Begin: snapshot
         let mut snap = TransactionSnapshot::empty();
         snap.record_geometry(
             CanvasTarget::Slide(sid.clone()),
@@ -5724,7 +4784,6 @@ mod tests {
         );
         d.begin_transaction("Move Element", snap);
 
-        // Update: dispatch a MoveElement against the deck
         let cmd = MoveElement {
             target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
@@ -5736,7 +4795,6 @@ mod tests {
         };
         d.dispatch(Box::new(cmd)).unwrap();
 
-        // Commit: drop the transaction; geometry should reflect new pos.
         d.commit_transaction().unwrap();
         let after = d.deck().slides[&sid]
             .find_element(&eid)
@@ -5746,8 +4804,6 @@ mod tests {
         assert_eq!(after.x, start_geo.x + 100.0);
         assert_eq!(after.y, start_geo.y + 200.0);
     }
-
-    // ---------- Stage 6: undo/redo interpret + end-to-end routing ----------
 
     #[test]
     fn key_pressed_undo_maps_to_interpret_undo() {
@@ -5777,9 +4833,7 @@ mod tests {
 
     #[test]
     fn key_pressed_undo_with_meta_modifier_still_maps_to_undo() {
-        // The JS host posts modifiers along with the synthetic key. The
-        // interpret arm matches on the key string only — modifiers travel
-        // for telemetry but do not gate the dispatch.
+
         let (d, sel, sid, _) = fixture();
         let event = InteractionEvent::KeyPressed {
             key: UNDO_KEY.into(),
@@ -5796,9 +4850,7 @@ mod tests {
 
     #[test]
     fn dispatcher_undo_after_dispatch_restores_geometry() {
-        // Drives the end-to-end command-history cycle that interpret's
-        // Undo branch ultimately triggers (sans the WebviewSender):
-        // dispatch -> undo -> verify deck restored.
+
         let (mut d, _sel, sid, eid) = fixture();
         let original = d.deck().slides[&sid]
             .find_element(&eid)
@@ -5848,8 +4900,6 @@ mod tests {
         assert_eq!(geo.x, 21.0);
         assert_eq!(geo.y, 84.0);
     }
-
-    // ---------- Stage 7: file accelerator interpret arms ----------
 
     fn assert_file_action(key: &str, expected: FileAction) {
         let (d, sel, sid, _) = fixture();
@@ -5909,9 +4959,7 @@ mod tests {
 
     #[test]
     fn drag_then_undo_collapses_to_a_single_history_step() {
-        // Mimics the JS drag lifecycle: begin -> N intermediate dispatches
-        // -> commit -> undo. After one undo the element returns to the
-        // pre-drag position even though 32 mid-drag dispatches happened.
+
         let (mut d, _sel, sid, eid) = fixture();
         let start = d.deck().slides[&sid]
             .find_element(&eid)
@@ -5950,8 +4998,6 @@ mod tests {
         assert_eq!(geo.y, start.y);
     }
 
-    // ---------- Stage 8: PropertyChanged interpret ----------
-
     fn run_property_changed(prop: &str, value: &str) -> (InterpretResult, SlideId, ElementId) {
         let (d, sel, sid, eid) = fixture();
         let event = InteractionEvent::PropertyChanged {
@@ -5971,7 +5017,7 @@ mod tests {
         let (result, sid, eid) = run_property_changed("x", "250");
         match result {
             InterpretResult::Command(cmd) => {
-                // Apply and verify the geometry moved.
+
                 let mut deck = Deck::sample();
                 let out = cmd.apply(&mut deck).unwrap();
                 assert_eq!(
@@ -6112,7 +5158,7 @@ mod tests {
     fn cut_removal_guards_the_last_slide() {
         let (d, _sel, sid, _eid) = fixture();
         let empty = SelectionState::empty();
-        // Deck::sample has a single slide; cutting it must yield no removal.
+
         assert!(
             build_cut_removal(
                 crate::ipc::ClipboardScope::Slide,
@@ -6269,7 +5315,7 @@ mod tests {
 
     #[test]
     fn property_changed_empty_value_clears_via_remove_inline_style() {
-        // Seed an existing inline style, then trigger a clear.
+
         let (mut d, sel, sid, eid) = fixture();
         d.dispatch(Box::new(SetInlineStyle {
             target: CanvasTarget::Slide(sid.clone()),
@@ -6323,8 +5369,6 @@ mod tests {
         }
     }
 
-    // ---------- Stage 9: object-panel interpret arms ----------
-
     #[test]
     fn set_selection_from_panel_replaces_selection() {
         let (d, sel, sid, _) = fixture();
@@ -6352,14 +5396,14 @@ mod tests {
             InterpretResult::Command(cmd) => {
                 let mut deck = Deck::sample();
                 let out = cmd.apply(&mut deck).unwrap();
-                // One InsertElement patch; the new node lives under root.
+
                 assert!(
                     out.patches
                         .iter()
                         .any(|p| matches!(p, Patch::InsertElement { .. }))
                 );
                 let new_count = deck.slides[&sid].root.children.len();
-                assert_eq!(new_count, 4); // sample has 3 + the new text
+                assert_eq!(new_count, 4);
             }
             other => panic!("expected Command, got {other:?}"),
         }
@@ -6426,7 +5470,7 @@ mod tests {
     #[test]
     fn rename_request_with_empty_name_clears() {
         let (d, sel, sid, eid) = fixture();
-        // Seed an existing name.
+
         let mut deck = Deck::sample();
         deck.slides
             .get_mut(&sid)
@@ -6477,12 +5521,10 @@ mod tests {
         assert_eq!(tree.root_id, slide.root.id);
         assert_eq!(tree.nodes.len(), slide.root.children.len());
         for i in 0..tree.nodes.len() {
-            // The panel labels each row with the element id directly.
+
             assert_eq!(tree.nodes[i].id, slide.root.children[i].id);
         }
     }
-
-    // ---------- Stage 9 fix: Backspace / Delete deletes selection ----------
 
     fn keypress(name: &str) -> InteractionEvent {
         InteractionEvent::KeyPressed {
@@ -6569,8 +5611,7 @@ mod tests {
 
     #[test]
     fn backspace_with_parent_and_child_selected_only_removes_parent() {
-        // Build root -> [parent_group -> [inner_text]] explicitly so we
-        // can guarantee a known ancestor relationship.
+
         use crate::deck::builders::{group_element, text_element};
         use crate::deck::slide::SlideNode;
         use std::collections::BTreeMap;
@@ -6593,18 +5634,13 @@ mod tests {
         sel.element_ids = vec!["el_parent".into(), "el_inner".into()];
         match interpret_inline(&dispatcher, &sel, &Some("s".into()), keypress("Backspace")) {
             InterpretResult::Command(cmd) => {
-                // The composite would have errored on the child if we
-                // weren't filtering; a single Delete Element is what
-                // remains.
+
                 assert_eq!(cmd.label(), "Delete Element");
             }
             other => panic!("expected single Delete Element, got {other:?}"),
         }
     }
 
-    // ---------- Stage 10: thumbnail / slide navigation ----------
-
-    // Build a two-slide deck so we can test switching between slides.
     fn two_slide_deck() -> (Deck, SlideId, SlideId) {
         use crate::deck::builders::{group_element, text_element};
         use crate::deck::slide::SlideNode;
@@ -6706,13 +5742,13 @@ mod tests {
     fn navigate_clamps_at_deck_ends() {
         let (deck, a, b) = two_slide_deck();
         let d = CommandDispatcher::new(deck);
-        // Forward from the last slide → Nothing.
+
         let fwd = InteractionEvent::NavigateSlideRequested { forward: true };
         match interpret_inline(&d, &SelectionState::empty(), &Some(b), fwd) {
             InterpretResult::Nothing => {}
             other => panic!("expected Nothing at last slide, got {other:?}"),
         }
-        // Backward from the first slide → Nothing.
+
         let back = InteractionEvent::NavigateSlideRequested { forward: false };
         match interpret_inline(&d, &SelectionState::empty(), &Some(a), back) {
             InterpretResult::Nothing => {}
@@ -6730,7 +5766,7 @@ mod tests {
         assert_eq!(data.active_slide_id.as_deref(), Some("s_a"));
         assert_eq!(data.width, deck.manifest.dimensions.width);
         assert_eq!(data.height, deck.manifest.dimensions.height);
-        // Each entry carries a non-empty serialized HTML body.
+
         for entry in &data.slides {
             assert!(entry.html.contains("data-slide-id"));
         }
@@ -6740,14 +5776,10 @@ mod tests {
     fn build_slide_list_data_falls_back_to_id_when_title_empty() {
         let (deck, sid_a, _) = two_slide_deck();
         let data = build_slide_list_data(&deck, Some(&sid_a));
-        // No SlideEntry entries in manifest.slides -> title falls back
-        // to the slide id verbatim.
+
         assert_eq!(data.slides[0].title, sid_a);
     }
 
-    // Helper: the slide-switch handler logic without depending on a
-    // WebviewSender. Mirrors set_active_slide's tree-state effects so
-    // we can exercise the edit-preservation invariant in tests.
     fn switch_active_slide_in_tree(
         dispatcher: &mut CommandDispatcher,
         active_slide: &mut Option<SlideId>,
@@ -6766,13 +5798,11 @@ mod tests {
 
     #[test]
     fn switching_slides_preserves_in_memory_edits_to_previous_slide() {
-        // Reproduce the contract: edit slide A → switch to B → switch
-        // back to A → edits are still present.
+
         let (deck, sid_a, sid_b) = two_slide_deck();
         let mut dispatcher = CommandDispatcher::new(deck);
         let mut active: Option<SlideId> = Some(sid_a.clone());
 
-        // Edit on A.
         let original_x = dispatcher.deck().slides[&sid_a]
             .find_element("el_a")
             .unwrap()
@@ -6797,7 +5827,6 @@ mod tests {
         ));
         assert_eq!(active.as_deref(), Some("s_b"));
 
-        // Slide A's mutation must survive the switch.
         let x_after = dispatcher.deck().slides[&sid_a]
             .find_element("el_a")
             .unwrap()
@@ -6805,7 +5834,6 @@ mod tests {
             .x;
         assert_eq!(x_after, original_x + 250.0);
 
-        // Switch back.
         assert!(switch_active_slide_in_tree(
             &mut dispatcher,
             &mut active,
@@ -6837,8 +5865,6 @@ mod tests {
         let ok = switch_active_slide_in_tree(&mut dispatcher, &mut active, sid_a);
         assert!(!ok);
     }
-
-    // ---------- Resize handles: interpret lifecycle ----------
 
     use crate::ipc::{ResizeHandle, Size};
 
@@ -6917,7 +5943,7 @@ mod tests {
                 assert_eq!(g.y, 60.0);
                 assert_eq!(g.width, 300.0);
                 assert_eq!(g.height, 200.0);
-                // Four SetStyle patches (left, top, width, height).
+
                 assert_eq!(out.patches.len(), 4);
             }
             other => panic!("expected CommitTransactionWith, got {other:?}"),
@@ -6952,7 +5978,6 @@ mod tests {
             .geometry
             .clone();
 
-        // Started → snapshot.
         let mut snap = TransactionSnapshot::empty();
         snap.record_geometry(
             CanvasTarget::Slide(sid.clone()),
@@ -6961,7 +5986,6 @@ mod tests {
         );
         d.begin_transaction("Resize Element", snap);
 
-        // Ended → commit ResizeElement.
         let cmd = ResizeElement {
             target: CanvasTarget::Slide(sid.clone()),
             element_id: eid.clone(),
@@ -6982,7 +6006,6 @@ mod tests {
         assert_eq!(after.x, original.x + 100.0);
         assert_eq!(after.width, original.width - 80.0);
 
-        // Single undo restores all four fields.
         d.undo().unwrap().expect("undo not a no-op");
         let restored = d.deck().slides[&sid]
             .find_element(&eid)
@@ -6994,8 +6017,6 @@ mod tests {
         assert_eq!(restored.width, original.width);
         assert_eq!(restored.height, original.height);
     }
-
-    // ---------- Image import + AssetRegistry plumbing ----------
 
     fn sample_asset_entry() -> crate::bundle::assets::AssetEntry {
         crate::bundle::assets::AssetEntry {
@@ -7019,10 +6040,10 @@ mod tests {
         assert_eq!(node.element_type, ElementType::Image);
         assert_eq!(node.geometry.width, 800.0);
         assert_eq!(node.geometry.height, 600.0);
-        // Centered: (1920 - 800)/2 = 560 ; (1080 - 600)/2 = 240
+
         assert_eq!(node.geometry.x, 560.0);
         assert_eq!(node.geometry.y, 240.0);
-        // object-fit:cover semantics via background-* shortcuts.
+
         assert_eq!(
             node.inline_styles
                 .get("background-size")
@@ -7035,15 +6056,14 @@ mod tests {
                 .map(String::as_str),
             Some("center")
         );
-        // The CSS background-image points at a custom property the
-        // shadow root will resolve via the slide's theme stylesheet.
+
         let bg_image = node
             .inline_styles
             .get("background-image")
             .map(String::as_str)
             .unwrap_or("");
         assert!(bg_image.contains(&entry.id));
-        // The model side keeps the asset reference too.
+
         match node.content {
             ElementContent::Image(ref a) => assert_eq!(a.asset_id, entry.id),
             ref other => panic!("expected Image content, got {other:?}"),
@@ -7058,8 +6078,7 @@ mod tests {
             y: 500.0,
         });
         let node = build_image_element_from_asset(&entry, 400, 200, drop, (1920, 1080));
-        // The element is sized natural and positioned so its centre
-        // lands on the drop point.
+
         assert_eq!(node.geometry.x, 1000.0 - 200.0);
         assert_eq!(node.geometry.y, 500.0 - 100.0);
         assert_eq!(node.geometry.width, 400.0);
@@ -7076,8 +6095,7 @@ mod tests {
 
     #[test]
     fn asset_registry_insert_blob_increases_count_and_serializes_via_deck_io() {
-        // Add an asset to a sample deck, serialize, deserialize, confirm
-        // the asset bytes survive the bundle round trip.
+
         use crate::bundle::deck_io::{deserialize_deck, serialize_deck};
 
         let mut deck = Deck::sample();
@@ -7100,16 +6118,14 @@ mod tests {
 
         let back = deserialize_deck(serialized).unwrap();
         assert_eq!(back.assets.entry_count(), before_count + 1);
-        // The bytes are present under the same path the registry
-        // assigned, so round-tripping the deck preserves images.
+
         let entry = back.assets.assets.last().unwrap().clone();
         assert_eq!(back.assets.files.get(&entry.path), Some(&bytes));
     }
 
     #[test]
     fn build_insert_slide_after_active_inserts_after_the_active_slide() {
-        // Order: [orig, s_b]. Adding after s_b must land at index 2,
-        // i.e. append; adding after orig must land at index 1.
+
         let mut deck = Deck::sample();
         let orig: SlideId = deck.slide_order[0].clone();
         InsertSlide {
@@ -7144,8 +6160,6 @@ mod tests {
         assert_eq!(cmd.label(), "Add Slide");
         assert!(cmd.affects_slide_list());
 
-        // Applying it on a clone of the deck must place the new slide at
-        // index 1 (directly after `orig`), ahead of s_b.
         let mut deck2 = dispatcher.deck().clone();
         cmd.apply(&mut deck2).unwrap();
         assert_eq!(deck2.slide_order[1], new_id);
@@ -7179,13 +6193,13 @@ mod tests {
         cmd.apply(&mut deck2).unwrap();
         let slide = deck2.slides.get(&new_id).unwrap();
         assert_eq!(slide.layout_id, "blank");
-        // A brand-new slide carries an empty root group (no elements yet).
+
         assert!(slide.root.children.is_empty());
     }
 
     #[test]
     fn build_insert_slide_after_active_seeds_from_chosen_layout() {
-        // A light deck carries the title/hero/text layouts (hero = 3 elements).
+
         let deck = crate::deck::templates::new_deck(crate::deck::templates::light_theme(), "title");
         let active: SlideId = deck.slide_order[0].clone();
         let dispatcher = CommandDispatcher::new(deck);
@@ -7197,7 +6211,7 @@ mod tests {
         let slide = deck2.slides.get(&new_id).unwrap();
         assert_eq!(slide.layout_id, "hero");
         assert_eq!(slide.root.children.len(), 3);
-        // Seeded elements get fresh ids (no collision with the layout template).
+
         let layout = &deck2.theme.layouts["hero"];
         for (a, b) in slide.root.children.iter().zip(layout.root.children.iter()) {
             assert_ne!(a.id, b.id);
@@ -7228,7 +6242,7 @@ mod tests {
             ElementContent::Text(rt) => rt.plain.clone(),
             other => panic!("expected text, got {other:?}"),
         };
-        // Re-committing the identical text must not create a history entry.
+
         assert!(
             build_set_text_command(
                 &dispatcher,
@@ -7248,7 +6262,7 @@ mod tests {
 
     #[test]
     fn build_set_text_command_none_on_non_text_element() {
-        // The slide root is a Group, not a Text element.
+
         let (dispatcher, _sel, sid, _eid) = fixture();
         let root_id: ElementId = dispatcher.deck().slides[&sid].root.id.clone();
         assert!(
@@ -7294,19 +6308,17 @@ mod tests {
         assert!(build_set_slide_title_command(&dispatcher, &ghost, "x").is_none());
     }
 
-    // ---------- Stage 11: layout editor helpers ----------
-
     #[test]
     fn build_insert_layout_after_active_creates_a_unique_layout() {
         let (mut dispatcher, _sel, _sid, _eid) = fixture();
-        // Deck::sample's theme seeds the "blank" layout.
+
         let active: Option<LayoutId> = Some("blank".into());
         let (cmd, new_id) = build_insert_layout_after_active(&dispatcher, active.as_ref()).unwrap();
         assert_ne!(new_id, "blank");
         assert!(!dispatcher.deck().theme.layouts.contains_key(&new_id));
         cmd.apply(dispatcher.deck_mut()).unwrap();
         assert!(dispatcher.deck().theme.layouts.contains_key(&new_id));
-        // Inserted directly after the active layout.
+
         let pos = dispatcher
             .deck()
             .theme
@@ -7335,7 +6347,7 @@ mod tests {
     #[test]
     fn property_changed_targets_the_active_layout_in_layout_mode() {
         let (mut dispatcher, _sel, sid, _eid) = fixture();
-        // Add an element to the blank layout to edit.
+
         dispatcher
             .deck_mut()
             .theme
@@ -7357,7 +6369,7 @@ mod tests {
             other => panic!("expected Command, got {other:?}"),
         };
         cmd.apply(dispatcher.deck_mut()).unwrap();
-        // The layout element changed; no slide was touched.
+
         assert_eq!(
             dispatcher.deck().theme.layouts["blank"]
                 .find_element("el_lt")
@@ -7369,8 +6381,6 @@ mod tests {
         let slide_root_children = dispatcher.deck().slides[&sid].root.children.len();
         assert!(slide_root_children > 0);
     }
-
-    // ---------- Stage: animations interpret path ----------
 
     #[test]
     fn set_element_animation_enable_builds_insert() {
@@ -7455,7 +6465,7 @@ mod tests {
     #[test]
     fn move_animation_reorders_and_retriggers() {
         let (mut dispatcher, _sel, sid, eid) = fixture();
-        // Two entrance animations on the element → two timeline entries.
+
         for kind in ["entrance", "exit"] {
             if let InterpretResult::Command(c) = interpret_add_animation(
                 dispatcher.deck(),
@@ -7473,7 +6483,7 @@ mod tests {
             }
         }
         let second = dispatcher.deck().slides[&sid].animations[1].id.clone();
-        // Move the 2nd entry to index 0 and make it play with previous.
+
         let cmd = match interpret_move_animation(
             dispatcher.deck(),
             Some(&sid),
@@ -7535,12 +6545,10 @@ mod tests {
         assert!(matches!(result, InterpretResult::Nothing));
     }
 
-    // ---------- Presentation mode ----------
-
     #[test]
     fn present_start_index_uses_active_slide_position() {
         let mut deck = Deck::sample();
-        // Add a second slide so the active one is not trivially index 0.
+
         let root = crate::deck::builders::group_element("el_root", vec![]);
         let s2 = SlideNode::new("slide_two".into(), "blank".into(), root);
         deck.slides.insert("slide_two".into(), s2);
@@ -7567,7 +6575,7 @@ mod tests {
         assert_eq!(data.notes, "speak up");
         assert_eq!(data.layout_id, "title");
         assert!(data.layouts.iter().any(|l| l.id == "blank"));
-        // No active slide → None.
+
         assert!(build_slide_inspector_data(&deck, None).is_none());
     }
 
@@ -7584,7 +6592,7 @@ mod tests {
         assert_eq!(bundle.assets.len(), 1);
         assert_eq!(bundle.assets[0].asset_id, entry.id);
         assert_eq!(bundle.assets[0].media_type, "image/png");
-        // base64 of [1,2,3,4] is "AQIDBA==".
+
         assert_eq!(bundle.assets[0].content_base64, "AQIDBA==");
     }
 
@@ -7597,12 +6605,12 @@ mod tests {
     #[test]
     fn present_start_index_falls_back_to_zero_then_none() {
         let deck = Deck::sample();
-        // Unknown active id → first slide.
+
         assert_eq!(
             present_start_index(&deck, Some(&"ghost".to_string())),
             Some(0)
         );
-        // Empty deck → no presentation possible.
+
         let empty = Deck::default();
         assert_eq!(present_start_index(&empty, None), None);
     }

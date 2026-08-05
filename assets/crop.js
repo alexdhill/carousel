@@ -1,13 +1,6 @@
-// crop.js
-// Pure, DOM-free crop math for image elements. Consumes plain slide-coordinate
-// rects ({ x, y, w, h }) and natural image dims ({ w, h }); returns crop state
-// ({ iw, ih, dx, dy }) and CSS-ready style strings. No DOM, no IPC.
 (function () {
     "use strict";
 
-    // assert_dims
-    // Inputs: an object expected to be a finite, positive { w, h }, and a
-    // label. Output: throws when w/h are not finite or not positive.
     function assert_dims(d, label) {
         if (!d || typeof d !== "object") {
             throw new Error("crop: " + label + " must be an object");
@@ -17,16 +10,10 @@
         }
     }
 
-    // cover_scale
-    // Inputs: mask { w, h }, natural { w, h }. Output: the smallest scale at
-    // which the natural image fully covers the mask.
     function cover_scale(mask, natural) {
         return Math.max(mask.w / natural.w, mask.h / natural.h);
     }
 
-    // fromCover
-    // Inputs: mask rect, natural dims. Output: crop state { iw, ih, dx, dy }
-    // reproducing CSS `background-size: cover; background-position: center`.
     function fromCover(mask, natural) {
         assert_dims(mask, "mask");
         assert_dims(natural, "natural");
@@ -36,8 +23,6 @@
         return { iw: iw, ih: ih, dx: (mask.w - iw) / 2, dy: (mask.h - ih) / 2 };
     }
 
-    // toStyles
-    // Inputs: crop state. Output: { backgroundSize, backgroundPosition } CSS.
     function toStyles(state) {
         if (!state) {
             throw new Error("crop: toStyles needs state");
@@ -48,9 +33,6 @@
         };
     }
 
-    // parse_pair
-    // Inputs: a "<a>px <b>px" string. Output: [a, b] numbers, or null when not
-    // two explicit px values.
     function parse_pair(s) {
         if (typeof s !== "string") {
             return null;
@@ -62,9 +44,6 @@
         return [parseFloat(m[1]), parseFloat(m[2])];
     }
 
-    // fromStyles
-    // Inputs: background-size and background-position strings. Output: crop
-    // state, or null when either is not an explicit px pair (i.e. uncropped).
     function fromStyles(bgSize, bgPos) {
         var sz = parse_pair(bgSize);
         var ps = parse_pair(bgPos);
@@ -74,10 +53,6 @@
         return { iw: sz[0], ih: sz[1], dx: ps[0], dy: ps[1] };
     }
 
-    // clampPan
-    // Inputs: crop state, mask rect. Output: state with dx, dy clamped so the
-    // image always covers the mask (no exposed gap). Assumes iw>=mask.w,
-    // ih>=mask.h.
     function clampPan(state, mask) {
         if (!state) {
             throw new Error("crop: clampPan needs state");
@@ -90,9 +65,6 @@
         return { iw: state.iw, ih: state.ih, dx: dx, dy: dy };
     }
 
-    // pan
-    // Inputs: crop state, mask, slide-px pan deltas. Output: panned + clamped
-    // state.
     function pan(state, mask, ddx, ddy) {
         if (!isFinite(ddx) || !isFinite(ddy)) {
             throw new Error("crop: pan deltas must be finite");
@@ -103,10 +75,6 @@
         );
     }
 
-    // zoom
-    // Inputs: crop state, mask, natural dims, multiplicative factor. Output:
-    // state scaled about the MASK CENTER, aspect locked to natural, never
-    // smaller than cover, pan re-clamped.
     function zoom(state, mask, natural, factor) {
         assert_dims(mask, "mask");
         assert_dims(natural, "natural");
@@ -124,10 +92,6 @@
         return clampPan(next, mask);
     }
 
-    // reclampForMask
-    // Inputs: crop state, the (possibly resized) mask, natural dims. Output:
-    // state zoomed up to the new cover baseline when the mask grew past the
-    // image, then pan re-clamped. Aspect locked to natural.
     function reclampForMask(state, mask, natural) {
         assert_dims(mask, "mask");
         assert_dims(natural, "natural");
@@ -137,12 +101,6 @@
         return clampPan({ iw: iw, ih: ih, dx: state.dx, dy: state.dy }, mask);
     }
 
-    // placeImage
-    // Inputs: crop state, the (possibly resized) mask, the image's desired
-    // top-left position in CANVAS/slide coordinates, and natural dims. Output:
-    // state whose dx/dy place the image at that canvas origin (so resizing the
-    // mask does not move the image), zoomed up to cover when the mask grew
-    // past the image, then pan re-clamped. Aspect locked to natural.
     function placeImage(state, mask, imgCanvasX, imgCanvasY, natural) {
         assert_dims(mask, "mask");
         assert_dims(natural, "natural");
@@ -157,12 +115,6 @@
         return clampPan({ iw: iw, ih: ih, dx: dx, dy: dy }, mask);
     }
 
-    // scaleForBox
-    // Inputs: crop state and the old + new mask box dimensions. Output: state
-    // with the image size and pan scaled by the box's per-axis ratios, so the
-    // picture scales WITH the element box and the crop framing is preserved
-    // (B-proportional resize). Cover is maintained automatically because the
-    // image and box scale by the same factors.
     function scaleForBox(state, oldW, oldH, newW, newH) {
         if (!(oldW > 0 && oldH > 0)) {
             throw new Error("crop: scaleForBox old dims must be positive");
@@ -180,17 +132,11 @@
         };
     }
 
-    // zoomPercent
-    // Inputs: crop state, mask, natural. Output: zoom as a percentage where
-    // 100 means the image exactly covers the mask.
     function zoomPercent(state, mask, natural) {
         var minIw = cover_scale(mask, natural) * natural.w;
         return (state.iw / minIw) * 100;
     }
 
-    // setZoomPercent
-    // Inputs: target percent (>=100), crop state, mask, natural. Output: state
-    // zoomed so iw equals pct% of the cover width, re-clamped.
     function setZoomPercent(pct, state, mask, natural) {
         if (!isFinite(pct) || pct <= 0) {
             throw new Error("crop: percent must be positive finite");
@@ -221,4 +167,4 @@
     if (typeof window !== "undefined") {
         window.__crop = crop;
     }
-}());
+})();

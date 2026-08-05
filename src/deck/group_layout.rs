@@ -1,12 +1,6 @@
-// Group layout pass — bakes direct-child positions from a group's flex
-// properties and shrink-wraps the group box. Operates in group-local child
-// coordinates (children are position:absolute within the group).
-
 use crate::deck::element::{ElementNode, ElementStyle, ElementType};
 use crate::deck::style::{GroupAlignment, GroupDirection, GroupDistribution, GroupStyle};
 
-// axis_get / axis_set — read/write a child's main/cross coordinate + size by
-// direction. Row → main = x, cross = y; Column → main = y, cross = x.
 fn main_pos(g: &crate::deck::style::Geometry, dir: GroupDirection) -> f64 {
     match dir {
         GroupDirection::Row => g.x,
@@ -44,9 +38,6 @@ fn set_cross(g: &mut crate::deck::style::Geometry, dir: GroupDirection, v: f64) 
     }
 }
 
-// distribute_main — reposition children along the main axis per the mode,
-// within the children's current main span. Order = ascending current main pos.
-// Output: side-effect on child geometry.
 fn distribute_main(children: &mut [ElementNode], dir: GroupDirection, dist: GroupDistribution) {
     let n: usize = children.len();
     assert!(n >= 1, "distribute_main: empty");
@@ -79,8 +70,6 @@ fn distribute_main(children: &mut [ElementNode], dir: GroupDirection, dist: Grou
     }
 }
 
-// distribution_offsets — (leading offset, inter-item gap) for a mode given the
-// free space and item count.
 fn distribution_offsets(dist: GroupDistribution, free: f64, n: usize) -> (f64, f64) {
     let n_f: f64 = n as f64;
     match dist {
@@ -106,8 +95,6 @@ fn distribution_offsets(dist: GroupDistribution, free: f64, n: usize) -> (f64, f
     }
 }
 
-// align_cross — set each child's cross coordinate per the alignment mode within
-// the children's current cross span.
 fn align_cross(children: &mut [ElementNode], dir: GroupDirection, align: GroupAlignment) {
     let n: usize = children.len();
     assert!(n >= 1, "align_cross: empty");
@@ -133,11 +120,6 @@ fn align_cross(children: &mut [ElementNode], dir: GroupDirection, align: GroupAl
     }
 }
 
-// relayout_group
-// Inputs: a group node (mutated in place).
-// Output: true if any direct-child or group-box geometry changed.
-// Errors: none (no-op for non-groups / <1 child). Distribution/alignment apply
-// only for non-None modes; shrink-wrap always runs.
 pub fn relayout_group(group: &mut ElementNode) -> bool {
     if group.element_type != ElementType::Group || group.children.is_empty() {
         return false;
@@ -164,9 +146,6 @@ pub fn relayout_group(group: &mut ElementNode) -> bool {
     changed_children || group.geometry != before_box
 }
 
-// shrink_wrap — set the group box to the children bbox, normalize children so
-// the bbox starts at (0,0), and shift the group origin by the trimmed offset ×
-// scale so the group stays visually anchored.
 fn shrink_wrap(group: &mut ElementNode, scale: f64) {
     let n: usize = group.children.len();
     assert!(n >= 1, "shrink_wrap: empty");
@@ -201,12 +180,6 @@ fn shrink_wrap(group: &mut ElementNode, scale: f64) {
     group.geometry.height = max_y - min_y;
 }
 
-// ancestor_group_ids
-// Inputs: a root node and a target element id.
-// Output: the ids of the target's group ancestors, innermost first. Empty if
-// the element is absent or has no group ancestor. The top-level `root` is the
-// slide's structural container (always a Group) — it is never a user flex
-// group, so it is excluded. Iterative DFS (no recursion), fixed node ceiling.
 fn ancestor_group_ids(root: &ElementNode, element_id: &str) -> Vec<String> {
     const MAX_NODES: usize = 1_000_000;
     let root_id: &str = &root.id;
@@ -217,9 +190,8 @@ fn ancestor_group_ids(root: &ElementNode, element_id: &str) -> Vec<String> {
         assert!(seen <= MAX_NODES, "ancestor_group_ids: node ceiling");
         if node.id == element_id {
             let mut chain: Vec<String> = path;
-            chain.reverse(); // innermost ancestor first
-            // When the anchor is itself a group (e.g. a SetGroupLayout target),
-            // relayout it first, then its ancestors.
+            chain.reverse();
+
             if node.element_type == ElementType::Group && node.id != root_id {
                 chain.insert(0, node.id.clone());
             }
@@ -236,7 +208,6 @@ fn ancestor_group_ids(root: &ElementNode, element_id: &str) -> Vec<String> {
     Vec::new()
 }
 
-// own_scale — a node's own group scale (1.0 for non-groups).
 fn own_scale(n: &ElementNode) -> f64 {
     match &n.style {
         ElementStyle::Group(g) => g.scale,
@@ -244,14 +215,6 @@ fn own_scale(n: &ElementNode) -> f64 {
     }
 }
 
-// element_frame
-// Inputs: root, an element id.
-// Output: Some((abs_x, abs_y, ancestor_scale, own_scale)) where abs_x/abs_y is
-// the element's absolute top-left on the slide, ancestor_scale is the cumulative
-// scale its coordinates are rendered at (product of ancestor group scales), and
-// own_scale is the element's own group scale. None when absent.
-// Used to convert geometry between parent coordinate spaces on reparent.
-// Iterative DFS, fixed node ceiling.
 pub fn element_frame(root: &ElementNode, id: &str) -> Option<(f64, f64, f64, f64)> {
     const MAX_NODES: usize = 1_000_000;
     let mut stack: Vec<(&ElementNode, f64, f64, f64)> = vec![(root, 0.0, 0.0, 1.0)];
@@ -273,10 +236,6 @@ pub fn element_frame(root: &ElementNode, id: &str) -> Option<(f64, f64, f64, f64
     None
 }
 
-// relayout_ancestors
-// Inputs: root (mutated), the element whose edit triggered relayout.
-// Output: true if any ancestor group's geometry changed. Relayouts innermost
-// group first so outer groups shrink-wrap around settled inner groups.
 pub fn relayout_ancestors(root: &mut ElementNode, element_id: &str) -> bool {
     let chain: Vec<String> = ancestor_group_ids(root, element_id);
     let mut changed: bool = false;
@@ -295,7 +254,6 @@ mod tests {
     use super::*;
     use crate::deck::builders::{group_element, text_element};
 
-    // child — a text child at (x,y) sized w×h.
     fn child(id: &str, x: f64, y: f64, w: f64, h: f64) -> ElementNode {
         let mut n = text_element(id, "t");
         n.geometry.x = x;
@@ -312,7 +270,7 @@ mod tests {
 
     #[test]
     fn shrinkwrap_none_fits_box_and_normalizes_origin() {
-        // Two children at x=10 and x=40 (w=20 each), y=5/y=0.
+
         let mut g = grp(
             GroupStyle::default(),
             vec![
@@ -322,20 +280,20 @@ mod tests {
         );
         let changed = relayout_group(&mut g);
         assert!(changed);
-        // bbox: x 10..60 -> w50 ; y 0..30 -> h30. Children normalized so min=0.
+
         assert_eq!(g.geometry.width, 50.0);
         assert_eq!(g.geometry.height, 30.0);
-        assert_eq!(g.children[0].geometry.x, 0.0); // 10-10
-        assert_eq!(g.children[1].geometry.x, 30.0); // 40-10
-        assert_eq!(g.children[0].geometry.y, 5.0); // 5-0
-        // group origin shifted by trimmed min (×scale 1.0): +10 x, +0 y.
+        assert_eq!(g.children[0].geometry.x, 0.0);
+        assert_eq!(g.children[1].geometry.x, 30.0);
+        assert_eq!(g.children[0].geometry.y, 5.0);
+
         assert_eq!(g.geometry.x, 10.0);
         assert_eq!(g.geometry.y, 0.0);
     }
 
     #[test]
     fn row_space_between_pins_ends_holds_width() {
-        // span 0..100 (a at 0 w20, b at 80 w20), third c in middle at 50 w20.
+
         let style = GroupStyle {
             distribution: GroupDistribution::SpaceBetween,
             ..Default::default()
@@ -349,7 +307,7 @@ mod tests {
             ],
         );
         relayout_group(&mut g);
-        // 3 items, content 60, span 100, free 40, gap 20. positions 0,40,80.
+
         assert_eq!(g.geometry.width, 100.0);
         assert_eq!(g.children[0].geometry.x, 0.0);
         assert_eq!(g.children[1].geometry.x, 40.0);
@@ -370,9 +328,7 @@ mod tests {
             ],
         );
         relayout_group(&mut g);
-        // 2 items content40 span100 free60 gap=free/n=30 -> half-gap 15 lead/trail.
-        // pre-trim positions: a at 15, b at 15+20+30=65. bbox 15..85 width 70.
-        // after shrink-wrap+normalize: width 70, a at 0, b at 50.
+
         assert_eq!(g.geometry.width, 70.0);
         assert_eq!(g.children[0].geometry.x, 0.0);
         assert_eq!(g.children[1].geometry.x, 50.0);
@@ -392,7 +348,7 @@ mod tests {
             ],
         );
         relayout_group(&mut g);
-        // cross_span = 40 (tallest). b centered: (40-10)/2 = 15.
+
         assert_eq!(g.children[0].geometry.y, 0.0);
         assert_eq!(g.children[1].geometry.y, 15.0);
         assert_eq!(g.geometry.height, 40.0);
@@ -435,7 +391,7 @@ mod tests {
 
     #[test]
     fn relayout_ancestors_runs_bottom_up_for_nested_groups() {
-        // outer[ inner[ a,b ] , c ]  — moving a child triggers inner then outer.
+
         let inner = {
             let mut g = grp(
                 GroupStyle {
@@ -454,7 +410,7 @@ mod tests {
         outer.style = ElementStyle::Group(GroupStyle::default());
         let changed = relayout_ancestors(&mut outer, "a");
         assert!(changed);
-        // inner distributed a,b to 0 and 80 (already there) -> inner box width 100.
+
         let inner_node = outer.children.iter().find(|n| n.id == "inner").unwrap();
         assert_eq!(inner_node.geometry.width, 100.0);
     }

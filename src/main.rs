@@ -43,68 +43,36 @@ const LANDING_HTML_TEMPLATE: &str = include_str!("../assets/landing.html");
 const LANDING_CSS: &str = include_str!("../assets/landing.css");
 const LANDING_JS: &str = include_str!("../assets/landing.js");
 
-// UserEvent
-// Custom events injected into the Tao event loop.
-// - IpcReceived: the off-thread IPC handler pushed a message onto the
-//   channel; main thread should drain.
-// - FlushPatches: a command dispatch left the patch buffer non-empty;
-//   main thread should coalesce + send on the next iteration.
-// - IoResponse:  the bundle I/O worker thread posted an IoResponse onto
-//   its channel; main thread should drain and hand each to the app.
 #[derive(Debug)]
 enum UserEvent {
     IpcReceived,
     FlushPatches,
     IoResponse,
-    // Presentation mode. The app asked the event loop to build the fullscreen
-    // presentation window (OpenPresentation), the presentation webview pushed a
-    // control onto its channel (PresentIpcReceived), or the app asked to tear
-    // the window down (ClosePresentation). Window creation/teardown lives in the
-    // run closure because it needs the EventLoopWindowTarget.
+
     OpenPresentation,
     PresentIpcReceived,
     ClosePresentation,
-    // PDF export (Chromium worker thread). PdfRenderDone carries success + the
-    // destination path so the loop can toast. ChromiumProgress / ChromiumDone
-    // bridge the download worker's progress + completion to the editor webview
-    // (the worker has no webview handle; the loop does).
+
     PdfRenderDone { ok: bool, dest: std::path::PathBuf },
     ChromiumProgress { received: u64, total: Option<u64> },
     ChromiumDone { ok: bool, message: String },
-    // The landing webview pushed a control (Ready / Open* / Cancel) onto its
-    // channel; the main thread drains it and either sends the landing data,
-    // builds the editor, or exits.
+
     LandingIpcReceived,
-    // Agent worker thread posts agent events (stream chunks, fs requests, etc.)
-    // to the main loop via the EventLoopProxy.
+
     AgentEvent(crate::agent::AgentEvent),
 }
 
-// ChromeJob
-// Work handed to the Chromium worker thread: render a PDF, or download a
-// private Chromium build. Both carry only owned data so they cross the thread
-// boundary cleanly.
 enum ChromeJob {
     Render(app::PdfJob),
     Download,
 }
 
-// write_pdf_atomic
-// Inputs: the destination and the PDF bytes. Output: Ok after writing to a
-// sibling temp file and renaming onto `dest` (so a failed/partial render never
-// leaves a truncated PDF at the user's chosen path).
 fn write_pdf_atomic(dest: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     let tmp: std::path::PathBuf = dest.with_extension("pdf.partial");
     std::fs::write(&tmp, bytes)?;
     std::fs::rename(&tmp, dest)
 }
 
-// spawn_chrome_worker
-// Inputs: the job receiver and an event-loop proxy. Output: side-effect; spawns
-// a thread that owns the (blocking) headless-Chromium calls. Render jobs write
-// the PDF atomically and post PdfRenderDone; download jobs stream progress
-// (ChromiumProgress), save the resolved path to config on success, and post
-// ChromiumDone.
 fn spawn_chrome_worker(
     rx: std::sync::mpsc::Receiver<ChromeJob>,
     proxy: tao::event_loop::EventLoopProxy<UserEvent>,
@@ -154,11 +122,6 @@ fn spawn_chrome_worker(
     });
 }
 
-// init_tracing
-// Inputs: none. Reads RUST_LOG from the environment.
-// Output: side-effect; installs the global tracing subscriber.
-// Errors: silently falls back to a sensible default if RUST_LOG is absent
-// or unparseable.
 fn init_tracing() {
     use tracing_subscriber::{EnvFilter, fmt};
     let filter: EnvFilter =
@@ -166,9 +129,6 @@ fn init_tracing() {
     fmt().with_env_filter(filter).with_target(false).init();
 }
 
-// ns_string (macOS)
-// Inputs: a Rust &str. Output: an autoreleased NSString carrying the same
-// text. Used for menu titles and key equivalents.
 #[cfg(target_os = "macos")]
 fn ns_string(s: &str) -> *mut objc::runtime::Object {
     use objc::{class, msg_send, sel, sel_impl};
@@ -177,11 +137,6 @@ fn ns_string(s: &str) -> *mut objc::runtime::Object {
     unsafe { msg_send![class!(NSString), stringWithUTF8String: c.as_ptr()] }
 }
 
-// menu_item (macOS)
-// Inputs: a title, a standard AppKit action selector, and a single-
-// character key equivalent (Command is the implicit modifier for menu
-// items). Output: a retained (+1) NSMenuItem; the caller adds it to a menu
-// (which retains it) and then releases this reference.
 #[cfg(target_os = "macos")]
 fn menu_item(title: &str, action: objc::runtime::Sel, key: &str) -> *mut objc::runtime::Object {
     use objc::runtime::Object;
@@ -197,23 +152,6 @@ fn menu_item(title: &str, action: objc::runtime::Sel, key: &str) -> *mut objc::r
     }
 }
 
-// install_main_menu (macOS)
-// Inputs: none. Output: side-effect; installs a minimal application main
-// menu with the standard macOS accelerators:
-//   • Quit     — Cmd+Q  (terminate:)
-//   • Minimize — Cmd+M  (performMiniaturize:)
-//   • Close    — Cmd+W  (performClose:)
-// Why: a main menu is also required to avoid wry 0.45's keyDown forwarding
-// dereferencing a null `[NSApp mainMenu]`, so this real menu both restores
-// the expected Mac shortcuts AND is the valid performKeyEquivalent: target
-// for every other (unmapped) key. Standard AppKit selectors mean AppKit
-// does the work — terminate: quits, performClose:/performMiniaturize: act
-// on the key window.
-// Control flow: build the app + window submenus, attach their items, hang
-// both off the main menu, install it. Each object is released once after
-// its parent has retained it, so the app holds the only references.
-// Must run after the NSApplication exists (i.e. after the window/event
-// loop is built).
 #[cfg(target_os = "macos")]
 fn install_main_menu() {
     use objc::runtime::Object;
@@ -227,11 +165,9 @@ fn install_main_menu() {
         let main_menu: *mut Object = msg_send![class!(NSMenu), new];
         assert!(!main_menu.is_null(), "NSMenu new returned nil");
 
-        // Application menu — Quit.
         let app_item: *mut Object = msg_send![class!(NSMenuItem), new];
         let app_menu: *mut Object = msg_send![class!(NSMenu), new];
-        // performClose: (not terminate:) so Cmd+Q routes through the tao
-        // CloseRequested path, where the unsaved-changes quit dialog lives.
+
         let quit: *mut Object = menu_item("Quit", sel!(performClose:), "q");
         let _: () = msg_send![app_menu, addItem: quit];
         let _: () = msg_send![quit, release];
@@ -240,7 +176,6 @@ fn install_main_menu() {
         let _: () = msg_send![main_menu, addItem: app_item];
         let _: () = msg_send![app_item, release];
 
-        // Window menu — Minimize, Close.
         let win_item: *mut Object = msg_send![class!(NSMenuItem), new];
         let win_menu_alloc: *mut Object = msg_send![class!(NSMenu), alloc];
         let win_menu: *mut Object = msg_send![win_menu_alloc, initWithTitle: ns_string("Window")];
@@ -251,7 +186,7 @@ fn install_main_menu() {
         let _: () = msg_send![win_menu, addItem: close];
         let _: () = msg_send![close, release];
         let _: () = msg_send![win_item, setSubmenu: win_menu];
-        // Let AppKit manage the standard Window-menu behaviors.
+
         let _: () = msg_send![app, setWindowsMenu: win_menu];
         let _: () = msg_send![win_menu, release];
         let _: () = msg_send![main_menu, addItem: win_item];
@@ -262,12 +197,6 @@ fn install_main_menu() {
     }
 }
 
-// assemble_host_html
-// Inputs: template (must contain CSS + crop-JS + snap-JS + style-props-JS +
-// host-JS placeholders), css, host js, and the pure snap-, crop-, and
-// style-props-engine js (injected before host js).
-// Output: assembled HTML string ready for the webview.
-// Errors: asserts all five placeholders are present.
 fn assemble_host_html(
     template: &str,
     css: &str,
@@ -310,11 +239,6 @@ fn assemble_host_html(
         .replace("__HOST_JS__", js)
 }
 
-// assemble_present_html
-// Inputs: the presentation template (must contain the present CSS, morph JS,
-// and present JS placeholders) plus the css, morph, and js bodies.
-// Output: assembled HTML for the presentation webview.
-// Errors: asserts all three placeholders are present.
 fn assemble_present_html(template: &str, css: &str, morph: &str, js: &str) -> String {
     assert!(
         template.contains("__PRESENT_CSS__"),
@@ -334,15 +258,6 @@ fn assemble_present_html(template: &str, css: &str, morph: &str, js: &str) -> St
         .replace("__PRESENT_JS__", js)
 }
 
-// build_presentation
-// Inputs: the event-loop target (only available inside the run closure), an
-// event-loop proxy for posting PresentIpcReceived, and the mpsc sender the
-// presentation webview's IPC handler pushes decoded controls onto.
-// Output: the fullscreen Window + its WebView, or a build error.
-// Dataflow: build a borderless-fullscreen window, then a webview whose IPC
-// handler decodes each body into a PresentInbound, forwards it on the channel,
-// and wakes the loop. The caller keeps the Window alive and wraps the WebView
-// in a WebviewSender.
 fn build_presentation(
     target: &EventLoopWindowTarget<UserEvent>,
     proxy: tao::event_loop::EventLoopProxy<UserEvent>,
@@ -377,23 +292,6 @@ fn build_presentation(
     Ok((window, webview))
 }
 
-// main
-// Inputs: none.
-// Output: process exit Result.
-// Errors: window or webview construction failures bubble up.
-// Dataflow:
-//   1. Build Tao event loop, proxy, and an mpsc channel for IPC.
-//   2. Build the Wry WebView whose IPC handler decodes JSON into
-//      IpcMessage, pushes onto the channel, and posts IpcReceived.
-//   3. Construct ApplicationCore around a WebviewSender (owns the
-//      webview) plus a clone of the proxy for scheduling FlushPatches.
-//   4. Run the event loop:
-//      - IpcReceived  → drain channel, handle each message
-//      - FlushPatches → drain coalesced patches, send Patch::Batch
-//      - CloseRequested → exit
-// assemble_landing_html
-// Inputs: the landing template (CSS + JS placeholders) and the two bodies.
-// Output: the assembled landing HTML. Errors: asserts both placeholders.
 fn assemble_landing_html(template: &str, css: &str, js: &str) -> String {
     assert!(
         template.contains("__LANDING_CSS__"),
@@ -408,10 +306,6 @@ fn assemble_landing_html(template: &str, css: &str, js: &str) -> String {
         .replace("__LANDING_JS__", js)
 }
 
-// build_landing
-// Inputs: the event-loop target, a proxy, and the landing inbound channel.
-// Output: the landing window + webview. The webview's IPC handler decodes each
-// body into a LandingInbound, forwards it, and wakes LandingIpcReceived.
 fn build_landing(
     target: &EventLoopWindowTarget<UserEvent>,
     proxy: tao::event_loop::EventLoopProxy<UserEvent>,
@@ -444,11 +338,6 @@ fn build_landing(
     Ok((window, webview))
 }
 
-// build_editor
-// Inputs: the event-loop target, a proxy, the editor IPC channel sender, the
-// starting deck, and the app's flush/io/present/pdf wiring. Output: the editor
-// window + a ready ApplicationCore. Moves the (formerly eager) editor
-// construction so the landing window can build it lazily on Open.
 #[allow(clippy::too_many_arguments)]
 fn build_editor(
     target: &EventLoopWindowTarget<UserEvent>,
@@ -512,9 +401,6 @@ fn build_editor(
     Ok((window, app))
 }
 
-// send_landing
-// Inputs: the landing webview + the data payload. Output: side-effect; calls
-// window.__landing.receive(<json>) in the landing webview.
 fn send_landing(webview: &WebView, data: &LandingData) {
     let json: String = match serde_json::to_string(data) {
         Ok(j) => j,
@@ -530,12 +416,9 @@ fn send_landing(webview: &WebView, data: &LandingData) {
     }
 }
 
-// landing_data
-// Output: the recents + template rows for the landing webview.
 fn landing_data() -> LandingData {
     // ponytail: builds each recent's thumbnail synchronously on the main thread
-    // at landing open (N <= recents CAP). Move build_thumb onto the io thread
-    // and stream thumbs in if this ever stalls the landing paint.
+
     let recents: Vec<LandingRecent> = recents::load()
         .into_iter()
         .map(|r| {
@@ -566,11 +449,6 @@ fn landing_data() -> LandingData {
     LandingData { recents, templates }
 }
 
-// deck_for_open
-// Inputs: an Open* landing control. Output: the starting deck plus, for a
-// recent, the path to load asynchronously (the deck is a light placeholder
-// swapped out when the load returns). None means "abort, stay on the landing"
-// — used when the OpenDefault file dialog is cancelled.
 fn deck_for_open(inbound: &LandingInbound) -> Option<(Deck, Option<PathBuf>)> {
     use deck::templates::{light_theme, new_deck, new_deck_all_layouts, theme_by_id};
     match inbound {
@@ -580,9 +458,7 @@ fn deck_for_open(inbound: &LandingInbound) -> Option<(Deck, Option<PathBuf>)> {
         LandingInbound::OpenRecent { path } => {
             Some((new_deck(light_theme(), "title"), Some(PathBuf::from(path))))
         }
-        // No selection: let the user pick an existing .slidedeck from disk.
-        // Cancel -> None (stay on landing). The placeholder light deck is
-        // swapped out when the load returns.
+
         LandingInbound::OpenDefault => {
             let path: PathBuf = rfd::FileDialog::new()
                 .add_filter("Slide Deck", &["deck", "slidedeck"])
@@ -593,9 +469,6 @@ fn deck_for_open(inbound: &LandingInbound) -> Option<(Deck, Option<PathBuf>)> {
     }
 }
 
-// initial_open_path
-// Output: the first CLI argument as a path when it names an existing file
-// (a deck double-clicked on Windows / Linux, or a CLI launch), else None.
 fn initial_open_path() -> Option<PathBuf> {
     let path = PathBuf::from(std::env::args_os().nth(1)?);
     if path.is_file() { Some(path) } else { None }
@@ -610,21 +483,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proxy_for_app = proxy.clone();
     let (ipc_tx, ipc_rx) = std::sync::mpsc::channel::<IpcMessage>();
 
-    // Landing window first. The editor is built lazily when the landing posts
-    // an Open control (window + deck construction needs the
-    // EventLoopWindowTarget, only reachable in the run closure). `ipc_tx` and
-    // `proxy` are kept for build_editor.
     let (landing_tx, landing_rx) = std::sync::mpsc::channel::<LandingInbound>();
-    // Kept for injecting file-open requests (launch argv + macOS openURLs) into
-    // the same open flow the landing uses.
+
     let landing_tx_startup = landing_tx.clone();
     let landing_tx_open = landing_tx.clone();
     let (landing_win, landing_wv) = build_landing(&event_loop, proxy.clone(), landing_tx)?;
     let mut landing_window: Option<Window> = Some(landing_win);
     let mut landing_webview: Option<WebView> = Some(landing_wv);
 
-    // A path passed on the command line (double-click on Windows / Linux, or a
-    // CLI launch) opens straight into that deck via the OpenRecent flow.
     if let Some(path) = initial_open_path() {
         let _ = landing_tx_startup.send(LandingInbound::OpenRecent {
             path: path.to_string_lossy().into_owned(),
@@ -641,10 +507,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
     };
 
-    // Presentation mode: a dedicated inbound channel for the presentation
-    // webview's controls, plus two wakes the app uses to ask the event loop to
-    // build / tear down the fullscreen window (window creation needs the
-    // EventLoopWindowTarget, only reachable inside the run closure).
     let (present_tx, present_rx) = std::sync::mpsc::channel::<PresentInbound>();
     let request_present_open: Box<dyn Fn()> = {
         let p = proxy_for_app.clone();
@@ -662,9 +524,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         })
     };
-    // Chromium worker thread: owns the blocking headless-browser render +
-    // download. The two dispatch closures (moved into the editor) hand jobs to
-    // it; results return via UserEvent.
+
     let (chrome_tx, chrome_rx) = std::sync::mpsc::channel::<ChromeJob>();
     spawn_chrome_worker(chrome_rx, proxy_for_app.clone());
     let dispatch_pdf_job: Box<dyn Fn(app::PdfJob)> = {
@@ -684,9 +544,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
     };
 
-    // Bundle I/O: spawn the worker thread, wire its responses into the
-    // event loop. The worker calls `io_wake` after every response so the
-    // main thread knows to drain its receiver.
     let (io_tx, io_rx) = std::sync::mpsc::channel::<IoResponse>();
     let io_wake: Box<dyn Fn() + Send + 'static> = {
         let p = proxy_for_app.clone();
@@ -698,8 +555,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let io_thread: IoThread = IoThread::spawn(io_tx, io_wake)?;
 
-    // Agent event sink: posts agent events from the worker thread into the
-    // main event loop via the proxy.
     let agent_sink: std::sync::Arc<dyn Fn(crate::agent::AgentEvent) + Send + Sync> = {
         let p = proxy_for_app.clone();
         std::sync::Arc::new(move |ev| {
@@ -707,7 +562,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
     };
 
-    // Editor ingredients, moved into build_editor on the first Open.
     let mut schedule_flush_opt: Option<Box<dyn Fn()>> = Some(schedule_flush);
     let mut io_thread_opt: Option<IoThread> = Some(io_thread);
     let mut request_present_open_opt: Option<Box<dyn Fn()>> = Some(request_present_open);
@@ -720,15 +574,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut app: Option<ApplicationCore> = None;
     let mut editor_window: Option<Window> = None;
 
-    // Install the standard Mac main menu (Quit / Minimize / Close). This
-    // also gives wry's keyDown forwarding a valid performKeyEquivalent:
-    // target, so unmapped keys no longer null-deref a missing main menu.
     #[cfg(target_os = "macos")]
     install_main_menu();
 
-    // Presentation-window lifetime holders. The presentation WebView is owned
-    // by the app's session (via its WebviewSender); the OS Window is held here
-    // and dropped only after the session (and its webview) on close.
     let mut present_window: Option<Window> = None;
     let proxy_present = proxy_for_app.clone();
 
@@ -795,7 +643,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Event::UserEvent(UserEvent::ClosePresentation) => {
-                // Drop the session (and its webview) first, then the window.
+
                 if let Some(app) = app.as_mut() {
                     app.end_presentation();
                 }
@@ -815,8 +663,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(app) = app.as_mut() {
                     app.send_chromium_done(ok, message);
                     if ok {
-                        // Download finished; resume the export that was waiting
-                        // (pops the .pdf save dialog now that chrome resolves).
+
                         app.on_chromium_ready();
                     }
                 }
@@ -835,23 +682,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 *control_flow = ControlFlow::Exit;
                             }
                         }
-                        // Any Open* control: build the editor on the chosen deck,
-                        // then drop the landing window. Ignored if already open.
+
                         open => {
-                            // Resolve the deck first (OpenDefault may pop a file
-                            // dialog the user can cancel) so we only consume the
-                            // editor ingredients once we're committed to opening.
+
                             let chosen = if app.is_some() {
                                 warn!("landing open ignored; editor already open");
                                 None
                             } else {
                                 deck_for_open(&open)
                             };
-                            // Only consume the editor ingredients once a deck is
-                            // committed (a cancelled dialog leaves them intact).
+
                             if let Some((deck, load)) = chosen {
-                                // New-from-layout has no load path; that is the
-                                // case we focus the title field for.
+
                                 let focus_title: bool = load.is_none();
                                 if let (
                                     Some(sf),
@@ -908,9 +750,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     error!("agent event failed: {}", e);
                 }
             }
-            // macOS delivers Finder double-clicks / "Open with" as file URLs
-            // (application:openURLs:), not argv. Route each into the same open
-            // flow; the open arm ignores it once an editor is already up.
+
             Event::Opened { urls } => {
                 for u in &urls {
                     if let Ok(path) = u.to_file_path() {

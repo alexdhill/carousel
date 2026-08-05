@@ -1,14 +1,3 @@
-// Theme data.
-//
-// Beyond the per-theme base CSS (`theme_css`) the theme now carries the
-// layout-editor state (SPEC §11.4 / Stage 11): a deck-wide raw CSS blob
-// (`globals_css`) injected into every shadow root, and the set of reusable
-// layout templates with their canonical display order. The fuller palette /
-// typography inspector (SPEC §6.2) lands later.
-//
-// `Eq` is dropped because `LayoutNode` embeds `ElementNode`, whose geometry
-// is floating-point (PartialEq only) — mirroring `SlideNode`.
-
 use crate::deck::ids::LayoutId;
 use crate::deck::layout::LayoutNode;
 use std::collections::BTreeMap;
@@ -20,9 +9,7 @@ pub struct ThemeData {
     pub theme_id: String,
     pub theme_css: String,
     pub globals_css: String,
-    // BTreeMap for deterministic serialization; `layout_order` holds the
-    // canonical display order because LayoutIds do not sort meaningfully
-    // (same rationale as `slide_order`).
+
     pub layouts: BTreeMap<LayoutId, LayoutNode>,
     pub layout_order: Vec<LayoutId>,
 }
@@ -41,8 +28,6 @@ const DEFAULT_THEME_CSS: &str = r#"
     height: 1080px;
     background: var(--theme-background);
     position: relative;
-    /* Mask anything positioned beyond the slide bounds — content outside the
-       canvas is never part of the rendered slide. */
     overflow: hidden;
 }
 .slide__content {
@@ -55,13 +40,7 @@ const DEFAULT_THEME_CSS: &str = r#"
     user-select: none;
 }
 [data-element-type="text"] {
-    /* Honor newline characters in text content so a box renders exactly
-       what the user typed while editing it (WYSIWYG between the inline
-       contenteditable session and the committed render). */
     white-space: pre-wrap;
-    /* Flex column so the inspector's vertical-align control can map
-       Top/Middle/Bottom to justify-content: flex-start/center/flex-end.
-       Default flex-start keeps text at the top (unchanged from a plain box). */
     display: flex;
     flex-direction: column;
 }
@@ -69,8 +48,7 @@ const DEFAULT_THEME_CSS: &str = r#"
 
 impl Default for ThemeData {
     fn default() -> Self {
-        // Seed one empty "blank" layout so the layouts list is never empty
-        // (the editor always has a layout to show / a fallback target).
+
         let blank_id: LayoutId = "blank".to_string();
         let blank_root = crate::deck::builders::group_element("el_layout_root", vec![]);
         let blank = LayoutNode::new(blank_id.clone(), "Blank".to_string(), blank_root);

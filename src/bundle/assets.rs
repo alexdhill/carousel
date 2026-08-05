@@ -1,15 +1,3 @@
-// AssetRegistry.
-//
-// SPEC §3.4 — `assets/index.json` records metadata for each binary asset
-// in the deck so we can deduplicate by content hash and surface integrity
-// info to the user. Stage 7's scope does not include asset-import commands,
-// so this module is intentionally minimal: a typed wrapper that serializes
-// to / from the JSON shape on disk and tracks zero-or-more entries.
-//
-// When the asset-import command set lands, this struct gains insertion /
-// lookup methods. Until then, the registry is created empty for fresh
-// decks and parsed back verbatim from an opened bundle.
-
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -18,10 +6,6 @@ pub const ASSETS_INDEX_VERSION: &str = "1.0";
 pub const ASSET_ID_HASH_LEN: usize = 16;
 pub const ASSETS_IMAGES_DIR: &str = "assets/images";
 
-// AssetEntry
-// One row in assets/index.json. Carries enough metadata for dedup
-// (content_hash), display (original_filename, dimensions), and re-mounting
-// (path, media_type, size_bytes).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AssetEntry {
     pub id: String,
@@ -40,12 +24,6 @@ pub struct AssetDimensions {
     pub height: u32,
 }
 
-// AssetRegistry
-// Top-level shape of assets/index.json. Holds the registry version (for
-// forward-compat) and a flat vec of entries. A separate `files` map is
-// populated only at save/load time — the in-memory deck holds raw bytes
-// in that map so the I/O thread can write or rebuild the bundle without
-// re-reading anything from disk.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AssetRegistry {
     #[serde(default = "default_version")]
@@ -61,9 +39,7 @@ fn default_version() -> String {
 }
 
 impl AssetRegistry {
-    // new_empty
-    // Inputs: none.
-    // Output: a registry with the current version and no entries.
+
     pub fn new_empty() -> Self {
         Self {
             version: ASSETS_INDEX_VERSION.to_string(),
@@ -72,57 +48,24 @@ impl AssetRegistry {
         }
     }
 
-    // is_empty
-    // Inputs: self.
-    // Output: true iff the registry holds no entries.
     pub fn is_empty(&self) -> bool {
         self.assets.is_empty()
     }
 
-    // entry_count
-    // Inputs: self.
-    // Output: number of asset entries.
     pub fn entry_count(&self) -> usize {
         self.assets.len()
     }
 
-    // index_json
-    // Inputs: self.
-    // Output: pretty-printed JSON of the on-disk `assets/index.json` shape
-    // (version + assets). The `files` map is excluded via `#[serde(skip)]`.
-    // Errors: serde_json failure (impossible in practice for owned data).
     pub fn index_json(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string_pretty(self)
     }
 
-    // from_index_json
-    // Inputs: a string containing the on-disk `assets/index.json` body.
-    // Output: the parsed registry with an empty `files` map (the caller
-    // populates `files` from the bundle's asset blobs separately).
-    // Errors: serde_json failure on malformed input.
     pub fn from_index_json(s: &str) -> Result<Self, serde_json::Error> {
         assert!(!s.is_empty(), "from_index_json: empty input");
         let parsed: Self = serde_json::from_str(s)?;
         Ok(parsed)
     }
 
-    // insert_blob
-    // Inputs: the raw bytes, the user-facing filename (used for the
-    // bundle path extension), the MIME media type, and the optional
-    // pixel dimensions.
-    // Output: the AssetEntry now backing this asset. If an entry with
-    // the same content_hash already exists, returns that one verbatim
-    // (deduplication — SPEC §3.4). Otherwise builds a new entry, stores
-    // the bytes under `assets/images/<id>.<ext>`, and returns the new
-    // entry.
-    // Dataflow:
-    //   1. sha256 the bytes → hex digest → asset id = "asset_<first-16>".
-    //   2. Look up the digest in self.assets; on hit, return the cached
-    //      entry without writing anything.
-    //   3. On miss, derive the file extension from original_filename
-    //      (or the media_type when the name has no extension), build
-    //      the on-disk path, append the AssetEntry, and write the bytes
-    //      into self.files.
     pub fn insert_blob(
         &mut self,
         bytes: Vec<u8>,
@@ -139,7 +82,6 @@ impl AssetRegistry {
         let hash_hex: String = sha256_hex(&bytes);
         let content_hash: String = format!("sha256:{hash_hex}");
 
-        // Dedup pass — by content hash.
         let mut i: usize = 0;
         while i < self.assets.len() {
             if self.assets[i].content_hash == content_hash {
@@ -170,20 +112,12 @@ impl AssetRegistry {
         entry
     }
 
-    // find_by_id
-    // Inputs: an asset id.
-    // Output: the matching entry, when present.
     pub fn find_by_id(&self, id: &str) -> Option<&AssetEntry> {
         assert!(!id.is_empty(), "find_by_id: empty id");
         self.assets.iter().find(|e| e.id == id)
     }
 }
 
-// derive_asset_id
-// Inputs: lowercase hex digest from sha256.
-// Output: "asset_<first ASSET_ID_HASH_LEN chars>" — keeps the id short
-// enough to be readable in HTML while preserving plenty of entropy
-// (16 hex chars = 64 bits, collision-safe for our scale).
 fn derive_asset_id(hash_hex: &str) -> String {
     assert!(
         hash_hex.len() >= ASSET_ID_HASH_LEN,
@@ -192,11 +126,6 @@ fn derive_asset_id(hash_hex: &str) -> String {
     format!("asset_{}", &hash_hex[..ASSET_ID_HASH_LEN])
 }
 
-// derive_extension
-// Inputs: a filename and a media type.
-// Output: a lowercase file extension (no leading dot). Prefers the
-// filename's own extension; falls back to a small media-type mapping
-// for common image MIMEs. Returns "" when nothing is recognisable.
 fn derive_extension(filename: &str, media_type: &str) -> String {
     let lower: String = filename.to_ascii_lowercase();
     if let Some(idx) = lower.rfind('.') {
@@ -216,9 +145,6 @@ fn derive_extension(filename: &str, media_type: &str) -> String {
     }
 }
 
-// sha256_hex
-// Inputs: a byte slice.
-// Output: lowercase hex digest of its sha256.
 fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher: Sha256 = Sha256::new();
     hasher.update(bytes);
@@ -264,7 +190,7 @@ mod tests {
         let back = AssetRegistry::from_index_json(&json).unwrap();
         assert_eq!(back.assets.len(), 1);
         assert_eq!(back.assets[0].id, "asset_01HQ");
-        // Files map is skipped intentionally — empty on round trip.
+
         assert!(back.files.is_empty());
     }
 

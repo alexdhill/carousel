@@ -1,15 +1,9 @@
-// snap.js
-// Pure, DOM-free snapping engine for the slide editor. Consumes plain
-// slide-coordinate rects ({ x, y, w, h }) and returns a snapped rect plus
-// guide descriptors. No DOM access, no IPC; safe to unit-test under Node.
 (function () {
     "use strict";
 
     var MAX_SNAP_ELEMENTS = 256;
     var EPS = 0.01;
 
-    // assert_rect
-    // Inputs: a candidate rect. Output: throws if not a finite { x, y, w, h }.
     function assert_rect(r) {
         if (!r || typeof r !== "object") {
             throw new Error("snap: rect must be an object");
@@ -20,10 +14,6 @@
         }
     }
 
-    // build_targets
-    // Inputs: an array of slide-coordinate rects (callers prepend the slide
-    // pseudo-rect). Output: { xLines, yLines, rects } where each line is
-    // { pos, source }. Capped at MAX_SNAP_ELEMENTS for a fixed upper bound.
     function build_targets(rects) {
         if (!Array.isArray(rects)) {
             throw new Error("snap: rects must be an array");
@@ -45,9 +35,6 @@
         return { xLines: xLines, yLines: yLines, rects: rects.slice(0, n) };
     }
 
-    // moving_lines
-    // Inputs: a rect and "x" | "y". Output: the rect's three snap-line
-    // positions on that axis as a number[].
     function moving_lines(rect, axis) {
         if (axis === "x") {
             return [rect.x, rect.x + rect.w / 2, rect.x + rect.w];
@@ -55,11 +42,6 @@
         return [rect.y, rect.y + rect.h / 2, rect.y + rect.h];
     }
 
-    // best_offset
-    // Inputs: moving line positions (number[]), candidate lines ([{pos}]),
-    // threshold. Output: the nearest { dist, offset } within threshold, or
-    // null. offset is how far to shift the moving rect so a moving line lands
-    // on a candidate line.
     function best_offset(movPositions, candLines, threshold) {
         var best = null;
         var i = 0;
@@ -76,10 +58,6 @@
         return best;
     }
 
-    // coincident_guides
-    // Inputs: moving line positions after the offset is applied, candidate
-    // lines, axis. Output: guide descriptors for every candidate line a moving
-    // line now lands on (deduped by pos).
     function coincident_guides(movPositions, candLines, axis) {
         var seen = {};
         var guides = [];
@@ -106,9 +84,6 @@
         return guides;
     }
 
-    // snap_axis
-    // Inputs: the in-flight rect, candidate lines for one axis, axis name,
-    // threshold. Output: { offset, guides }. offset is 0 when nothing snaps.
     function snap_axis(rect, candLines, axis, threshold) {
         var mov = moving_lines(rect, axis);
         var best = best_offset(mov, candLines, threshold);
@@ -122,9 +97,6 @@
         };
     }
 
-    // overlaps_perp
-    // Inputs: two rects and the snap axis. Output: true when they overlap on
-    // the perpendicular axis (so they read as "in the same row/column").
     function overlaps_perp(a, b, axis) {
         if (axis === "x") {
             return a.y < b.y + b.h && b.y < a.y + a.h;
@@ -132,18 +104,11 @@
         return a.x < b.x + b.w && b.x < a.x + a.w;
     }
 
-    // lo_hi
-    // Inputs: a rect and axis. Output: [low, high] edge positions on axis.
     function lo_hi(r, axis) {
         if (axis === "x") { return [r.x, r.x + r.w]; }
         return [r.y, r.y + r.h];
     }
 
-    // spacing_offset
-    // Inputs: the moving rect, target rects, axis, threshold. Output:
-    // { offset, gaps } when centering the moving element between its nearest
-    // in-row left/right neighbors yields equal gaps within threshold; else
-    // null. gaps describe the two equal gaps for tick rendering.
     function spacing_offset(rect, rects, axis, threshold) {
         var mLo = lo_hi(rect, axis)[0];
         var mHi = lo_hi(rect, axis)[1];
@@ -173,11 +138,6 @@
         return { offset: offset, gaps: gaps };
     }
 
-    // pick_axis
-    // Inputs: the alignment result { offset, guides } from snap_axis, the
-    // spacing result { offset, gaps } | null, and axis. Output: whichever is
-    // nearer to zero; spacing emits a single spacing guide, alignment emits
-    // its line guides. Ties favor alignment.
     function pick_axis(align, space, axis) {
         var alignHit = align.offset !== 0 || align.guides.length > 0;
         if (space === null) {
@@ -192,10 +152,6 @@
         };
     }
 
-    // forDrag
-    // Inputs: movingRect { x,y,w,h }, targets from build_targets, opts
-    // { threshold, gridEnabled, suppress }. Output: { rect, guides }. Axes
-    // resolve independently; suppress returns the input untouched.
     function forDrag(movingRect, targets, opts) {
         assert_rect(movingRect);
         if (!targets || !opts) {
@@ -222,11 +178,6 @@
         return { rect: rect, guides: chosenX.guides.concat(chosenY.guides) };
     }
 
-    // dim_match_positions
-    // Inputs: target rects, the fixed opposite-edge position, axis ("x"|"y"),
-    // and edge sign (+1 if the moving edge is the high edge east/south, -1 if
-    // the low edge west/north). Output: candidate edge positions that make the
-    // moving rect's size equal a target's size on that axis.
     function dim_match_positions(rects, fixedPos, axis, sign) {
         var out = [];
         var i = 0;
@@ -237,11 +188,6 @@
         return out;
     }
 
-    // snap_edge
-    // Inputs: current moving-edge position, the fixed opposite-edge position,
-    // axis, edge sign, alignment lines, target rects, threshold. Output:
-    // { pos, guides } — the snapped edge position (unchanged when nothing is
-    // within threshold) plus alignment guides (dimension matches draw none).
     function snap_edge(edgePos, fixedPos, axis, sign, lines, rects, threshold) {
         var cands = lines.concat(dim_match_positions(rects, fixedPos, axis, sign));
         var best = best_offset([edgePos], cands, threshold);
@@ -252,11 +198,6 @@
         return { pos: snapped, guides: coincident_guides([snapped], lines, axis) };
     }
 
-    // forResize
-    // Inputs: movingRect (already produced by host.js computeResizeRect),
-    // activeEdges { west, east, north, south }, targets, opts
-    // { threshold, gridEnabled, suppress }. Output: { rect, guides }. Snaps
-    // each active edge with the opposite edge anchored; suppress returns input.
     function forResize(movingRect, activeEdges, targets, opts) {
         assert_rect(movingRect);
         if (!activeEdges || !targets || !opts) {
@@ -304,11 +245,6 @@
         return { rect: rect, guides: guides };
     }
 
-    // axisLock
-    // Inputs: a slide-space drag delta (dx, dy) and whether Shift is held.
-    // Output: the delta constrained to a single axis when Shift is held —
-    // horizontal (dy=0) when |dx| >= |dy|, else vertical (dx=0) — plus
-    // `lockedAxis` (the axis forced to 0, or null). Ties lock horizontal.
     function axisLock(dx, dy, shiftHeld) {
         if (!shiftHeld) {
             return { dx: dx, dy: dy, lockedAxis: null };
