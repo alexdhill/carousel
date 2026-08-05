@@ -16,9 +16,9 @@
     --hover: color-mix(in srgb, var(--field) 95%, var(--acc));
     --line: #f2f0eb;
     --guide: var(--acc);
-    --r-panel: 10px; /*13*/
-    --r-field: 5px; /*8*/
-    --r-btn: 6px; /*9*/
+    --r-panel: 10px;
+    --r-field: 6px;
+    --r-btn: 5px;
     --shadow: 0 2px 5px rgba(40, 35, 30, 0.1), 0 1px 3px rgba(40, 35, 30, 0.08);
     --shadow-slide: 0 10px 34px rgba(40, 35, 30, 0.16), 0 2px 8px rgba(40, 35, 30, 0.08);
     --gap: 7px;

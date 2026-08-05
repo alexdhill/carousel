@@ -3414,6 +3414,11 @@
 
         if (resizeState.isGroup) {
             const finalScale = groupResizeScale(e, scale);
+            if (resizeState.savedTransform === "") {
+                resizeState.target.style.removeProperty("transform");
+            } else {
+                resizeState.target.style.transform = resizeState.savedTransform;
+            }
             window.__deck.send("Interaction", {
                 kind: "SetGroupScale",
                 element_id: resizeState.elementId,
@@ -5584,8 +5589,8 @@
         return cur === spec.on;
     }
 
-    // value flips between `on` and "" (clear). ponytail: a stale ._decls
-
+    // ponytail: writes box._decls optimistically so clicks inside one round trip compose;
+    // a rejected commit leaves it wrong until the next syncTextStyle corrects it.
     function toggleTextStyle(box, spec) {
         const decls = box._decls || {};
         const active = isTextStyleActive(decls, spec);
@@ -5603,6 +5608,8 @@
         } else {
             next = active ? "" : spec.on;
         }
+        box._decls = Object.assign({}, decls);
+        box._decls[spec.prop] = next;
         sendPropertyChanged(spec.prop, next);
     }
 

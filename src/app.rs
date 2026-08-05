@@ -231,8 +231,8 @@ impl ApplicationCore {
         }
     }
 
-    // for the session. ponytail: enumeration is synchronous on the main thread;
-
+    // ponytail: font enumeration is synchronous on the main thread, cached for the
+    // session; move to a worker delivering via EventLoopProxy if it lags first paint.
     fn send_font_list(&mut self) -> AppResult<()> {
         if self.font_families.is_none() {
             self.font_families = Some(crate::fonts::enumerate_families());

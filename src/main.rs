@@ -17,7 +17,7 @@ use bundle::{IoResponse, IoThread};
 use deck::Deck;
 use ipc::IpcMessage;
 use ipc::bridge::WebviewSender;
-use ipc::landing::{LandingData, LandingInbound, LandingRecent, LandingTemplate};
+use ipc::landing::{LandingData, LandingInbound, LandingRecent, LandingTemplate, ThumbData};
 use ipc::present::PresentInbound;
 use std::path::PathBuf;
 use tao::{
@@ -58,6 +58,7 @@ enum UserEvent {
     ChromiumDone { ok: bool, message: String },
 
     LandingIpcReceived,
+    LandingThumbReady,
 
     AgentEvent(crate::agent::AgentEvent),
 }
@@ -416,19 +417,60 @@ fn send_landing(webview: &WebView, data: &LandingData) {
     }
 }
 
-fn landing_data() -> LandingData {
-    // ponytail: builds each recent's thumbnail synchronously on the main thread
+fn send_landing_thumb(webview: &WebView, path: &str, thumb: &ThumbData) {
+    let payload: (&str, &ThumbData) = (path, thumb);
+    let json: String = match serde_json::to_string(&payload) {
+        Ok(j) => j,
+        Err(e) => {
+            error!("landing thumb serialize failed: {}", e);
+            return;
+        }
+    };
+    let escaped: String = serde_json::to_string(&json).unwrap_or_else(|_| "\"\"".to_string());
+    let script: String = format!("window.__landing.thumb({});", escaped);
+    if let Err(e) = webview.evaluate_script(&script) {
+        error!("landing thumb evaluate_script failed: {}", e);
+    }
+}
 
+fn spawn_landing_thumbs(
+    paths: Vec<String>,
+    sender: std::sync::mpsc::Sender<(String, ThumbData)>,
+    proxy: tao::event_loop::EventLoopProxy<UserEvent>,
+) {
+    assert!(paths.len() <= recents::CAP, "recents exceeded cap");
+    let spawned = std::thread::Builder::new()
+        .name("carousel-thumbs".into())
+        .spawn(move || {
+            let mut i: usize = 0;
+            while i < paths.len() {
+                let path: &String = &paths[i];
+                i += 1;
+                let thumb = match html::thumbnail::build_thumb(std::path::Path::new(path)) {
+                    Some(t) => t,
+                    None => continue,
+                };
+                if sender.send((path.clone(), thumb)).is_err() {
+                    return;
+                }
+                if proxy.send_event(UserEvent::LandingThumbReady).is_err() {
+                    return;
+                }
+            }
+        });
+    if let Err(e) = spawned {
+        error!("landing thumb thread spawn failed: {}", e);
+    }
+}
+
+fn landing_data() -> LandingData {
     let recents: Vec<LandingRecent> = recents::load()
         .into_iter()
-        .map(|r| {
-            let thumb = html::thumbnail::build_thumb(std::path::Path::new(&r.path));
-            LandingRecent {
-                path: r.path,
-                title: r.title,
-                modified: r.modified,
-                thumb,
-            }
+        .map(|r| LandingRecent {
+            path: r.path,
+            title: r.title,
+            modified: r.modified,
+            thumb: None,
         })
         .collect();
     let templates: Vec<LandingTemplate> = deck::templates::catalog()
@@ -484,6 +526,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (ipc_tx, ipc_rx) = std::sync::mpsc::channel::<IpcMessage>();
 
     let (landing_tx, landing_rx) = std::sync::mpsc::channel::<LandingInbound>();
+    let (thumb_tx, thumb_rx) = std::sync::mpsc::channel::<(String, ThumbData)>();
 
     let landing_tx_startup = landing_tx.clone();
     let landing_tx_open = landing_tx.clone();
@@ -668,12 +711,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
+            Event::UserEvent(UserEvent::LandingThumbReady) => {
+                while let Ok((path, thumb)) = thumb_rx.try_recv() {
+                    if let Some(wv) = landing_webview.as_ref() {
+                        send_landing_thumb(wv, &path, &thumb);
+                    }
+                }
+            }
             Event::UserEvent(UserEvent::LandingIpcReceived) => {
                 while let Ok(inbound) = landing_rx.try_recv() {
                     match inbound {
                         LandingInbound::Ready => {
                             if let Some(wv) = landing_webview.as_ref() {
-                                send_landing(wv, &landing_data());
+                                let data: LandingData = landing_data();
+                                let paths: Vec<String> =
+                                    data.recents.iter().map(|r| r.path.clone()).collect();
+                                send_landing(wv, &data);
+                                spawn_landing_thumbs(paths, thumb_tx.clone(), proxy.clone());
                             }
                         }
                         LandingInbound::Cancel => {
@@ -793,4 +847,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ => {}
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn landing_data_defers_every_thumbnail() {
+        let data: LandingData = landing_data();
+        assert!(
+            data.recents.len() <= recents::CAP,
+            "recents exceeded cap: {}",
+            data.recents.len()
+        );
+        for r in &data.recents {
+            assert!(r.thumb.is_none(), "landing_data must not build thumbs inline");
+        }
+    }
 }

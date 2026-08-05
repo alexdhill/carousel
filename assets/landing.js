@@ -89,6 +89,8 @@
         return card;
     }
 
+    const thumbTiles = new Map();
+
     const thumbScaler = new ResizeObserver(function (entries) {
         for (let i = 0; i < entries.length; i++) {
             const stage = entries[i].target;
@@ -119,6 +121,7 @@
     function renderRecents(recents) {
         const root = document.getElementById("recents");
         root.replaceChildren();
+        thumbTiles.clear();
         if (!recents || recents.length === 0) {
             const e = document.createElement("div");
             e.className = "landing__empty";
@@ -130,6 +133,7 @@
             const r = recents[i];
             const tile = document.createElement("div");
             tile.className = "landing__tile";
+            thumbTiles.set(r.path, tile);
             if (r.thumb) {
                 mountThumb(tile, r.thumb);
             }
@@ -177,6 +181,21 @@
             }
             renderRecents(data.recents);
             renderLayouts(data.templates);
+        },
+        thumb: function (json) {
+            let pair;
+            try {
+                pair = JSON.parse(json);
+            } catch (e) {
+                console.error("landing: bad thumb payload", e);
+                return;
+            }
+            const tile = thumbTiles.get(pair[0]);
+            if (!tile || !pair[1]) {
+                return;
+            }
+            tile.replaceChildren();
+            mountThumb(tile, pair[1]);
         },
     };
 
