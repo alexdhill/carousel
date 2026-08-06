@@ -439,32 +439,64 @@ fn spawn_landing_thumbs(
     proxy: tao::event_loop::EventLoopProxy<UserEvent>,
 ) {
     assert!(paths.len() <= recents::CAP, "recents exceeded cap");
-    let spawned = std::thread::Builder::new()
-        .name("carousel-thumbs".into())
-        .spawn(move || {
-            let mut i: usize = 0;
-            while i < paths.len() {
-                let path: &String = &paths[i];
-                i += 1;
-                let thumb = match html::thumbnail::build_thumb(std::path::Path::new(path)) {
-                    Some(t) => t,
-                    None => continue,
-                };
-                if sender.send((path.clone(), thumb)).is_err() {
-                    return;
+    let queue: std::sync::Arc<std::sync::Mutex<Vec<String>>> = {
+        let mut remaining: Vec<String> = paths;
+        remaining.reverse();
+        std::sync::Arc::new(std::sync::Mutex::new(remaining))
+    };
+    let workers: usize = thumb_worker_count(queue.lock().map(|q| q.len()).unwrap_or(0));
+    let mut w: usize = 0;
+    while w < workers {
+        w += 1;
+        let queue = std::sync::Arc::clone(&queue);
+        let sender = sender.clone();
+        let proxy = proxy.clone();
+        let spawned = std::thread::Builder::new()
+            .name(format!("carousel-thumbs-{}", w))
+            .spawn(move || {
+                let mut drawn: usize = 0;
+                while drawn < recents::CAP {
+                    drawn += 1;
+                    let path: String = match queue.lock() {
+                        Ok(mut q) => match q.pop() {
+                            Some(p) => p,
+                            None => return,
+                        },
+                        Err(_) => return,
+                    };
+                    let thumb = match html::thumbnail::build_thumb(std::path::Path::new(&path)) {
+                        Some(t) => t,
+                        None => continue,
+                    };
+                    if sender.send((path, thumb)).is_err() {
+                        return;
+                    }
+                    if proxy.send_event(UserEvent::LandingThumbReady).is_err() {
+                        return;
+                    }
                 }
-                if proxy.send_event(UserEvent::LandingThumbReady).is_err() {
-                    return;
-                }
-            }
-        });
-    if let Err(e) = spawned {
-        error!("landing thumb thread spawn failed: {}", e);
+            });
+        if let Err(e) = spawned {
+            error!("landing thumb thread spawn failed: {}", e);
+        }
     }
 }
 
+// ponytail: capped at 4 because each worker holds a decoded full-size image
+// (a 3840x2160 RGBA frame is ~33MB); raise it if peak memory stops mattering.
+fn thumb_worker_count(jobs: usize) -> usize {
+    const MAX_WORKERS: usize = 4;
+    if jobs == 0 {
+        return 0;
+    }
+    let cores: usize = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    cores.clamp(1, MAX_WORKERS).min(jobs)
+}
+
 fn landing_data() -> LandingData {
-    let recents: Vec<LandingRecent> = recents::load()
+    let recents: Vec<LandingRecent> = recents::load_existing()
         .into_iter()
         .map(|r| LandingRecent {
             path: r.path,
@@ -736,6 +768,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 *control_flow = ControlFlow::Exit;
                             }
                         }
+                        LandingInbound::ForgetRecent { path } => {
+                            info!("landing: forgetting recent");
+                            recents::forget(&path);
+                        }
 
                         open => {
 
@@ -852,6 +888,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn thumb_workers_stay_within_jobs_and_cap() {
+        assert_eq!(thumb_worker_count(0), 0, "no jobs means no threads");
+        assert_eq!(thumb_worker_count(1), 1, "one job never oversubscribes");
+        let many: usize = thumb_worker_count(recents::CAP);
+        assert!((1..=4).contains(&many), "worker count out of range: {}", many);
+    }
 
     #[test]
     fn landing_data_defers_every_thumbnail() {

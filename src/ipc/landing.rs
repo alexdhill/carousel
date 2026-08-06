@@ -6,6 +6,7 @@ pub enum LandingInbound {
     Ready,
     OpenTemplate { theme_id: String, layout_id: String },
     OpenRecent { path: String },
+    ForgetRecent { path: String },
     OpenDefault,
     Cancel,
 }
@@ -63,6 +64,9 @@ mod tests {
                 layout_id: "hero".into(),
             },
             LandingInbound::OpenRecent {
+                path: "/x.slidedeck".into(),
+            },
+            LandingInbound::ForgetRecent {
                 path: "/x.slidedeck".into(),
             },
             LandingInbound::OpenDefault,

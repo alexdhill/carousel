@@ -118,15 +118,49 @@
         thumbScaler.observe(stage);
     }
 
+    function showRecentsEmpty(root) {
+        const e = document.createElement("div");
+        e.className = "landing__empty";
+        e.textContent = "No recent decks yet.";
+        root.appendChild(e);
+    }
+
+    function forgetRecent(card, path) {
+        post("ForgetRecent", { path: path });
+        thumbTiles.delete(path);
+        if (selection && selection.kind === "recent" && selection.path === path) {
+            selection = null;
+        }
+        const root = card.parentNode;
+        card.remove();
+        if (root && root.childElementCount === 0) {
+            showRecentsEmpty(root);
+        }
+    }
+
+    function makeForgetButton(card, path, title) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "landing__forget";
+        b.textContent = "×";
+        b.title = "Remove from recents";
+        b.setAttribute("aria-label", "Remove " + title + " from recents");
+        b.addEventListener("click", function (e) {
+            e.stopPropagation();
+            forgetRecent(card, path);
+        });
+        b.addEventListener("dblclick", function (e) {
+            e.stopPropagation();
+        });
+        return b;
+    }
+
     function renderRecents(recents) {
         const root = document.getElementById("recents");
         root.replaceChildren();
         thumbTiles.clear();
         if (!recents || recents.length === 0) {
-            const e = document.createElement("div");
-            e.className = "landing__empty";
-            e.textContent = "No recent decks yet.";
-            root.appendChild(e);
+            showRecentsEmpty(root);
             return;
         }
         for (let i = 0; i < recents.length; i++) {
@@ -137,10 +171,12 @@
             if (r.thumb) {
                 mountThumb(tile, r.thumb);
             }
-            const card = makeCard(tile, r.title || "Untitled", relativeDate(r.modified),
+            const title = r.title || "Untitled";
+            const card = makeCard(tile, title, relativeDate(r.modified),
                 { kind: "recent", path: r.path }, function () {
                     post("OpenRecent", { path: r.path });
                 });
+            card.appendChild(makeForgetButton(card, r.path, title));
             root.appendChild(card);
         }
     }

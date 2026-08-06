@@ -55,6 +55,44 @@ pub fn load() -> Vec<RecentEntry> {
     }
 }
 
+pub fn forget(path: &str) {
+    let file: PathBuf = match recents_file() {
+        Some(f) => f,
+        None => return,
+    };
+    let mut list: Vec<RecentEntry> = load_from(&file);
+    let before: usize = list.len();
+    list.retain(|e| e.path != path);
+    if list.len() == before {
+        return;
+    }
+    if let Err(e) = save_to(&file, &list) {
+        warn!("recents: forget write failed: {}", e);
+    }
+}
+
+pub fn drop_missing(list: Vec<RecentEntry>) -> Vec<RecentEntry> {
+    list.into_iter()
+        .filter(|e| Path::new(&e.path).exists())
+        .collect()
+}
+
+pub fn load_existing() -> Vec<RecentEntry> {
+    let file: PathBuf = match recents_file() {
+        Some(f) => f,
+        None => return Vec::new(),
+    };
+    let list: Vec<RecentEntry> = load_from(&file);
+    let before: usize = list.len();
+    let kept: Vec<RecentEntry> = drop_missing(list);
+    if kept.len() != before
+        && let Err(e) = save_to(&file, &kept)
+    {
+        warn!("recents: prune write failed: {}", e);
+    }
+    kept
+}
+
 pub fn record(path: &Path, title: &str) {
     let file: PathBuf = match recents_file() {
         Some(f) => f,
@@ -102,6 +140,20 @@ mod tests {
         assert_eq!(list.len(), 12);
         assert_eq!(list[0].path, "/d19");
         assert!(!list.iter().any(|e| e.path == "/d0"));
+    }
+
+    #[test]
+    fn drop_missing_keeps_only_paths_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("here.slidedeck");
+        std::fs::write(&real, b"x").unwrap();
+        let list = vec![
+            entry(&real.to_string_lossy(), 1),
+            entry("/definitely/not/here.slidedeck", 2),
+        ];
+        let kept = drop_missing(list);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].path, real.to_string_lossy());
     }
 
     #[test]
