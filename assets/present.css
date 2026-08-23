@@ -1,11 +1,3 @@
-/* Presentation mode stylesheet.
- *
- * A black full-viewport root with one fixed-size "stage" centered inside it.
- * The stage is sized to the deck's authored pixel dimensions and scaled to fit
- * the window via a JS-set transform; the black root showing through provides
- * the letterbox bars. Slides mount into a shadow root inside the stage, so the
- * deck theme / globals / keyframes CSS stay scoped (never leaking to chrome). */
-
 * {
     margin: 0;
     padding: 0;
@@ -20,12 +12,6 @@ body {
     overflow: hidden;
 }
 
-/* Centers the stage; the leftover space is the letterbox. Owns the clipping
-   (overflow:hidden) so the *transformed* #stage does not also clip — a single
-   ancestor combining transform + overflow-clip makes WebKit render
-   backdrop-filter as flat grey. Keeping the clip on this non-transformed
-   element mirrors the canvas (#viewport-container clips, #viewport transforms)
-   so backdrop-filter samples the slide backdrop correctly. */
 #stage-wrap {
     position: fixed;
     inset: 0;
@@ -35,18 +21,11 @@ body {
     overflow: hidden;
 }
 
-/* Sized + scaled by present.js (width/height set from PresentInit dims). Only
-   the transform lives here — no clip, no background — mirroring the canvas
-   #viewport so backdrop-root-sensitive effects composite identically. The black
-   letterbox comes from body; the slide's own .slide background fills the stage. */
 #stage {
     position: relative;
     transform-origin: center center;
 }
 
-/* The slide host fills the stage exactly. Absolute so two hosts can stack
-   during a slide transition (outgoing + incoming); the stage is
-   position:relative. A single static host still fills via inset:0. */
 .present-host {
     position: absolute;
     inset: 0;

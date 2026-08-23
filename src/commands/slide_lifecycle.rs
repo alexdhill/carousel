@@ -1,32 +1,8 @@
-// Slide-lifecycle commands: InsertSlide and RemoveSlide.
-//
-// Stage 10 — slides panel / thumbnail interactivity. These are the first
-// deck-level commands: rather than mutating an element inside the active
-// slide, they change the set and order of slides themselves (the
-// `slides` map, the `slide_order` vector, and the parallel
-// `manifest.slides` list).
-//
-// They produce no DOM patches — adding or removing a slide does not patch
-// the currently-mounted shadow DOM. Instead both report
-// `affects_slide_list() == true`, and the ApplicationCore reacts by
-// rebroadcasting SlideListUpdate (and re-anchoring the active slide when
-// the removed slide was the active one) before remounting.
-//
-// InsertSlide and RemoveSlide are mutual inverses, so they live together:
-//   - InsertSlide.apply  -> inverse RemoveSlide
-//   - RemoveSlide.apply   -> inverse InsertSlide (carrying the captured
-//                            slide node + manifest entry so undo restores
-//                            the slide verbatim, edits and all).
-
 use crate::bundle::SlideEntry;
 use crate::commands::{Command, CommandError, CommandOutput};
 use crate::deck::slide::SlideNode;
 use crate::deck::{CanvasTarget, SlideId};
 
-// InsertSlide
-// Inserts a fully-formed slide at `position` in slide_order (and the
-// matching index in manifest.slides). `position` is clamped to the
-// current length, so an out-of-range index appends.
 #[derive(Debug, Clone)]
 pub struct InsertSlide {
     pub position: usize,
@@ -35,14 +11,6 @@ pub struct InsertSlide {
 }
 
 impl Command for InsertSlide {
-    // apply
-    // Inputs: &self, &mut Deck.
-    // Output: CommandOutput with no patches, the slide marked dirty,
-    // manifest_dirty=true, and an inverse RemoveSlide keyed on the
-    // inserted slide's id.
-    // Errors: Conflict if a slide with the same id already exists.
-    // Dataflow: guard duplicate id -> clamp position -> insert into
-    // slides map + slide_order + manifest.slides -> build inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         let slide_id: SlideId = self.slide.id.clone();
         assert!(!slide_id.is_empty(), "InsertSlide: slide id is empty");
@@ -84,29 +52,12 @@ impl Command for InsertSlide {
     }
 }
 
-// RemoveSlide
-// Removes the slide with `slide_id` from slides + slide_order +
-// manifest.slides. Refuses to remove the deck's last slide (a deck must
-// always hold at least one). Its inverse is an InsertSlide carrying the
-// removed slide node and manifest entry at their original position so
-// undo restores the slide exactly.
 #[derive(Debug, Clone)]
 pub struct RemoveSlide {
     pub slide_id: SlideId,
 }
 
 impl Command for RemoveSlide {
-    // apply
-    // Inputs: &self, &mut Deck.
-    // Output: CommandOutput with no patches, manifest_dirty=true, and an
-    // inverse InsertSlide carrying the removed slide + manifest entry +
-    // original position.
-    // Errors:
-    //   SlideNotFound    — slide_id absent.
-    //   InvalidOperation — attempting to remove the deck's last slide.
-    // Dataflow: guard last-slide -> find order position -> remove from
-    // slide_order + slides + manifest.slides -> build inverse with the
-    // captured pieces.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(!self.slide_id.is_empty(), "RemoveSlide: slide id is empty");
         if !deck.slides.contains_key(&self.slide_id) {
@@ -123,16 +74,12 @@ impl Command for RemoveSlide {
             .position(|id| id == &self.slide_id)
             .ok_or_else(|| CommandError::SlideNotFound(self.slide_id.clone()))?;
 
-        // Capture the slide node for the inverse.
         let removed_slide: SlideNode = deck
             .slides
             .remove(&self.slide_id)
             .ok_or_else(|| CommandError::SlideNotFound(self.slide_id.clone()))?;
         deck.slide_order.remove(order_pos);
 
-        // Capture + remove the manifest entry. Manifest order mirrors
-        // slide_order, but we locate by id defensively rather than
-        // assuming the indices line up.
         let manifest_pos: usize = deck
             .manifest
             .slides
@@ -142,8 +89,6 @@ impl Command for RemoveSlide {
         let removed_entry: SlideEntry = if manifest_pos < deck.manifest.slides.len() {
             deck.manifest.slides.remove(manifest_pos)
         } else {
-            // Manifest somehow lacked the entry; synthesise one so the
-            // inverse can still restore a coherent slide.
             SlideEntry {
                 id: self.slide_id.clone(),
                 path: crate::bundle::manifest::slide_path_for(&self.slide_id),
@@ -185,14 +130,6 @@ impl Command for RemoveSlide {
     }
 }
 
-// ReorderSlide
-// Moves the slide `slide_id` to `new_index` in slide_order and the parallel
-// manifest.slides. `new_index` is the target slot in the FINAL array
-// (0..len-1), clamped to the last valid slot; the command performs the
-// remove-then-insert arithmetic internally so callers pass a plain landing
-// slot. No slide content changes, so it emits no patches and no dirty slide
-// targets — only manifest_dirty drives the manifest rewrite. Its inverse is a
-// ReorderSlide back to the original index.
 #[derive(Debug, Clone)]
 pub struct ReorderSlide {
     pub slide_id: SlideId,
@@ -200,13 +137,6 @@ pub struct ReorderSlide {
 }
 
 impl Command for ReorderSlide {
-    // apply
-    // Inputs: &self, &mut Deck.
-    // Output: CommandOutput with no patches, manifest_dirty=true, and an
-    // inverse ReorderSlide targeting the original index.
-    // Errors: SlideNotFound when slide_id is absent from slide_order.
-    // Dataflow: locate source index -> clamp target -> move within
-    // slide_order -> move the manifest entry (located by id) -> build inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(!self.slide_id.is_empty(), "ReorderSlide: slide id is empty");
         let from: usize = deck
@@ -221,8 +151,6 @@ impl Command for ReorderSlide {
         let moved_id: SlideId = deck.slide_order.remove(from);
         deck.slide_order.insert(to, moved_id);
 
-        // Manifest order mirrors slide_order, but locate + clamp defensively
-        // rather than assuming the indices line up.
         let manifest_last: usize = deck.manifest.slides.len().saturating_sub(1);
         let manifest_from: usize = deck
             .manifest
@@ -366,7 +294,7 @@ mod tests {
     #[test]
     fn remove_slide_drops_from_all_three_structures() {
         let mut deck = Deck::sample();
-        // Need at least two slides to remove one.
+
         InsertSlide {
             position: 1,
             slide: blank_slide("s_b"),
@@ -440,7 +368,7 @@ mod tests {
     #[test]
     fn remove_preserves_position_for_inverse() {
         let mut deck = Deck::sample();
-        // Build order: [orig, s_b, s_c]
+
         InsertSlide {
             position: 1,
             slide: blank_slide("s_b"),
@@ -456,7 +384,7 @@ mod tests {
         .apply(&mut deck)
         .unwrap();
         let order_before = deck.slide_order.clone();
-        // Remove the middle slide, then undo — it must return to index 1.
+
         let out = RemoveSlide {
             slide_id: "s_b".into(),
         }

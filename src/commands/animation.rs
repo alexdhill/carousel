@@ -1,24 +1,7 @@
-// Animation timeline commands: InsertAnimation, RemoveAnimation,
-// ReorderAnimation, SetAnimationProperty.
-//
-// Animations live on `SlideNode.animations` (slides only), so these commands
-// are slide-targeted by `slide_id` (they do not use CanvasTarget). None emit
-// DOM patches — there is no playback — but each marks the slide dirty, sets
-// `manifest_dirty` (the manifest persists the timeline), and reports
-// `affects_animations` so the editor rebroadcasts the slide's timeline.
-//
-// Validation (see `crate::deck::animation`): multiplicity is unrestricted —
-// an element may own any number of entries of any category, in any order.
-// Entries insert exactly where requested (clamped to length); no command
-// rejects a combination. Only the structural invariants in `AnimationEntry`
-// (non-empty ids, effect/category pairing) can abort.
-
 use crate::commands::{Command, CommandError, CommandOutput};
 use crate::deck::animation::{AnimationEntry, accommodating_index};
 use crate::deck::{AnimationCategory, CanvasTarget, SlideId, SlideNode};
 
-// slide_mut
-// Resolve a mutable slide, or SlideNotFound.
 fn slide_mut<'a>(
     deck: &'a mut crate::deck::Deck,
     slide_id: &SlideId,
@@ -28,9 +11,6 @@ fn slide_mut<'a>(
         .ok_or_else(|| CommandError::SlideNotFound(slide_id.clone()))
 }
 
-// InsertAnimation
-// Inserts `entry` into the slide's timeline at `position` (clamped to length).
-// Multiplicity is unrestricted; never rejects.
 #[derive(Debug, Clone)]
 pub struct InsertAnimation {
     pub slide_id: SlideId,
@@ -67,9 +47,6 @@ impl Command for InsertAnimation {
     }
 }
 
-// RemoveAnimation
-// Removes the entry with `animation_id`. Inverse re-inserts it at its prior
-// index.
 #[derive(Debug, Clone)]
 pub struct RemoveAnimation {
     pub slide_id: SlideId,
@@ -110,9 +87,6 @@ impl Command for RemoveAnimation {
     }
 }
 
-// ReorderAnimation
-// Moves an entry to `new_position` (clamped to the last index). Timeline order
-// alone defines playback now, so any reorder is accepted.
 #[derive(Debug, Clone)]
 pub struct ReorderAnimation {
     pub slide_id: SlideId,
@@ -155,9 +129,6 @@ impl Command for ReorderAnimation {
     }
 }
 
-// SetAnimationProperty
-// Replaces an entry's mutable fields (effect / category / trigger / timing)
-// with `new_entry`. No multiplicity or ordering checks; always accepted.
 #[derive(Debug, Clone)]
 pub struct SetAnimationProperty {
     pub slide_id: SlideId,

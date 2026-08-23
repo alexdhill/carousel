@@ -1,15 +1,3 @@
-// Default deck templates.
-//
-// The light/dark starter themes the landing page offers: each carries the
-// `--theme-*` palette, a globals_css block of four text presets (title /
-// slide-header / default-text / footnote, written with the
-// [data-element-type="text"].<class> convention), and three layouts
-// (title / hero / text). `new_deck` builds a blank one-slide deck seeded from a
-// chosen layout; `catalog` lists the 2×3 entries for the landing rows.
-//
-// Content only — the boot path still uses Deck::sample until the landing flow
-// is wired (later sub-project).
-
 use crate::deck::Deck;
 use crate::deck::builders::{group_element, shape_element, text_element_styled};
 use crate::deck::element::{ElementStyle, ShapeGeometry};
@@ -18,12 +6,8 @@ use crate::deck::style::{ColorRef, FillRef, Geometry, Length, TextStyle};
 use crate::deck::theme::ThemeData;
 use std::collections::BTreeMap;
 
-// System sans stack reused for both title and body families (no bundling
-// dependency at launch).
 const FONT_STACK: &str = "-apple-system, \"Helvetica Neue\", Arial, sans-serif";
 
-// Structural slide CSS shared by every theme (mirrors the base in
-// ThemeData::default); only the :host vars differ per theme.
 const BASE_SLIDE_CSS: &str = r#"
 .slide {
     width: 1920px;
@@ -37,8 +21,6 @@ const BASE_SLIDE_CSS: &str = r#"
 [data-element-type="text"] { white-space: pre-wrap; display: flex; flex-direction: column; }
 "#;
 
-// The four text presets, identical across themes (colours resolve through the
-// per-theme --theme-* vars).
 const PRESET_CSS: &str = r#"[data-element-type="text"].title {
     font-size: 96px;
     font-weight: 700;
@@ -65,8 +47,6 @@ const PRESET_CSS: &str = r#"[data-element-type="text"].title {
     color: var(--theme-muted);
 }"#;
 
-// TemplateEntry
-// One landing-row option: a theme + one of its layouts, with display names.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TemplateEntry {
     pub theme_id: String,
@@ -75,9 +55,6 @@ pub struct TemplateEntry {
     pub layout_name: String,
 }
 
-// theme_css
-// Inputs: the four palette colours. Output: the full per-theme CSS — the
-// :host variable block followed by the shared structural slide rules.
 fn theme_css(bg: &str, fg: &str, muted: &str, accent: &str) -> String {
     format!(
         ":host {{\n    --theme-accent: {accent};\n    --theme-foreground: {fg};\n    \
@@ -87,8 +64,6 @@ fn theme_css(bg: &str, fg: &str, muted: &str, accent: &str) -> String {
     )
 }
 
-// geom / tstyle
-// Small constructors keeping the layout builders readable.
 fn geom(x: f64, y: f64, w: f64, h: f64) -> Geometry {
     Geometry {
         x,
@@ -109,10 +84,6 @@ fn tstyle(size: f64, weight: u16, line_height: f64, color_key: &str) -> TextStyl
     }
 }
 
-// title_layout / hero_layout / text_layout
-// The three layout templates. Text is baked with TextStyle matching the
-// presets (stamp model — inline beats class — so the layout's own text already
-// looks right; the presets serve new text the user adds).
 fn title_layout() -> LayoutNode {
     let title = text_element_styled(
         "layout_text_title",
@@ -172,9 +143,6 @@ fn text_layout() -> LayoutNode {
     LayoutNode::new("text".to_string(), "Text".to_string(), root)
 }
 
-// build_theme
-// Inputs: the theme id + palette. Output: a ThemeData with the four presets in
-// globals_css and the three ordered layouts.
 fn build_theme(theme_id: &str, bg: &str, fg: &str, muted: &str, accent: &str) -> ThemeData {
     let mut layouts: BTreeMap<String, LayoutNode> = BTreeMap::new();
     for layout in [title_layout(), hero_layout(), text_layout()] {
@@ -189,13 +157,9 @@ fn build_theme(theme_id: &str, bg: &str, fg: &str, muted: &str, accent: &str) ->
     }
 }
 
-// Per-theme palettes as (background, foreground, muted, accent), shared by the
-// theme builders and the landing-card preview colours so they never diverge.
 const LIGHT_PALETTE: (&str, &str, &str, &str) = ("#ffffff", "#1a1a1a", "#6b6b6b", "#f19035");
 const DARK_PALETTE: (&str, &str, &str, &str) = ("#16140f", "#f4f2ec", "#9a9384", "#f19035");
 
-// light_theme / dark_theme
-// The two starter themes.
 pub fn light_theme() -> ThemeData {
     let (bg, fg, muted, accent) = LIGHT_PALETTE;
     build_theme("light", bg, fg, muted, accent)
@@ -206,9 +170,6 @@ pub fn dark_theme() -> ThemeData {
     build_theme("dark", bg, fg, muted, accent)
 }
 
-// theme_by_id
-// Inputs: a theme id. Output: the matching starter theme; unknown ids default
-// to light.
 pub fn theme_by_id(theme_id: &str) -> ThemeData {
     match theme_id {
         "dark" => dark_theme(),
@@ -216,9 +177,6 @@ pub fn theme_by_id(theme_id: &str) -> ThemeData {
     }
 }
 
-// theme_palette
-// Inputs: a theme id. Output: (background, foreground, accent) for the landing
-// card previews. Unknown ids default to light.
 pub fn theme_palette(theme_id: &str) -> (String, String, String) {
     let (bg, fg, _muted, accent) = if theme_id == "dark" {
         DARK_PALETTE
@@ -228,12 +186,6 @@ pub fn theme_palette(theme_id: &str) -> (String, String, String) {
     (bg.to_string(), fg.to_string(), accent.to_string())
 }
 
-// new_deck
-// Inputs: a theme and a layout id. Output: a blank one-slide deck on that
-// theme whose slide is seeded by cloning the layout's children (so the chosen
-// layout opens with editable elements). An unknown layout id falls back to the
-// theme's first layout. Control flow: start from Deck::new_blank, swap the
-// theme, then re-root the single slide on the resolved layout's children.
 pub fn new_deck(theme: ThemeData, layout_id: &str) -> Deck {
     let mut deck = Deck::new_blank();
     deck.theme = theme;
@@ -263,12 +215,6 @@ pub fn new_deck(theme: ThemeData, layout_id: &str) -> Deck {
     deck
 }
 
-// new_deck_all_layouts
-// Inputs: a theme. Output: a deck carrying one slide per layout in the theme's
-// canonical order, each slide seeded by cloning that layout's children. This is
-// what the landing's per-theme card opens — the whole "Light"/"Dark" starter,
-// not a single chosen layout. Control flow: start from a blank deck, swap the
-// theme, then rebuild slides/order/manifest from layout_order.
 pub fn new_deck_all_layouts(theme: ThemeData) -> Deck {
     use crate::bundle::{SlideEntry, manifest::slide_path_for};
     use crate::deck::ids::new_slide_id;
@@ -318,10 +264,6 @@ pub fn new_deck_all_layouts(theme: ThemeData) -> Deck {
     deck
 }
 
-// catalog
-// Output: the landing template cards — one per starter theme. Each card opens
-// the full theme (every layout as a slide) via new_deck_all_layouts; the
-// layouts are no longer individually selectable, so layout_id/name stay empty.
 pub fn catalog() -> Vec<TemplateEntry> {
     let mut out: Vec<TemplateEntry> = Vec::new();
     for (theme, theme_name) in [(light_theme(), "Light"), (dark_theme(), "Dark")] {
@@ -385,7 +327,7 @@ mod tests {
         let sid = &deck.slide_order[0];
         let slide = &deck.slides[sid];
         assert_eq!(slide.layout_id, "title");
-        assert_eq!(slide.root.children.len(), 2); // title + subtitle
+        assert_eq!(slide.root.children.len(), 2);
         let entry = deck.manifest.slides.iter().find(|e| &e.id == sid).unwrap();
         assert_eq!(entry.layout_id, "title");
     }
@@ -394,7 +336,7 @@ mod tests {
     fn new_deck_hero_has_shape_block() {
         let deck = new_deck(dark_theme(), "hero");
         let slide = &deck.slides[&deck.slide_order[0]];
-        assert_eq!(slide.root.children.len(), 3); // title + copy + accent block
+        assert_eq!(slide.root.children.len(), 3);
     }
 
     #[test]

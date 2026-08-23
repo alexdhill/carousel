@@ -1,18 +1,8 @@
-// Element builders.
-//
-// Constructor surface that enforces the (ElementType, ElementStyle,
-// ElementContent) invariant by construction. Every variant has exactly one
-// builder so it is impossible to land in an inconsistent state from
-// application code.
-
 use crate::deck::element::*;
 use crate::deck::ids::ElementId;
 use crate::deck::style::*;
 use std::collections::BTreeMap;
 
-// text_element
-// Inputs: id, plain text.
-// Output: a Text ElementNode with default style and zero geometry.
 pub fn text_element(id: impl Into<ElementId>, text: impl Into<String>) -> ElementNode {
     let id: ElementId = id.into();
     assert!(!id.is_empty(), "element id must not be empty");
@@ -32,9 +22,6 @@ pub fn text_element(id: impl Into<ElementId>, text: impl Into<String>) -> Elemen
     }
 }
 
-// text_element_styled
-// Inputs: id, text, geometry, style.
-// Output: a Text ElementNode using the supplied geometry + style.
 pub fn text_element_styled(
     id: impl Into<ElementId>,
     text: impl Into<String>,
@@ -47,9 +34,6 @@ pub fn text_element_styled(
     node
 }
 
-// image_element
-// Inputs: id, asset id.
-// Output: an Image ElementNode with default ImageStyle.
 pub fn image_element(id: impl Into<ElementId>, asset_id: impl Into<String>) -> ElementNode {
     let id: ElementId = id.into();
     assert!(!id.is_empty(), "element id must not be empty");
@@ -71,9 +55,6 @@ pub fn image_element(id: impl Into<ElementId>, asset_id: impl Into<String>) -> E
     }
 }
 
-// shape_element
-// Inputs: id, geometry kind.
-// Output: a Shape ElementNode with default ShapeStyle.
 pub fn shape_element(id: impl Into<ElementId>, geom: ShapeGeometry) -> ElementNode {
     let id: ElementId = id.into();
     assert!(!id.is_empty(), "element id must not be empty");
@@ -93,9 +74,6 @@ pub fn shape_element(id: impl Into<ElementId>, geom: ShapeGeometry) -> ElementNo
     }
 }
 
-// group_element
-// Inputs: id, children.
-// Output: a Group ElementNode that owns the supplied children.
 pub fn group_element(id: impl Into<ElementId>, children: Vec<ElementNode>) -> ElementNode {
     let id: ElementId = id.into();
     assert!(!id.is_empty(), "element id must not be empty");
@@ -115,9 +93,6 @@ pub fn group_element(id: impl Into<ElementId>, children: Vec<ElementNode>) -> El
     }
 }
 
-// embed_element
-// Inputs: id, raw HTML string.
-// Output: an Embed ElementNode.
 pub fn embed_element(id: impl Into<ElementId>, html: impl Into<String>) -> ElementNode {
     let id: ElementId = id.into();
     assert!(!id.is_empty(), "element id must not be empty");
@@ -137,9 +112,6 @@ pub fn embed_element(id: impl Into<ElementId>, html: impl Into<String>) -> Eleme
     }
 }
 
-// table_element
-// Inputs: id, a TableData grid.
-// Output: a Table ElementNode wrapping the grid.
 pub fn table_element(
     id: impl Into<ElementId>,
     data: crate::deck::element::TableData,

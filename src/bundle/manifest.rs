@@ -1,16 +1,3 @@
-// ManifestData.
-//
-// SPEC §3.3 — manifest.json is the deck's table of contents and the only
-// file required to be parsed in full at open time. Every other file is
-// loaded lazily off the manifest's pointers.
-//
-// `format_version` follows semver-ish "<major>.<minor>" strings; we accept
-// any deck whose major matches SUPPORTED_FORMAT_MAJOR (currently 1). Minor
-// version mismatches are allowed because the field exists precisely to let
-// us add optional fields later without breaking older decks. All optional
-// fields are `Option<...>` or `#[serde(default)]` so older decks parse
-// cleanly into newer code.
-
 use crate::bundle::BundleError;
 use crate::deck::guide::Guide;
 use crate::deck::{AnimationEntry, SlideId, SlideTransition};
@@ -19,11 +6,6 @@ use serde::{Deserialize, Serialize};
 pub const SUPPORTED_FORMAT_MAJOR: u32 = 1;
 pub const CURRENT_FORMAT_VERSION: &str = "1.0";
 
-// ManifestData
-// Root struct of manifest.json. Field order is preserved on write (serde
-// emits in declaration order) so successive saves of an unchanged deck
-// produce byte-identical manifests. Not `Eq` because `ThemeRef.overrides`
-// carries a serde_json::Value whose Number variant precludes Eq.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ManifestData {
     pub format_version: String,
@@ -35,10 +17,6 @@ pub struct ManifestData {
     pub assets_manifest: String,
 }
 
-// Metadata
-// Human-facing deck metadata: title, author, timestamps, app version. ISO-
-// 8601 strings for portability — we do not own the chrono crate, and the
-// values are display-only on the editor side for now.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Metadata {
     pub title: String,
@@ -48,9 +26,6 @@ pub struct Metadata {
     pub app_version: String,
 }
 
-// Dimensions
-// Slide dimensions for the whole deck — per-slide overrides are forbidden
-// in v1 (SPEC §3.3 rationale: per-slide dimensions break layout fidelity).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Dimensions {
     pub width: u32,
@@ -58,10 +33,6 @@ pub struct Dimensions {
     pub unit: String,
 }
 
-// ThemeRef
-// Pointer to the theme directory plus per-deck overrides. The overrides
-// payload is held as a serde_json::Value so we can round-trip arbitrary
-// future theme-override shapes without bumping the manifest version.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ThemeRef {
     pub path: String,
@@ -70,11 +41,6 @@ pub struct ThemeRef {
     pub overrides: serde_json::Value,
 }
 
-// SlideEntry
-// One row in the manifest's `slides` array. Order is canonical display
-// order; the id is decoupled from the path so renames and reorders are
-// independent operations.
-// Not `Eq`: the guide list carries an f64 position.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SlideEntry {
     pub id: SlideId,
@@ -89,47 +55,28 @@ pub struct SlideEntry {
     pub duration_hint: Option<u32>,
     #[serde(default)]
     pub notes_ref: Option<String>,
-    // The slide's animation timeline (Stage: animations). `SlideNode.animations`
-    // is the in-memory source of truth; this is the on-disk format, synced on
-    // save and hydrated on load. Absent in older bundles → empty.
+
     #[serde(default)]
     pub animations: Vec<AnimationEntry>,
-    // The slide's saveable guides. `SlideNode.guides` is the in-memory source
-    // of truth; synced on save and hydrated on load like `animations`. Absent
-    // in older bundles → empty.
+
     #[serde(default)]
     pub guides: Vec<Guide>,
-    // Per-slide background (inspector Slide box). `SlideNode.metadata.background`
-    // is the in-memory source of truth (it renders); this is the on-disk format,
-    // synced on save and hydrated on load like `animations`. Absent → None.
+
     #[serde(default)]
     pub background: Option<String>,
-    // Per-slide background image (inspector Slide box), drawn over the fill.
-    // Mirrors `background`: in-memory truth is SlideNode.metadata.background_image;
-    // this is the on-disk format. Absent → None.
+
     #[serde(default)]
     pub background_image: Option<String>,
-    // Inline speaker notes (inspector Slide box). Manifest-authoritative chrome
-    // (notes do not render), distinct from the future file-based `notes_ref`.
+
     #[serde(default)]
     pub notes: Option<String>,
 }
 
-// slide_path_for
-// Inputs: a slide ULID.
-// Output: the canonical bundle path for that slide's HTML file
-// ("slides/slide_<ULID>.html") matching §3.2 layout.
 pub fn slide_path_for(slide_id: &str) -> String {
     assert!(!slide_id.is_empty(), "slide_path_for: empty id");
     format!("slides/slide_{slide_id}.html")
 }
 
-// validate_format_version
-// Inputs: a "<major>.<minor>" string from manifest.format_version.
-// Output: Ok(()) when the major matches SUPPORTED_FORMAT_MAJOR.
-// Errors: BundleError::IncompatibleVersion on a major mismatch or a
-// malformed version string.
-// Dataflow: split on '.', parse the first segment as u32, compare.
 pub fn validate_format_version(version: &str) -> Result<(), BundleError> {
     assert!(!version.is_empty(), "validate_format_version: empty input");
     let major_str: &str = version.split('.').next().unwrap_or("");
@@ -146,11 +93,6 @@ pub fn validate_format_version(version: &str) -> Result<(), BundleError> {
 }
 
 impl Default for ManifestData {
-    // default
-    // Inputs: none.
-    // Output: a manifest matching `Deck::new_blank()` — a fresh deck with a
-    // generated id, no metadata content, 1920×1080 dimensions, the
-    // "default" theme, and an empty slides vector.
     fn default() -> Self {
         Self {
             format_version: CURRENT_FORMAT_VERSION.to_string(),
@@ -197,13 +139,6 @@ impl Default for ThemeRef {
     }
 }
 
-// current_iso8601
-// Inputs: none. Reads SystemTime::now().
-// Output: an ISO-8601-ish timestamp string in UTC, accurate to seconds.
-// We do not pull in chrono for one timestamp; this format-on-demand keeps
-// the dependency graph shallow.
-// Dataflow: SystemTime -> seconds since epoch -> compute Y/M/D/h/m/s by
-// hand using a fixed-bound loop -> format.
 fn current_iso8601() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs: u64 = SystemTime::now()
@@ -213,12 +148,6 @@ fn current_iso8601() -> String {
     civil_iso8601_from_unix(secs)
 }
 
-// civil_iso8601_from_unix
-// Inputs: seconds since UNIX epoch (must fit in i64 internally).
-// Output: "YYYY-MM-DDTHH:MM:SSZ" in UTC.
-// Dataflow: integer-divide seconds-since-epoch into days + time-of-day;
-// walk forward from 1970-01-01 year-by-year with a bounded loop (max
-// iterations capped well above any plausible session time).
 fn civil_iso8601_from_unix(secs: u64) -> String {
     assert!(
         secs < (u64::MAX / 2),
@@ -235,13 +164,6 @@ fn civil_iso8601_from_unix(secs: u64) -> String {
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
 }
 
-// civil_ymd_from_epoch_days
-// Inputs: whole days since 1970-01-01 (UTC).
-// Output: (year, month, day) tuple representing the same civil date.
-// Dataflow: walk forward year-by-year, subtracting that year's length in
-// days, until the remaining day count fits in the current year; then walk
-// month-by-month the same way. Both loops are bounded by sane caps (10000
-// years and 12 months respectively).
 fn civil_ymd_from_epoch_days(days_in: u64) -> (u32, u32, u32) {
     const MAX_YEARS: u32 = 10_000;
     let mut remaining: u64 = days_in;
@@ -387,7 +309,6 @@ mod tests {
 
     #[test]
     fn manifest_parses_missing_optional_slide_fields() {
-        // Pre-1.1 decks may omit thumbnail/transition/duration_hint/notes_ref.
         let raw = r#"{
             "id":"01HQTEST",
             "path":"slides/slide_01HQTEST.html",
@@ -410,14 +331,12 @@ mod tests {
 
     #[test]
     fn iso8601_format_is_canonical() {
-        // 2000-01-01 00:00:00 UTC = 946,684,800s since epoch.
         let s = civil_iso8601_from_unix(946_684_800);
         assert_eq!(s, "2000-01-01T00:00:00Z");
     }
 
     #[test]
     fn iso8601_carries_into_next_day_and_month() {
-        // 2000-02-29 23:59:59 UTC = 951,868,799s (leap year).
         let s = civil_iso8601_from_unix(951_868_799);
         assert_eq!(s, "2000-02-29T23:59:59Z");
     }
@@ -425,7 +344,7 @@ mod tests {
     #[test]
     fn iso8601_lengths_are_invariant() {
         let s = civil_iso8601_from_unix(0);
-        // "YYYY-MM-DDTHH:MM:SSZ" → 20 chars.
+
         assert_eq!(s.len(), 20);
     }
 

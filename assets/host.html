@@ -14,12 +14,7 @@
         </style>
     </head>
     <body data-mode="slide">
-        <!-- ============================ TOP BAR ============================ -->
-        <!-- Functional: .objects__add[data-element-type] (text/shape/group),
-         #grid-toggle, #mode-toggle, #present-btn. Everything marked
-         data-stub is built but intentionally unwired. -->
         <header id="top-bar" class="top-bar">
-            <!-- left cluster -->
             <div class="top-bar__left">
                 <button
                     type="button"
@@ -60,7 +55,6 @@
                 </div>
             </div>
 
-            <!-- center cluster: tools -->
             <div class="top-bar__center">
                 <div class="tbar-group">
                     <button
@@ -259,7 +253,6 @@
                 </button>
             </div>
 
-            <!-- right cluster -->
             <div class="top-bar__right">
                 <button
                     type="button"
@@ -363,7 +356,9 @@
                         stroke-linecap="round"
                         stroke-linejoin="round"
                     >
-                        <path d="M12 8v8M8 12h8M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z" />
+                        <path
+                            d="M12 8v8M8 12h8M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z"
+                        />
                     </svg>
                 </button>
                 <button
@@ -386,11 +381,8 @@
             </div>
         </header>
 
-        <!-- ============================ MIDDLE ROW ============================ -->
         <div class="middle-row">
-            <!-- ---------- Left column: Agent + Layers ---------- -->
             <div class="left-col" data-agent="objects" data-agent-visible="false">
-                <!-- Agent panel -->
                 <aside id="agent-panel" class="panel panel--agent panel--collapsed">
                     <div class="panel-head">
                         <h2 class="panel-head__title">Agent</h2>
@@ -414,7 +406,12 @@
                             </svg>
                         </button>
                     </div>
-                    <div class="agent__scroll" id="agent-log" role="log" aria-live="polite"></div>
+                    <div
+                        class="agent__scroll"
+                        id="agent-log"
+                        role="log"
+                        aria-live="polite"
+                    ></div>
                     <div id="agent-status" class="agent__status-row" hidden>
                         <span class="agent-spinner"></span>
                         <span class="agent-status__label">Starting agent…</span>
@@ -492,37 +489,14 @@
                     </template>
                 </aside>
 
-                <!-- Layers panel -->
                 <aside id="object-panel" class="panel panel--objects">
-                <div class="panel-head">
-                    <h2 class="panel-head__title">Layers</h2>
-                    <button
-                        type="button"
-                        class="icon-btn icon-btn--sm pane-collapse"
-                        data-pane-collapse="objects"
-                        aria-label="Collapse layers panel"
-                    >
-                        <svg
-                            width="15"
-                            height="15"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            stroke-width="1.9"
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                        >
-                            <path d="M8 9l4-4 4 4M8 15l4 4 4-4" />
-                        </svg>
-                    </button>
-                    <div class="panel-head__tools">
+                    <div class="panel-head">
+                        <h2 class="panel-head__title">Layers</h2>
                         <button
                             type="button"
-                            id="objects-collapse-all"
-                            class="icon-btn icon-btn--sm tt"
-                            data-tip="Collapse / expand all"
-                            data-key=""
-                            aria-label="Collapse or expand all groups"
+                            class="icon-btn icon-btn--sm pane-collapse"
+                            data-pane-collapse="objects"
+                            aria-label="Collapse layers panel"
                         >
                             <svg
                                 width="15"
@@ -537,34 +511,55 @@
                                 <path d="M8 9l4-4 4 4M8 15l4 4 4-4" />
                             </svg>
                         </button>
-                        <button
-                            type="button"
-                            class="icon-btn icon-btn--sm tt"
-                            data-stub
-                            data-tip="Search layers"
-                            data-key=""
-                            aria-label="Search layers"
-                        >
-                            <svg
-                                width="15"
-                                height="15"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="1.9"
-                                stroke-linecap="round"
+                        <div class="panel-head__tools">
+                            <button
+                                type="button"
+                                id="objects-collapse-all"
+                                class="icon-btn icon-btn--sm tt"
+                                data-tip="Collapse / expand all"
+                                data-key=""
+                                aria-label="Collapse or expand all groups"
                             >
-                                <circle cx="11" cy="11" r="6" />
-                                <path d="m20 20-3.2-3.2" />
-                            </svg>
-                        </button>
+                                <svg
+                                    width="15"
+                                    height="15"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="1.9"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                >
+                                    <path d="M8 9l4-4 4 4M8 15l4 4 4-4" />
+                                </svg>
+                            </button>
+                            <button
+                                type="button"
+                                class="icon-btn icon-btn--sm tt"
+                                data-stub
+                                data-tip="Search layers"
+                                data-key=""
+                                aria-label="Search layers"
+                            >
+                                <svg
+                                    width="15"
+                                    height="15"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="1.9"
+                                    stroke-linecap="round"
+                                >
+                                    <circle cx="11" cy="11" r="6" />
+                                    <path d="m20 20-3.2-3.2" />
+                                </svg>
+                            </button>
+                        </div>
                     </div>
-                </div>
-                <div class="objects__scroll" id="objects-tree" role="tree"></div>
-            </aside>
+                    <div class="objects__scroll" id="objects-tree" role="tree"></div>
+                </aside>
             </div>
 
-            <!-- ---------- Canvas (center) ---------- -->
             <div class="panel panel--canvas">
                 <div class="canvas-head">
                     <div class="canvas-head__crumb">
@@ -646,7 +641,6 @@
                 </div>
             </div>
 
-            <!-- ---------- Inspector (right) ---------- -->
             <aside id="inspector-panel" class="panel panel--inspector">
                 <div class="insp-head">
                     <span class="insp-head__icon" aria-hidden="true">
@@ -1032,7 +1026,6 @@
             </aside>
         </div>
 
-        <!-- ============================ BOTTOM STRIP ============================ -->
         <div class="panel panel--thumbs">
             <div class="thumbs-head">
                 <div class="thumbs-head__left">
@@ -1088,8 +1081,6 @@
             <nav id="thumbnail-row" class="thumbs-strip" aria-label="Slides"></nav>
         </div>
 
-        <!-- Pane resize dividers: absolutely positioned over the gutters, placed by
-         JS (positionDividers). Session-only sizing; see resizable-panes spec. -->
         <div id="divider-objects" class="divider divider--col" aria-hidden="true"></div>
         <div id="divider-inspector" class="divider divider--col" aria-hidden="true"></div>
         <div id="divider-thumbs" class="divider divider--row" aria-hidden="true"></div>

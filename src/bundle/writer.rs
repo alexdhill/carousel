@@ -1,15 +1,3 @@
-// BundleWriter.
-//
-// SPEC §6.4 — atomic deck save. The pattern: open `<target>.tmp` as a fresh
-// ZipWriter on the same directory as the target, stream every entry into
-// it, finalize the archive, fsync, then `std::fs::rename` over the target
-// path. Same-directory rename is atomic on POSIX and on Windows ≥10 when
-// using the standard library wrapper.
-//
-// If the process dies mid-write the `.tmp` is left behind but the
-// previous bundle at `<target>` is untouched. The next save overwrites
-// `.tmp` cleanly — no special recovery path needed for v1.
-
 use crate::bundle::{BundleError, BundleResult};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -30,15 +18,6 @@ pub struct BundleWriter {
 }
 
 impl BundleWriter {
-    // create
-    // Inputs: the final bundle path (with .slidedeck extension or any
-    // user-chosen extension).
-    // Output: a writer with the temp file open and the deflate options
-    // pre-configured.
-    // Errors: Io if the temp file cannot be created.
-    // Dataflow: derive `<target>.slidedeck.tmp` next to the target so the
-    // eventual rename stays on the same volume; create the file with
-    // truncate; wrap in a ZipWriter.
     pub fn create(target_path: &Path) -> BundleResult<Self> {
         assert!(
             !target_path.as_os_str().is_empty(),
@@ -77,10 +56,6 @@ impl BundleWriter {
         &self.tmp_path
     }
 
-    // write_string
-    // Inputs: an entry name and its UTF-8 contents.
-    // Output: side-effect; appends the entry to the in-progress archive.
-    // Errors: Zip if start_file fails; Io on write failure.
     pub fn write_string(&mut self, name: &str, content: &str) -> BundleResult<()> {
         assert!(!name.is_empty(), "write_string: empty name");
         assert!(!self.finished, "write_string: writer already finished");
@@ -93,10 +68,6 @@ impl BundleWriter {
         Ok(())
     }
 
-    // write_bytes
-    // Inputs: an entry name and its raw byte contents.
-    // Output: side-effect; appends the entry.
-    // Errors: Zip / Io.
     pub fn write_bytes(&mut self, name: &str, content: &[u8]) -> BundleResult<()> {
         assert!(!name.is_empty(), "write_bytes: empty name");
         assert!(!self.finished, "write_bytes: writer already finished");
@@ -109,17 +80,6 @@ impl BundleWriter {
         Ok(())
     }
 
-    // finish
-    // Inputs: self (consumed).
-    // Output: Ok(()) once the archive is finalized, fsync'd, and renamed
-    // over the target path.
-    // Errors: Zip on finalize failure; Io on fsync; RenameFailed on the
-    // atomic rename step (the original target is untouched in that case).
-    // Dataflow:
-    //   1. finalize the zip directory
-    //   2. sync_all so kernel buffers hit disk before rename
-    //   3. drop the file handle
-    //   4. rename .tmp -> target (atomic on POSIX; atomic on Windows 10+)
     pub fn finish(mut self) -> BundleResult<()> {
         assert!(!self.finished, "finish: already finished");
         let writer: ZipWriter<File> = match self.writer.take() {
@@ -142,15 +102,8 @@ impl BundleWriter {
 }
 
 impl Drop for BundleWriter {
-    // drop
-    // Inputs: &mut self.
-    // Output: side-effect; if the caller never called finish(), the temp
-    // file is removed so half-written archives do not linger on disk. The
-    // target path is never touched here — the rename only happens in
-    // finish(), so the previous bundle (if any) remains intact.
     fn drop(&mut self) {
         if !self.finished {
-            // Close the writer first so the handle is released before unlink.
             self.writer = None;
             if self.tmp_path.exists()
                 && let Err(e) = std::fs::remove_file(&self.tmp_path)
@@ -164,11 +117,6 @@ impl Drop for BundleWriter {
     }
 }
 
-// tmp_path_for
-// Inputs: the target bundle path.
-// Output: a sibling path with `.slidedeck.tmp` appended to the file name
-// stem. Choosing a sibling (same parent dir) is what makes the eventual
-// rename atomic.
 fn tmp_path_for(target: &Path) -> PathBuf {
     assert!(!target.as_os_str().is_empty(), "tmp_path_for: empty path");
     let mut tmp: PathBuf = target.to_path_buf();
@@ -214,7 +162,6 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("ex.slidedeck");
 
-        // First save.
         let mut w1 = BundleWriter::create(&path).unwrap();
         w1.write_string("manifest.json", "v1").unwrap();
         w1.finish().unwrap();
@@ -226,7 +173,6 @@ mod tests {
             "v1"
         );
 
-        // Second save overwrites.
         let mut w2 = BundleWriter::create(&path).unwrap();
         w2.write_string("manifest.json", "v2").unwrap();
         w2.finish().unwrap();
@@ -243,24 +189,22 @@ mod tests {
     fn aborted_write_leaves_target_untouched_and_no_tmp_residue() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("a.slidedeck");
-        // Seed the target with known bytes via the writer (a complete save).
+
         let mut w0 = BundleWriter::create(&path).unwrap();
         w0.write_string("manifest.json", "intact").unwrap();
         w0.finish().unwrap();
         let original_bytes: Vec<u8> = std::fs::read(&path).unwrap();
 
-        // Begin a second save and abandon it without calling finish().
         let tmp_existed_during: PathBuf;
         {
             let mut w = BundleWriter::create(&path).unwrap();
             w.write_string("manifest.json", "garbage").unwrap();
             tmp_existed_during = w.tmp_path().to_path_buf();
             assert!(tmp_existed_during.exists());
-            // drop without finish.
         }
-        // Drop cleared the tmp file.
+
         assert!(!tmp_existed_during.exists());
-        // Target bytes unchanged.
+
         assert_eq!(std::fs::read(&path).unwrap(), original_bytes);
     }
 
@@ -281,9 +225,7 @@ mod tests {
         let path = dir.path().join("p.slidedeck");
         let mut w = BundleWriter::create(&path).unwrap();
         w.write_string("a", "b").unwrap();
-        // Move out of `w` via finish — subsequent writes are impossible
-        // because `w` is consumed; this test exists for documentation
-        // (it would not compile if we called w.write_string after finish).
+
         w.finish().unwrap();
     }
 }

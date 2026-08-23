@@ -1,11 +1,3 @@
-// SetEmbedHtml command.
-//
-// Replaces an Embed element's raw inner HTML (the "code block"). The model
-// carries the HTML verbatim in ElementContent::Embed(String); the serializer
-// writes it unmodified, so editing is a straight string swap. Emits one
-// SetInnerHtml patch (the embed wrapper's innerHTML is replaced live) and a
-// self-inverse carrying the prior HTML.
-
 use crate::commands::{Command, CommandError, CommandOutput, resolve_canvas_mut};
 use crate::deck::element::ElementContent;
 use crate::deck::{Canvas, CanvasTarget, ElementId};
@@ -19,15 +11,6 @@ pub struct SetEmbedHtml {
 }
 
 impl Command for SetEmbedHtml {
-    // apply
-    // Inputs: &self, &mut Deck.
-    // Output: CommandOutput with one SetInnerHtml patch and an inverse
-    // SetEmbedHtml carrying the prior HTML.
-    // Errors:
-    //   SlideNotFound / ElementNotFound — target or element absent.
-    //   InvalidOperation — element is not an Embed element.
-    // Dataflow: resolve canvas -> locate element -> assert Embed content ->
-    // snapshot prior -> overwrite -> build patch + inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.target.id().is_empty(),

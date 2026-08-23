@@ -1,13 +1,3 @@
-// IPC message protocol.
-//
-// All messages crossing the JS <-> Rust boundary share a uniform envelope:
-//   { id, timestamp, type, payload }
-//
-// `MessageKind` is adjacently tagged on (`type`, `payload`) and flattened into
-// the envelope. JS sends interaction events and lifecycle signals; Rust sends
-// patches, selection state, and slide-mount instructions. Patches are designed
-// to be idempotent so they can be applied without coordination.
-
 pub mod agent;
 pub mod bridge;
 pub mod landing;
@@ -22,9 +12,6 @@ pub type AssetId = String;
 #[allow(dead_code)]
 pub type LayoutId = String;
 
-// IpcMessage
-// Wire envelope. The `kind` field is flattened so `type` and `payload`
-// appear at the top level of the JSON object.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct IpcMessage {
     pub id: String,
@@ -34,10 +21,6 @@ pub struct IpcMessage {
 }
 
 impl IpcMessage {
-    // new
-    // Inputs: a MessageKind to send.
-    // Output: an IpcMessage with a fresh ULID and millisecond timestamp.
-    // Dataflow: pure constructor; reads the wall clock once.
     pub fn new(kind: MessageKind) -> Self {
         let id: String = ulid::Ulid::new().to_string();
         let timestamp: u64 = now_millis();
@@ -49,10 +32,6 @@ impl IpcMessage {
     }
 }
 
-// now_millis
-// Inputs: none. Reads SystemTime::now().
-// Output: milliseconds since UNIX epoch as u64. Returns 0 if the clock is
-// behind UNIX epoch (impossible in practice but handled defensively).
 fn now_millis() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     let now = SystemTime::now();
@@ -60,14 +39,9 @@ fn now_millis() -> u64 {
     delta.as_millis() as u64
 }
 
-// MessageKind
-// All message variants in either direction. Adjacent tagging keeps the
-// payload as its own JSON object so JS can read `msg.payload` directly
-// without re-parsing.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type", content = "payload")]
 pub enum MessageKind {
-    // ---- JS -> Rust ----
     Ready,
     Interaction(InteractionEvent),
     ThumbnailGenerated(ThumbnailResult),
@@ -76,83 +50,47 @@ pub enum MessageKind {
         message: String,
     },
 
-    // AgentPromptSubmitted
-    // JS→Rust: user submitted a prompt to the agent. `agent` is the display
-    // name selected in the panel dropdown; the Rust side spawns/switches to it.
     AgentPromptSubmitted {
         text: String,
         #[serde(default)]
         agent: String,
     },
-    // AgentCancelRequested
-    // JS→Rust: user requested agent cancellation.
+
     AgentCancelRequested,
-    // AgentAddRequested
-    // JS→Rust: the add-agent modal saved a new agent. The Rust side appends it
-    // to config.json (replacing any entry with the same name) and re-publishes
-    // the agent list.
+
     AgentAddRequested {
         name: String,
         command: String,
         #[serde(default)]
         args: Vec<String>,
     },
-    // AgentPanelToggled
-    // JS→Rust: chat pane opened/closed.
+
     AgentPanelToggled {
         open: bool,
     },
-    // AgentPermissionReply
-    // JS→Rust: user approved or denied a pending write.
+
     AgentPermissionReply {
         request_id: String,
         allow: bool,
     },
 
-    // ---- Rust -> JS ----
     MountSlide(MountSlideArgs),
     ApplyPatch(Patch),
     SetSelection(SelectionState),
     SetTheme(SetThemeArgs),
     Configure(EditorConfig),
     RequestThumbnail(ThumbnailRequest),
-    // ObjectTreeUpdate
-    // Stage 9 — Object Panel. Sent after slide mount and after any
-    // dispatch whose command reports affects_object_tree=true. The
-    // payload mirrors the active slide's element tree in display order
-    // (= z-order, since the serializer assigns z-index from sibling
-    // position). JS rebuilds the object panel from this payload — it
-    // does not crawl the shadow DOM for structure.
+
     ObjectTreeUpdate(ObjectTreeData),
-    // SlideListUpdate
-    // Stage 10 — Thumbnail row. Sent once on app start and after every
-    // file Open / New. Carries every slide's id, title and serialized
-    // HTML so JS can mount each thumbnail in its own shadow root. The
-    // active slide's thumbnail re-renders on subsequent MountSlide
-    // events (JS caches the new HTML keyed on slide id). Slide-list
-    // shape changes (add / remove / reorder) — once those commands
-    // exist — will re-send this message.
+
     SlideListUpdate(SlideListData),
-    // AssetsUpdate
-    // Bulk snapshot of every registered asset's bytes. Sent on app
-    // start and after file Open / New. JS caches blob URLs keyed by
-    // asset id so any subsequent slide mount can resolve images
-    // without another IPC round-trip.
+
     AssetsUpdate(AssetsBundle),
-    // AssetAdded
-    // Incremental delivery of a single newly-imported asset. Avoids
-    // re-shipping every asset on each import.
+
     AssetAdded(AssetPayload),
-    // LayoutListUpdate
-    // Stage 11 — layouts row + globals editor. The layout-mode analogue of
-    // SlideListUpdate: every layout's id, name and serialized HTML plus the
-    // active layout id, the shared theme/globals CSS, and dimensions. Sent
-    // when entering layout mode and after any command that reports
-    // affects_layout_list / affects_globals.
+
     LayoutListUpdate(LayoutListData),
-    // ChromiumDownloadProgress / Done — drive the PDF-export Chromium download
-    // modal. Progress `total` is None while the size is unknown (indeterminate
-    // bar). Done carries success + a message for the error case.
+
     ChromiumDownloadProgress {
         received: u64,
         total: Option<u64>,
@@ -161,110 +99,58 @@ pub enum MessageKind {
         ok: bool,
         message: String,
     },
-    // SlideLayoutPickerData
-    // Reply to SlideLayoutPickerRequested: the same layout payload as
-    // LayoutListUpdate, but a distinct kind so JS pops the new-slide layout
-    // picker instead of rebuilding the thumbnail row.
+
     SlideLayoutPickerData(LayoutListData),
-    // SetMode
-    // Stage 11 — editor mode echo. Tells JS which mode is now active
-    // ("slide" | "layout") so it can flip `body[data-mode]` and swap the
-    // slides-vs-layouts list and inspector-vs-globals panels.
+
     SetMode {
         mode: String,
     },
-    // SlideAnimationsUpdate
-    // Stage: animations — the active slide's timeline (id/element/category
-    // per entry) so the inspector's Appear/Disappear toggles reflect state.
+
     SlideAnimationsUpdate(SlideAnimationsData),
-    // GuidesUpdate
-    // Saveable guides — the active canvas's own (editable) guides plus the
-    // guides inherited from its layout (read-only on a slide; empty when
-    // editing a layout). The editor redraws the ruler-guide overlay from this.
+
     GuidesUpdate(GuidesData),
-    // FontList
-    // The installed font families (sorted, de-duplicated) for the styles
-    // pane font-family combobox. Sent once after the editor webview is Ready.
+
     FontList {
         families: Vec<String>,
     },
-    // Notice
-    // A non-fatal advisory message (e.g. an add-time ordering accommodation).
-    // `detail` is an optional longer description the toast reveals on click.
+
     Notice {
         message: String,
         #[serde(default)]
         detail: Option<String>,
     },
 
-    // ---- Presentation mode (Rust -> presentation webview) ----
-    // PresentInit
-    // One-shot config sent after the presentation webview reports Ready:
-    // built-in keyframes CSS + deck pixel dimensions for stage scaling.
     PresentInit(present::PresentInitPayload),
-    // PresentAssets
-    // Ships every registered asset's bytes to the presentation webview so it can
-    // build its own blob-URL cache (blob URLs are not shareable across webviews).
-    // Reuses the editor's AssetsBundle shape. Sent on Ready, before PresentSlide.
+
     PresentAssets(AssetsBundle),
-    // PresentSlide
-    // Mount a slide in the presentation stage (slide HTML + theme/globals CSS).
+
     PresentSlide(present::PresentSlidePayload),
-    // PresentReveal
-    // Apply one step's resolved visual state (hidden / shown / animate).
+
     PresentReveal(present::RevealPayload),
 
-    // SlideInspectorUpdate
-    // Smart styles pane — the active slide's inspector data (title, notes,
-    // background, layout, and the available layouts for the picker). Sent on
-    // slide mount and after any slide-metadata command so the Slide box (shown
-    // when nothing is selected) stays in sync.
     SlideInspectorUpdate(SlideInspectorData),
 
-    // SaveStateUpdate
-    // True when the deck has unsaved changes (a dirty slide, dirty manifest,
-    // or a dirty layout); false when everything is persisted. Drives the
-    // unsaved-changes dot beside the deck title. Sent after every mutation
-    // and after save / load.
     SaveStateUpdate(bool),
 
-    // ShowQuitDialog
-    // Ask the editor webview to raise the unsaved-changes quit confirmation.
-    // Sent only when a close is requested while the deck has unsaved changes;
-    // the three buttons reply with QuitConfirmed or dismiss locally.
     ShowQuitDialog,
 
-    // AgentPanelStateUpdate
-    // Rust→JS: session running state and error status.
     AgentPanelStateUpdate(agent::AgentPanelState),
-    // AgentStream
-    // Rust→JS: one streamed chunk from the agent.
+
     AgentStream(agent::AgentStreamChunk),
-    // AgentTool
-    // Rust→JS: tool invocation notice (read/write operation log).
+
     AgentTool(agent::AgentToolNotice),
-    // AgentPermission
-    // Rust→JS: permission request for a pending write.
+
     AgentPermission(agent::AgentPermissionAsk),
-    // AgentListUpdate
-    // Rust→JS: the configured agents' names for the panel dropdown.
+
     AgentListUpdate(agent::AgentList),
-    // AgentActivityUpdate
-    // Rust→JS: current agent execution phase and status label.
+
     AgentActivityUpdate(agent::AgentActivity),
-    // AgentThoughtUpdate
-    // Rust→JS: one reasoning fragment to append to the thinking area.
+
     AgentThoughtUpdate(agent::AgentThought),
-    // AgentToolStatusUpdate
-    // Rust→JS: upsert a tool row by id with the given title and status.
+
     AgentToolStatusUpdate(agent::AgentToolStatus),
 }
 
-// ---------- JS -> Rust payloads ----------
-
-// InteractionEvent
-// Descriptive event from the webview: "this happened", not "do this".
-// Internal tag on `kind` so payload reads as a flat object on the JS side.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "kind")]
 pub enum InteractionEvent {
@@ -286,59 +172,42 @@ pub enum InteractionEvent {
         element_id: ElementId,
         delta: Vec2,
     },
-    // ElementsDragEnded — multi-select drag commit: move every listed element
-    // by the same delta in one undoable step (CompositeCommand of MoveElement).
+
     ElementsDragEnded {
         element_ids: Vec<ElementId>,
         delta: Vec2,
     },
-    // ScaleElements — proportional multi-select scale commit. Each element is
-    // scaled by `factor` about `anchor` (slide px): box geometry scales, text
-    // font-size scales, groups' scale multiplies. One undoable step.
+
     ScaleElements {
         element_ids: Vec<ElementId>,
         factor: f64,
         anchor: Point,
     },
-    // ElementResizeStarted
-    // Fired when the user mousedowns on a selection-overlay handle.
-    // The interpret layer opens a transaction and snapshots geometry
-    // so the eventual commit can be undone in one step.
+
     ElementResizeStarted {
         element_id: ElementId,
         handle: ResizeHandle,
         position: Point,
     },
-    // ElementResized
-    // Throttled mid-drag updates (one per rAF). Ignored on the Rust
-    // side; the JS host applies optimistic style writes directly so
-    // there's no echo-patch interference.
+
     ElementResized {
         element_id: ElementId,
         handle: ResizeHandle,
         new_size: Size,
         new_position: Point,
     },
-    // ElementResizeEnded
-    // Final resize commit. The interpret layer dispatches one
-    // ResizeElement inside the open transaction so undo restores the
-    // pre-resize geometry in a single step.
+
     ElementResizeEnded {
         element_id: ElementId,
         new_position: Point,
         new_size: Size,
-        // Present only when resizing a cropped image: the proportionally
-        // scaled background values so the picture scales with the box
-        // (B-proportional). Absent for every other resize.
+
         #[serde(default)]
         background_size: Option<String>,
         #[serde(default)]
         background_position: Option<String>,
     },
-    // ElementCropCommitted
-    // Final commit of a crop session. Carries the mask geometry plus the two
-    // background-* values the webview computed. Interpreted into one
-    // CompositeCommand so the whole crop is a single undo step.
+
     ElementCropCommitted {
         element_id: ElementId,
         new_position: Point,
@@ -346,8 +215,7 @@ pub enum InteractionEvent {
         background_size: String,
         background_position: String,
     },
-    // Clipboard accelerators. Copy/Cut carry a focus-derived scope; paste
-    // dispatches by the typed clipboard buffer (focus-independent).
+
     CopyRequested {
         scope: ClipboardScope,
     },
@@ -355,14 +223,11 @@ pub enum InteractionEvent {
         scope: ClipboardScope,
     },
     PasteRequested,
-    // Delete a specific slide (navigator focus + Delete, or the thumbnail "×").
+
     RemoveSlideRequested {
         slide_id: SlideId,
     },
-    // TextEditStarted
-    // Fired when a text element enters inline editing (double-click). The
-    // webview is authoritative for the text content during the session;
-    // Rust takes no action until TextEditEnded (SPEC §8.5).
+
     TextEditStarted {
         element_id: ElementId,
     },
@@ -370,42 +235,31 @@ pub enum InteractionEvent {
         element_id: ElementId,
         delta: RichTextDelta,
     },
-    // TextEditEnded
-    // Fired when an inline edit session commits (Enter or blur). `text`
-    // carries the element's final plain textContent so the Rust side can
-    // dispatch a single SetTextContent. An empty string is a valid edit
-    // (the user cleared the text).
+
     TextEditEnded {
         element_id: ElementId,
         text: String,
     },
-    // EmbedHtmlEditRequested
-    // Fired when the double-click HTML editor for an Embed ("code block")
-    // element commits. `html` is the new raw inner HTML; Rust dispatches a
-    // single SetEmbedHtml. An empty string is a valid edit (cleared block).
+
     EmbedHtmlEditRequested {
         element_id: ElementId,
         html: String,
     },
-    // ---- Table editing (focus-mode cell ops) ----
-    // CellTextEditRequested — commit of a cell's inline text edit.
+
     CellTextEditRequested {
         element_id: ElementId,
         row: usize,
         col: usize,
         text: String,
     },
-    // CellStyleChanged — the inspector committed a style property while a cell
-    // set was active. `cells` is the selected [row, col] pairs; the property is
-    // written to every one (empty value clears it).
+
     CellStyleChanged {
         element_id: ElementId,
         cells: Vec<[usize; 2]>,
         property: String,
         value: String,
     },
-    // Structural table ops from the Table inspector section. `at` is the row /
-    // column index the op acts on; `count` sets the header band size.
+
     TableInsertRow {
         element_id: ElementId,
         at: usize,
@@ -440,25 +294,13 @@ pub enum InteractionEvent {
     SlideThumbnailClicked {
         slide_id: SlideId,
     },
-    // PropertyChanged
-    // Stage 8 — Property Inspector. Sent when the user commits a value
-    // in the inspector (input blur / Enter / custom-CSS Apply click).
-    // Property names follow CSS conventions for arbitrary style writes,
-    // with six reserved tokens — "x", "y", "width", "height", "rotation",
-    // "opacity" — routed by the interpret layer to SetGeometryProperty.
-    // An empty `value` requests deletion of the property; the interpret
-    // layer maps that to RemoveInlineStyle.
+
     PropertyChanged {
         element_id: ElementId,
         property: String,
         value: String,
     },
-    // Guide events (saveable guides). The editor drags a new guide off a
-    // ruler (GuideAdded), drags an existing one (GuideMoved, coalesced into a
-    // single undo step), or deletes one (GuideRemoved). `axis` is "h" (a
-    // horizontal line from the top ruler) or "v" (vertical, from the left
-    // ruler); `pos` is in slide px; `index` addresses the active canvas's own
-    // guides. They route to the AddGuide / MoveGuide / RemoveGuide commands.
+
     GuideAdded {
         axis: String,
         pos: f64,
@@ -470,20 +312,11 @@ pub enum InteractionEvent {
     GuideRemoved {
         index: usize,
     },
-    // SetSelectionFromPanel
-    // Stage 9 — Object Panel. The user clicked an element in the panel.
-    // The interpret layer reuses the existing selection plumbing and
-    // emits InterpretResult::Selection (non-undoable, like viewport
-    // clicks).
+
     SetSelectionFromPanel {
         element_ids: Vec<ElementId>,
     },
-    // InsertElementRequested
-    // Stage 9 — Object Panel toolbar. The user clicked Text / Shape /
-    // Group. The interpret layer constructs a fresh ElementNode of the
-    // requested type and dispatches InsertElement. The `parent_id` and
-    // `position` are optional; when omitted, the new element appends to
-    // the slide's root group.
+
     InsertElementRequested {
         element_type: String,
         #[serde(default)]
@@ -491,73 +324,40 @@ pub enum InteractionEvent {
         #[serde(default)]
         position: Option<usize>,
     },
-    // RenameElementRequested
-    // Stage 9 — Object Panel long-click rename. An empty string clears
-    // the name (panel falls back to displaying the element id).
+
     RenameElementRequested {
         element_id: ElementId,
         new_name: String,
     },
-    // ReparentElementRequested
-    // Stage 9 — Object Panel drag-drop. JS pre-adjusts `new_position`
-    // for the post-removal coordinate system (see ReparentElement docs);
-    // the command applies remove + insert directly.
+
     ReparentElementRequested {
         element_id: ElementId,
         new_parent_id: ElementId,
         new_position: usize,
     },
-    // AddSlideRequested
-    // Stage 10 — thumbnail "+" tile / Cmd+Shift+N. Inserts a slide directly
-    // after the active slide and makes it active. `layout_id` seeds the new
-    // slide from that theme layout (its template elements + tag); empty (the
-    // Cmd+Shift+N fast path) inserts a blank slide.
+
     AddSlideRequested {
         #[serde(default)]
         layout_id: String,
     },
-    // SlideLayoutPickerRequested
-    // The thumbnail "+" tile in slide mode. Asks Rust to ship the theme's
-    // layouts (id + name + preview HTML) so JS can pop the layout picker; the
-    // user's choice comes back as AddSlideRequested { layout_id }.
+
     SlideLayoutPickerRequested,
-    // SlideTitleEditRequested
-    // Double-click a thumbnail label. The Rust side dispatches a
-    // SetSlideTitle command (manifest title) and rebroadcasts the slide
-    // list so the label refreshes.
+
     SlideTitleEditRequested {
         slide_id: SlideId,
         new_title: String,
     },
-    // SlideThumbnailReordered
-    // Drag-drop a slide thumbnail to a new slot. `new_index` is the target
-    // index in the FINAL slide_order (0-based). The interpret layer drops
-    // no-op moves (unknown id / same slot) and clamps before dispatching a
-    // ReorderSlide command.
+
     SlideThumbnailReordered {
         slide_id: SlideId,
         new_index: usize,
     },
-    // ElementIdEditRequested
-    // Double-click an object-panel row to rename the element's id.
-    // `new_id` is the raw text the user typed; the Rust side sanitizes it
-    // (runs of whitespace collapse to a single '_') before dispatching a
-    // SetElementId command against the active slide.
+
     ElementIdEditRequested {
         element_id: ElementId,
         new_id: String,
     },
-    // AssetImported
-    // Stage — image import. Sent when the user drops a file (or pastes
-    // an image) onto the viewport. `content_base64` carries the raw
-    // bytes; the Rust side decodes once, hashes, dedupes, registers,
-    // and dispatches an InsertElement that references the resulting
-    // asset id.
-    //
-    // `position` is the drop point in SLIDE coordinates (JS has
-    // already divided by the viewport scale). When omitted, the
-    // element lands centered on the slide. `width` / `height` are the
-    // image's natural pixel dimensions decoded by JS via Image().
+
     AssetImported {
         content_base64: String,
         original_filename: String,
@@ -566,65 +366,46 @@ pub enum InteractionEvent {
         height: u32,
         #[serde(default)]
         position: Option<Point>,
-        // When true, the import targets the active slide's background image
-        // (SetSlideBackgroundImage) instead of inserting a picture element.
+
         #[serde(default)]
         as_slide_background: bool,
-        // When set, the import becomes the named element's fill image: the new
-        // asset is written as `background-image: var(--asset-<id>)` on that
-        // element (layered over its background-color) instead of inserting a
-        // picture element. Mutually exclusive with as_slide_background.
+
         #[serde(default)]
         as_element_fill: Option<String>,
     },
-    // ---- Stage 11: layout editor ----
-    // SetEditorMode
-    // Toolbar mode toggle. `mode` is "slide" or "layout"; anything else is
-    // ignored by the Rust handler.
+
     SetEditorMode {
         mode: String,
     },
-    // LayoutThumbnailClicked
-    // Select / mount a layout in the layouts row (layout-mode analogue of
-    // SlideThumbnailClicked).
+
     LayoutThumbnailClicked {
         layout_id: LayoutId,
     },
-    // AddLayoutRequested
-    // Layouts row "+" tile. Inserts a new blank layout after the active one
-    // and makes it active.
+
     AddLayoutRequested,
-    // LayoutNameEditRequested
-    // Double-click a layout label to rename it (reuses the floating editor).
+
     LayoutNameEditRequested {
         layout_id: LayoutId,
         new_name: String,
     },
-    // GlobalsCssEditRequested
-    // Commit of the globals CSS textarea (blur). Replaces the deck-wide
-    // globals blob.
+
     GlobalsCssEditRequested {
         new_css: String,
     },
-    // ---- Stage: animations ----
-    // SetElementAnimation
-    // Minimal Appear/Disappear toggle on the selected element. `category` is
-    // "entrance" or "exit"; `enabled` toggles add/remove of a default entry.
+
     SetElementAnimation {
         element_id: ElementId,
         category: String,
         enabled: bool,
     },
-    // AddAnimation — append a catalog effect to the selected element. The
-    // server resolves catalog_id → category/keyframe/effect; `direction`
-    // (top|bottom|left|right) selects the fly-<dir> keyframe when directional.
+
     AddAnimation {
         element_id: ElementId,
         catalog_id: String,
         #[serde(default)]
         direction: Option<String>,
     },
-    // UpdateAnimation — patch one entry's mutable fields; None = leave as-is.
+
     UpdateAnimation {
         animation_id: String,
         #[serde(default)]
@@ -640,45 +421,33 @@ pub enum InteractionEvent {
         #[serde(default)]
         targets: Option<Vec<crate::deck::animation::PropertyTarget>>,
     },
-    // RemoveAnimationRequested — drop the entry with this id.
+
     RemoveAnimationRequested {
         animation_id: String,
     },
-    // MoveAnimation — drag-reorder in the slide animation controller. Moves the
-    // entry to `new_index` in the timeline AND sets its trigger (so a drag can
-    // both reorder and change how it plays), as one undoable step.
+
     MoveAnimation {
         animation_id: String,
         new_index: usize,
         trigger: String,
     },
-    // ---- Theme save/load ----
-    // SaveThemeRequested / LoadThemeRequested — the layout-mode "Save Theme…" /
-    // "Load Theme…" buttons. Map to FileAction::SaveTheme / LoadTheme.
+
     SaveThemeRequested,
     LoadThemeRequested,
-    // ---- Smart styles pane: Slide box (no selection) ----
-    // Each targets the active slide (the Rust side supplies the id). An empty
-    // string clears the field (background/notes → None).
+
     SetSlideBackgroundRequested {
         background: String,
     },
-    // Clear the active slide's background image. Setting one happens via
-    // AssetImported with as_slide_background=true (it carries the bytes).
+
     SetSlideBackgroundImageCleared,
     SetSlideNotesRequested {
         notes: String,
     },
-    // Outgoing presentation transition for the active slide. None = cut (the
-    // dropdown's "None" clears the field).
+
     SetSlideTransitionRequested {
         transition: Option<crate::deck::SlideTransition>,
     },
-    // SetMorphTransitionRequested
-    // Enable or disable morphing transition for an element on forward slide
-    // advances. `enabled` toggles the morph on/off; `duration_ms` and `easing`
-    // are used when enabled. Dispatches a SetMorphTransition command. Warnings
-    // about missing next-slide elements come back via Notice.
+
     SetMorphTransitionRequested {
         element_id: ElementId,
         enabled: bool,
@@ -688,9 +457,7 @@ pub enum InteractionEvent {
     SetSlideLayoutRequested {
         layout_id: LayoutId,
     },
-    // Arrow-key nudge of the current selection by (dx, dy) px on the active
-    // canvas (one undoable step; a CompositeCommand when many are selected).
-    // Deck title edit from the top-left title field (manifest.metadata.title).
+
     SetDeckTitleRequested {
         title: String,
     },
@@ -698,12 +465,11 @@ pub enum InteractionEvent {
         dx: f64,
         dy: f64,
     },
-    // Arrow-key slide navigation when the canvas or navigator is focused with
-    // no element selected. `forward` = next slide (ArrowRight), else previous.
+
     NavigateSlideRequested {
         forward: bool,
     },
-    // SetGroupLayout — patch a group's flex props (None = leave as-is).
+
     SetGroupLayout {
         element_id: ElementId,
         #[serde(default)]
@@ -713,19 +479,16 @@ pub enum InteractionEvent {
         #[serde(default)]
         alignment: Option<String>,
     },
-    // SetGroupScale — set a group's uniform scale.
+
     SetGroupScale {
         element_id: ElementId,
         scale: f64,
     },
-    // GroupSelectionRequested — Cmd+Shift+G. Wrap the given sibling elements in
-    // a new group at the top member's z-slot. The Rust side mints the group id.
+
     GroupSelectionRequested {
         element_ids: Vec<ElementId>,
     },
-    // QuitConfirmed — a button in the unsaved-changes quit dialog. `save=true`
-    // saves then exits; `save=false` exits without saving. Cancel dismisses the
-    // dialog client-side and sends nothing.
+
     QuitConfirmed {
         save: bool,
     },
@@ -757,8 +520,6 @@ pub struct Size {
     pub height: f64,
 }
 
-// ClipboardScope: what a copy/cut acts on, derived from the webview's focused
-// region (navigator -> Slide, else Elements).
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClipboardScope {
     Elements,
@@ -777,44 +538,26 @@ pub enum ResizeHandle {
     Left,
 }
 
-// RichTextDelta
-// Placeholder for the rich-text editing protocol. Filled in alongside the
-// text-editing command set; here only to satisfy InteractionEvent::TextEdited.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct RichTextDelta {
     pub ops: Vec<serde_json::Value>,
 }
 
-// ThumbnailResult
-// JS reports completion of an offscreen render with a base64 PNG payload.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ThumbnailResult {
     pub slide_id: SlideId,
     pub png_base64: String,
 }
 
-// ---------- Rust -> JS payloads ----------
-
-// MountSlideArgs
-// Tells the webview to swap the viewport's slide-host with the given HTML
-// inside a fresh shadow root.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct MountSlideArgs {
     pub slide_id: SlideId,
     pub slide_html: String,
     pub theme_css: String,
-    // globals_css (Stage 11) — the deck-wide globals blob injected into the
-    // shadow root between theme_css and the asset-vars block. The same mount
-    // path serves both slides and layouts (the id is whichever canvas is
-    // active); JS does not need to know which kind it is.
+
     pub globals_css: String,
 }
 
-// SelectionState
-// Identifies the currently selected elements on a given slide. The webview
-// uses it to render selection overlays. `slide_id` is optional because
-// "no slide active" is a valid editor state (e.g., between mounts, after
-// the user closes a deck).
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct SelectionState {
     pub slide_id: Option<SlideId>,
@@ -822,32 +565,19 @@ pub struct SelectionState {
 }
 
 impl SelectionState {
-    // empty
-    // Inputs: none.
-    // Output: a SelectionState with no slide and no elements.
     pub fn empty() -> Self {
         Self::default()
     }
 
-    // is_empty
-    // Inputs: self.
-    // Output: true iff no elements are selected.
     #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.element_ids.is_empty()
     }
 
-    // contains
-    // Inputs: an element id.
-    // Output: true iff that id is in the selection set.
     pub fn contains(&self, id: &str) -> bool {
         self.element_ids.iter().any(|e| e == id)
     }
 
-    // toggle
-    // Inputs: an element id (consumed).
-    // Output: side-effect; adds the id if absent, removes it if present.
-    // Used by Shift-click handling.
     pub fn toggle(&mut self, id: ElementId) {
         assert!(!id.is_empty(), "toggle called with empty id");
         if let Some(pos) = self.element_ids.iter().position(|e| e == &id) {
@@ -858,39 +588,29 @@ impl SelectionState {
     }
 }
 
-// SetThemeArgs
-// Pushes new theme CSS into the active shadow root. Placeholder shape until
-// the theme model is implemented.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SetThemeArgs {
     pub theme_id: String,
     pub theme_css: String,
 }
 
-// EditorConfig
-// One-shot configuration the webview reads at startup.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct EditorConfig {
     pub debug: bool,
-    // The immutable built-in @keyframes library (Stage: animations). JS caches
-    // it and injects it into every shadow root alongside theme/globals CSS.
+
     #[serde(default)]
     pub animation_keyframes_css: String,
-    // The effect catalog (add-menu + effect picker source of truth).
+
     #[serde(default)]
     pub animation_catalog: Vec<crate::deck::anim_catalog::AnimCatalogItem>,
-    // The deck's display title (manifest.metadata.title), shown in the editor's
-    // top-left title field.
+
     #[serde(default)]
     pub deck_title: String,
-    // True only when this editor was launched as a new deck from a layout, so
-    // the client focuses + selects the title field for an immediate rename.
+
     #[serde(default)]
     pub focus_title: bool,
 }
 
-// ThumbnailRequest
-// Asks the webview to render an offscreen thumbnail for a slide.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ThumbnailRequest {
     pub slide_id: SlideId,
@@ -898,11 +618,6 @@ pub struct ThumbnailRequest {
     pub height: u32,
 }
 
-// ObjectTreeData
-// Stage 9 — Object Panel payload. Top-level `nodes` are the slide root's
-// children in display order (= z-order). Group elements carry their own
-// children inside their ObjectTreeNode. The shape is recursive and
-// dense — every element in the slide appears exactly once.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ObjectTreeData {
     pub slide_id: SlideId,
@@ -910,13 +625,6 @@ pub struct ObjectTreeData {
     pub nodes: Vec<ObjectTreeNode>,
 }
 
-// ObjectTreeNode
-// One row in the panel. `element_type` is the HTML token ("text",
-// "image", "shape", "media", "table", "group", "embed") so JS can pick
-// the matching badge icon. The panel labels each row with the element
-// `id` directly — double-clicking it edits that id (see ElementIdEdit-
-// Requested). There is no separate display name, so the row label and
-// the editable identity are always the same value.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ObjectTreeNode {
     pub id: ElementId,
@@ -924,32 +632,21 @@ pub struct ObjectTreeNode {
     pub children: Vec<ObjectTreeNode>,
 }
 
-// AssetPayload
-// One asset's bytes plus the metadata JS needs to render it as a blob
-// URL. `content_base64` is the raw bytes; JS decodes once and stores a
-// Blob + URL.createObjectURL handle keyed on asset_id.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct AssetPayload {
     pub asset_id: String,
     pub media_type: String,
     pub content_base64: String,
-    // Display name JS shows when the asset is used as an element fill image.
+
     #[serde(default)]
     pub original_filename: String,
 }
 
-// AssetsBundle
-// Bulk version of AssetPayload — used by AssetsUpdate to ship every
-// asset in one envelope on mount/load.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct AssetsBundle {
     pub assets: Vec<AssetPayload>,
 }
 
-// SlideListData
-// Stage 10 payload — full slide list with everything JS needs to mount
-// thumbnails. `theme_css` and `dimensions` are shared across slides so
-// they ride at this top level instead of being duplicated per entry.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SlideListData {
     pub slides: Vec<SlideListEntry>,
@@ -959,10 +656,6 @@ pub struct SlideListData {
     pub height: u32,
 }
 
-// SlideListEntry
-// One thumbnail's worth of data. `title` falls back to the slide id
-// when the manifest entry's title is empty; JS renders it under the
-// thumbnail.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SlideListEntry {
     pub slide_id: SlideId,
@@ -970,11 +663,6 @@ pub struct SlideListEntry {
     pub html: String,
 }
 
-// LayoutListData
-// Stage 11 payload — the layouts row + globals editor state. Mirrors
-// SlideListData but carries `globals_css` so the JS host can refresh the
-// globals textarea from the same message, and the per-entry display label
-// is `name` (layouts have an explicit display name; slides fall back to id).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct LayoutListData {
     pub layouts: Vec<LayoutListEntry>,
@@ -985,37 +673,24 @@ pub struct LayoutListData {
     pub height: u32,
 }
 
-// LayoutListEntry
-// One layout thumbnail's worth of data: stable id, display name, and the
-// serialized root HTML (rendered in its own shadow root like a slide).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct LayoutListEntry {
     pub layout_id: LayoutId,
     pub name: String,
     pub html: String,
-    // Theme background of this layout, so the inspector's Slide box can show
-    // the layout's Fill/Image controls in layout mode.
+
     #[serde(default)]
     pub background: String,
     #[serde(default)]
     pub background_image: String,
 }
 
-// SlideAnimationsData
-// Stage: animations payload — the active slide's timeline, one entry per
-// animation so the inspector can reflect per-element Appear/Disappear state.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SlideAnimationsData {
     pub slide_id: SlideId,
     pub entries: Vec<SlideAnimationEntry>,
 }
 
-// GuideDto / GuidesData
-// Wire shape for saveable guides. `axis` is "h" or "v"; `pos` is slide px.
-// `own` are the active canvas's editable guides; `inherited` are its layout's
-// guides, drawn read-only on a slide (empty when editing a layout). Carries an
-// f64, so this is not Eq (unlike the Patch enum) — guides ride their own
-// message rather than the DOM patch stream.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct GuideDto {
     pub axis: String,
@@ -1029,11 +704,6 @@ pub struct GuidesData {
     pub inherited: Vec<GuideDto>,
 }
 
-// SlideAnimationEntry
-// One timeline entry fully rendered for the panel: stable id, target element,
-// category ("entrance"|"emphasis"|"exit"|"property"), the resolved effect
-// (keyframe name OR property targets), trigger, and timing. `effect_id` is the
-// keyframe name for Named effects, or "property" for a property-change entry.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SlideAnimationEntry {
     pub animation_id: String,
@@ -1049,40 +719,28 @@ pub struct SlideAnimationEntry {
     pub iterations: crate::deck::animation::AnimationIterations,
 }
 
-// SlideInspectorLayout
-// One entry in the Slide box's Layout picker: stable id + display name.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SlideInspectorLayout {
     pub id: LayoutId,
     pub name: String,
 }
 
-// SlideInspectorData
-// The active slide's inspector payload. `notes` / `background` are empty strings
-// when unset (the JS box treats "" as cleared). `layouts` is the theme's layout
-// list in display order, so the picker works in slide mode without the full
-// LayoutListUpdate.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SlideInspectorData {
     pub slide_id: SlideId,
     pub title: String,
     pub notes: String,
     pub background: String,
-    // Background image as stored (e.g. "var(--asset-<id>)"); "" when none. The
-    // JS box resolves the asset id to a blob URL for the picker thumbnail.
+
     #[serde(default)]
     pub background_image: String,
-    // Outgoing presentation transition; None = cut. Drives the Slide box's
-    // transition dropdown + duration/easing controls.
+
     #[serde(default)]
     pub transition: Option<crate::deck::SlideTransition>,
     pub layout_id: LayoutId,
     pub layouts: Vec<SlideInspectorLayout>,
 }
 
-// Patch
-// Tagged on `op`. Patches are idempotent DOM mutations applied to the
-// element matched by `element_id` inside the active slide's shadow root.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "op")]
 pub enum Patch {
@@ -1126,11 +784,7 @@ pub enum Patch {
     RemoveElement {
         element_id: ElementId,
     },
-    // Batch
-    // Spec §8.3 sketches this as `Batch(Vec<Patch>)`, but a newtype-of-Vec
-    // cannot carry an internal tag — serde emits an array with no place to
-    // merge `op`. Represent it as a struct variant; wire form is
-    //   {"op":"Batch","patches":[...]}
+
     Batch {
         patches: Vec<Patch>,
     },
@@ -1141,9 +795,6 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
 
-    // round_trip
-    // Serializes a value, parses it back, and returns the reparsed value
-    // for inspection.
     fn round_trip<T>(value: &T) -> T
     where
         T: Serialize + for<'de> Deserialize<'de>,
@@ -1197,8 +848,6 @@ mod tests {
             other => panic!("unexpected variant: {other:?}"),
         }
     }
-
-    // ---------- Stage 11: layout editor messages ----------
 
     #[test]
     fn layout_editor_events_roundtrip() {
@@ -1281,8 +930,6 @@ mod tests {
             other => panic!("unexpected variant: {other:?}"),
         }
     }
-
-    // ---------- Stage: animations messages ----------
 
     #[test]
     fn slide_inspector_payload_and_events_roundtrip() {
@@ -1417,7 +1064,7 @@ mod tests {
             }
             other => panic!("unexpected variant: {other:?}"),
         }
-        // A payload omitting `detail` still deserializes (serde default → None).
+
         let legacy: IpcMessage = serde_json::from_str(
             r#"{"id":"x","timestamp":0,"type":"Notice","payload":{"message":"hi"}}"#,
         )
@@ -1549,7 +1196,6 @@ mod tests {
 
     #[test]
     fn js_style_envelope_parses() {
-        // Mimic the literal JSON the JS bridge will post for Ready.
         let raw = r#"{"id":"abc","timestamp":1,"type":"Ready"}"#;
         let parsed: IpcMessage = serde_json::from_str(raw).unwrap();
         assert!(matches!(parsed.kind, MessageKind::Ready));
@@ -1616,8 +1262,6 @@ mod tests {
         assert!(!m.id.is_empty());
         assert!(m.timestamp > 0);
     }
-
-    // ---------- Stage 9: object tree messages ----------
 
     #[test]
     fn object_tree_update_roundtrips_through_ipc() {
@@ -1849,8 +1493,6 @@ mod tests {
             InteractionEvent::TextEditStarted { ref element_id } if element_id == "el_t"
         ));
 
-        // TextEditEnded now carries the committed plain text, including the
-        // empty-string case (the user cleared the element).
         let ended: InteractionEvent = serde_json::from_str(
             r#"{"kind":"TextEditEnded","element_id":"el_t","text":"Hello world"}"#,
         )
@@ -1882,7 +1524,6 @@ mod tests {
                 if slide_id == "s1" && new_title == "Intro"
         ));
 
-        // new_id arrives raw (whitespace and all); the Rust side sanitizes.
         let id_event: InteractionEvent = serde_json::from_str(
             r#"{"kind":"ElementIdEditRequested","element_id":"el_a","new_id":"el b"}"#,
         )
@@ -1893,8 +1534,6 @@ mod tests {
                 if element_id == "el_a" && new_id == "el b"
         ));
     }
-
-    // ---------- Agent panel messages ----------
 
     #[test]
     fn agent_prompt_submitted_roundtrips_through_ipc() {

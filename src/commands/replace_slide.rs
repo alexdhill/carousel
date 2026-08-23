@@ -1,11 +1,3 @@
-// ReplaceSlideContent command.
-//
-// Swaps a slide root group's children with new content from an agent write.
-// Used by the agent panel workflow to apply whole-slide edits in one undoable step.
-//
-// Effects: replaces the slide's root element's children, emits a SetInnerHtml
-// patch for the webview to apply, and marks the slide dirty and requiring remount.
-
 use crate::commands::{Command, CommandError, CommandOutput, resolve_canvas_mut};
 use crate::deck::element::ElementNode;
 use crate::deck::{Canvas, CanvasTarget, SlideId};
@@ -19,15 +11,6 @@ pub struct ReplaceSlideContent {
 }
 
 impl Command for ReplaceSlideContent {
-    // apply
-    // Inputs: &self, &mut Deck.
-    // Output: CommandOutput with a SetInnerHtml patch, an inverse
-    // ReplaceSlideContent carrying the pre-swap children, the slide marked
-    // dirty, and requires_remount = true.
-    // Errors:
-    //   SlideNotFound    — slide_id absent.
-    // Dataflow: locate slide -> snapshot current children -> replace them
-    // with new_children -> serialize to HTML -> emit patch -> build inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.slide_id.is_empty(),

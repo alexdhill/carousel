@@ -1,6 +1,3 @@
-// ACP transport layer: spawn agent binary, JSON-RPC framing, reader/writer threads.
-// This is the only file that touches ACP wire bytes or the child process.
-
 use crate::agent::{AgentConfig, AgentEvent};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Stdio};
@@ -9,15 +6,8 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, warn};
 
-// First request id used for user prompts. Ids 1 and 2 are reserved for the
-// initialize and session/new handshake requests so they never collide.
 const PROMPT_ID_BASE: u64 = 1000;
 
-// DECK_CONTEXT
-// Prepended to the first prompt of each session so a generic coding agent
-// understands it is editing this app's deck (exposed as virtual files over the
-// ACP fs methods) rather than hunting the real filesystem for presentation
-// files. Sent exactly once per session; later prompts go through verbatim.
 const DECK_CONTEXT: &str = "\
 You are editing a Carousel slide deck. The deck is laid out as real files in \
 your working directory — read and edit them with your normal file tools:\n\
@@ -47,10 +37,6 @@ style=\"left:80px;top:80px;width:320px;height:240px\"></div>\n\
   data-asset-id must be an id from deck/format.md; you cannot add a new image file.\n\n\
 --- The user's request follows ---\n\n";
 
-// __prompt_body
-// Input: the per-session context flag and the raw user text. Output: the text
-// to send — prefixed with DECK_CONTEXT for the first prompt of the session
-// (claimed atomically), verbatim afterwards.
 fn __prompt_body(context_sent: &AtomicBool, text: &str) -> String {
     if context_sent.swap(true, Ordering::SeqCst) {
         text.to_string()
@@ -59,10 +45,6 @@ fn __prompt_body(context_sent: &AtomicBool, text: &str) -> String {
     }
 }
 
-// ReaderCtx
-// State the reader thread needs to drive the ACP handshake and flush queued
-// prompts: the writer channel, the session cwd, the shared request-id counter,
-// the shared session id, and the pending-prompt queue.
 struct ReaderCtx {
     tx: Sender<String>,
     cwd: String,
@@ -72,11 +54,6 @@ struct ReaderCtx {
     context_sent: Arc<AtomicBool>,
 }
 
-// AgentHandle
-// Live session handle: owns the writer channel sender, the child process,
-// the shared session_id, the shared request-id counter, and the queue of
-// prompts submitted before the session was ready.
-// Used to send prompts, permission replies, FS responses, and to cancel/shutdown.
 pub struct AgentHandle {
     pub writer_tx: Sender<String>,
     pub child: Child,
@@ -87,10 +64,6 @@ pub struct AgentHandle {
 }
 
 impl AgentHandle {
-    // send_prompt
-    // Input: a text prompt from the user. Output: AppResult<()> after queueing
-    // a session/prompt request to the writer thread. Errors: channel closed,
-    // invalid input (empty text triggers assert).
     pub fn send_prompt(&self, text: &str) -> crate::error::AppResult<()> {
         assert!(!text.is_empty(), "prompt text must not be empty");
         let session_id_str: Option<String> = self
@@ -118,10 +91,6 @@ impl AgentHandle {
         Ok(())
     }
 
-    // send_permission_reply
-    // Input: a request_id from an earlier PermissionRequest event, and a boolean
-    // allow flag. Output: AppResult<()> after queueing a permission response.
-    // Errors: channel closed, invalid input (empty request_id triggers assert).
     pub fn send_permission_reply(
         &self,
         request_id: &str,
@@ -142,10 +111,6 @@ impl AgentHandle {
         Ok(())
     }
 
-    // send_fs_response
-    // Input: a request_id and an arbitrary serde_json Value result.
-    // Output: AppResult<()> after queueing the response. Errors: channel closed,
-    // invalid input (empty request_id triggers assert).
     pub fn send_fs_response(
         &self,
         request_id: &str,
@@ -159,10 +124,6 @@ impl AgentHandle {
         Ok(())
     }
 
-    // send_fs_error
-    // Input: a request_id and an error message string. Output: AppResult<()>
-    // after queueing a JSON-RPC error response. Errors: channel closed,
-    // invalid input (empty request_id or message triggers assert).
     pub fn send_fs_error(&self, request_id: &str, message: &str) -> crate::error::AppResult<()> {
         assert!(!request_id.is_empty(), "request_id must not be empty");
         assert!(!message.is_empty(), "error message must not be empty");
@@ -182,9 +143,6 @@ impl AgentHandle {
         Ok(())
     }
 
-    // cancel
-    // Input: self reference. Output: AppResult<()> after queueing a session/cancel
-    // notification. This is a notification (no ID). Errors: channel closed.
     pub fn cancel(&self) -> crate::error::AppResult<()> {
         let session_id_lock = self
             .session_id
@@ -202,10 +160,6 @@ impl AgentHandle {
         Ok(())
     }
 
-    // shutdown
-    // Input: mutable self reference. Output: AppResult<()> after killing the
-    // child process. Errors: child wait/kill failures converted to string-based
-    // errors; panics are caught and logged.
     pub fn shutdown(&mut self) -> crate::error::AppResult<()> {
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -213,12 +167,6 @@ impl AgentHandle {
     }
 }
 
-// spawn_agent
-// Input: AgentConfig reference, cwd path, and a generic event callback.
-// Output: AppResult<AgentHandle> with a live session ready for prompts.
-// Errors: child spawn failure, JSON parsing.
-// Control flow: spawn child, create channels, start reader+writer threads,
-// send initialize + session/new requests, capture session_id, return handle.
 pub fn spawn_agent<F>(
     config: &AgentConfig,
     cwd: &std::path::Path,
@@ -275,9 +223,6 @@ where
         __writer_loop(rx, stdin);
     });
 
-    // Send only `initialize`. The reader sends `session/new` after the agent
-    // acks initialize, and captures the session id from its response; sending
-    // both up front races the handshake and many agents reject it.
     let init_params: serde_json::Value = serde_json::json!({
         "protocolVersion": 1,
         "clientCapabilities": {
@@ -301,13 +246,6 @@ where
     })
 }
 
-// __reader_loop
-// Input: child stdout, the reader context (handshake plumbing), and the event
-// callback. Output: none (runs until EOF). Control flow: loop reading lines,
-// parse JSON, drive the handshake (send session/new after initialize, capture
-// the session id and flush queued prompts), emit SessionReady if handshake just
-// completed, classify the message, call the callback. Exits on EOF (bounded by
-// stream length, no recursion).
 fn __reader_loop<F>(stdout: ChildStdout, ctx: ReaderCtx, on_event: F)
 where
     F: Fn(AgentEvent),
@@ -321,8 +259,7 @@ where
                 if line.is_empty() {
                     continue;
                 }
-                // Full raw wire dump for debugging the agent process; DEBUG-only
-                // (opt-in via -v 4) since it contains prompt/slide bodies.
+
                 debug!("acp <- {}", line);
                 match serde_json::from_str::<serde_json::Value>(&line) {
                     Ok(msg) => {
@@ -350,13 +287,6 @@ where
     }
 }
 
-// __drive_handshake
-// Input: one parsed inbound message and the reader context. Output: bool
-// (true only when this call JUST set the session id). Side-effects on ctx.
-// Control flow: when the message is the initialize ack (result carries
-// protocolVersion), send session/new. When it is the session/new ack (result
-// carries sessionId), store the id, flush any prompts queued before the session
-// was ready, and return true. Other messages are ignored and return false.
 fn __drive_handshake(msg: &serde_json::Value, ctx: &ReaderCtx) -> bool {
     let result: Option<&serde_json::Value> = msg.get("result");
     if let Some(sid) = result
@@ -382,10 +312,6 @@ fn __drive_handshake(msg: &serde_json::Value, ctx: &ReaderCtx) -> bool {
     false
 }
 
-// __flush_pending
-// Input: the reader context and the now-known session id. Output: none; drains
-// the pending-prompt queue, sending each as a session/prompt request with a
-// fresh id. Runs once when the session becomes ready.
 fn __flush_pending(ctx: &ReaderCtx, session_id: &str) {
     let queued: Vec<String> = match ctx.pending.lock() {
         Ok(mut q) => std::mem::take(&mut *q),
@@ -402,10 +328,6 @@ fn __flush_pending(ctx: &ReaderCtx, session_id: &str) {
     }
 }
 
-// __stderr_loop
-// Input: child stderr. Output: none (runs until EOF). Control flow: log each
-// line at warn so agent diagnostics surface in the app log. Bounded by stream
-// length, no recursion.
 fn __stderr_loop(stderr: ChildStderr) {
     let reader: BufReader<ChildStderr> = BufReader::new(stderr);
     for line in reader.lines() {
@@ -417,13 +339,8 @@ fn __stderr_loop(stderr: ChildStderr) {
     }
 }
 
-// __writer_loop
-// Input: message receiver and child stdin. Output: none (runs until channel
-// closes). Control flow: drain receiver, write each line + '\n', flush.
-// Exits when channel is closed (bounded by sender count, no recursion).
 fn __writer_loop(rx: Receiver<String>, mut stdin: ChildStdin) {
     while let Ok(line) = rx.recv() {
-        // Full raw wire dump (DEBUG-only, -v 4): outbound handshake/prompts.
         debug!("acp -> {}", line);
         let full_line: String = format!("{}\n", line);
         if let Err(e) = stdin.write_all(full_line.as_bytes()) {
@@ -438,9 +355,6 @@ fn __writer_loop(rx: Receiver<String>, mut stdin: ChildStdin) {
     debug!("writer thread exiting; channel closed");
 }
 
-// __frame_request
-// Input: numeric id, method name, and params Value. Output: a compact
-// JSON-RPC 2.0 request string. Control flow: serialize the object to JSON.
 fn __frame_request(id: u64, method: &str, params: serde_json::Value) -> String {
     serde_json::to_string(&serde_json::json!({
         "jsonrpc": "2.0",
@@ -451,10 +365,6 @@ fn __frame_request(id: u64, method: &str, params: serde_json::Value) -> String {
     .unwrap_or_default()
 }
 
-// __frame_prompt
-// Input: request id, the active session id, and prompt text. Output: a
-// session/prompt JSON-RPC request string. Control flow: build the params and
-// delegate to __frame_request.
 fn __frame_prompt(id: u64, session_id: &str, text: &str) -> String {
     let params: serde_json::Value = serde_json::json!({
         "sessionId": session_id,
@@ -463,9 +373,6 @@ fn __frame_prompt(id: u64, session_id: &str, text: &str) -> String {
     __frame_request(id, "session/prompt", params)
 }
 
-// __frame_notification
-// Input: method name and params Value. Output: a JSON-RPC 2.0 notification
-// string (no id field). Control flow: serialize the object.
 fn __frame_notification(method: &str, params: serde_json::Value) -> String {
     serde_json::to_string(&serde_json::json!({
         "jsonrpc": "2.0",
@@ -475,9 +382,6 @@ fn __frame_notification(method: &str, params: serde_json::Value) -> String {
     .unwrap_or_default()
 }
 
-// __frame_response
-// Input: request_id string and result Value. Output: a JSON-RPC 2.0 response
-// string. Control flow: serialize the object.
 fn __frame_response(id_str: &str, result: serde_json::Value) -> String {
     serde_json::to_string(&serde_json::json!({
         "jsonrpc": "2.0",
@@ -487,14 +391,6 @@ fn __frame_response(id_str: &str, result: serde_json::Value) -> String {
     .unwrap_or_default()
 }
 
-// __classify_session_update
-// Input: params object from a session/update notification. Output:
-// Some(AgentEvent) if the update should be exposed, None otherwise.
-// Control flow: extract update.sessionUpdate to determine the type, then read
-// fields defensively with .get().and_then() chains and sensible fallbacks.
-// Maps: agent_message_chunk -> StreamChunk, agent_thought_chunk -> Thought,
-// tool_call -> ToolStatus with pending, tool_call_update -> ToolStatus with
-// in_progress, unknown -> None.
 fn __classify_session_update(params: &serde_json::Value) -> Option<AgentEvent> {
     let update: &serde_json::Value = params.get("update")?;
     let session_update: Option<&str> = update.get("sessionUpdate").and_then(|su| su.as_str());
@@ -514,9 +410,6 @@ fn __classify_session_update(params: &serde_json::Value) -> Option<AgentEvent> {
     }
 }
 
-// __update_text
-// Input: a session/update `update` object. Output: its content text, reading
-// `content.text` then falling back to a bare string `content`, else empty.
 fn __update_text(update: &serde_json::Value) -> String {
     update
         .get("content")
@@ -527,10 +420,6 @@ fn __update_text(update: &serde_json::Value) -> String {
         .to_string()
 }
 
-// __tool_status
-// Input: a session/update `update` object and the default status to use when
-// the update omits one. Output: an AgentEvent::ToolStatus with id/title/status
-// read defensively.
 fn __tool_status(update: &serde_json::Value, default_status: &str) -> AgentEvent {
     let id: String = update
         .get("toolCallId")
@@ -550,14 +439,6 @@ fn __tool_status(update: &serde_json::Value, default_status: &str) -> AgentEvent
     AgentEvent::ToolStatus { id, title, status }
 }
 
-// __classify_message
-// Input: a parsed JSON-RPC message. Output: Some(AgentEvent) if the message
-// should be exposed, None if it should be ignored. Control flow: check for
-// method/id/result/error fields and route to appropriate event variant.
-// Handling:
-//   - method + id = request from agent (FsRead/FsWrite/PermissionRequest)
-//   - method no id = notification (StreamChunk for agent_message_chunk)
-//   - id + result/error = response (TurnEnded for stopReason, Failed for error)
 fn __classify_message(msg: serde_json::Value) -> Option<AgentEvent> {
     let has_method: bool = msg.get("method").is_some();
     let has_id: bool = msg.get("id").is_some();
@@ -792,7 +673,6 @@ mod tests {
             context_sent: Arc::new(AtomicBool::new(false)),
         };
 
-        // initialize ack -> should emit session/new, not touch session id yet.
         let init_ack = serde_json::json!({"id": 1, "result": {"protocolVersion": 1}});
         __drive_handshake(&init_ack, &ctx);
         let line1: String = rx.recv().unwrap();
@@ -800,7 +680,6 @@ mod tests {
         assert!(line1.contains("/tmp"));
         assert!(ctx.session_id.lock().unwrap().is_none());
 
-        // session/new ack -> store id and flush the queued prompt.
         let sess_ack = serde_json::json!({"id": 2, "result": {"sessionId": "sess_1"}});
         __drive_handshake(&sess_ack, &ctx);
         assert_eq!(ctx.session_id.lock().unwrap().as_deref(), Some("sess_1"));
@@ -822,9 +701,7 @@ mod tests {
         });
         let evt: Option<AgentEvent> = __classify_message(msg);
         match evt {
-            Some(AgentEvent::TurnEnded) => {
-                // success
-            }
+            Some(AgentEvent::TurnEnded) => {}
             _ => panic!("expected TurnEnded event"),
         }
     }

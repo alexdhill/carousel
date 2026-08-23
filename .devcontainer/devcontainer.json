@@ -1,0 +1,30 @@
+{
+    "name": "Carousel",
+    "build": {
+        "dockerfile": "Dockerfile",
+        "args": {
+            "USERNAME": "dev"
+        }
+    },
+    "features": {
+        "ghcr.io/devcontainers/features/rust:1": {},
+        "ghcr.io/devcontainers/features/git:1": {},
+        "ghcr.io/devcontainers/features/sshd:1": {},
+        "ghcr.io/devcontainers/features/github-cli:1": {},
+        "ghcr.io/stu-bell/devcontainer-features/claude-code:0": {}
+    },
+    "mounts": [
+        {
+            "source": "${localEnv:HOME}/.claude",
+            "target": "/home/dev/.claude",
+            "type": "bind"
+        },
+        {
+            "source": "${localEnv:HOME}/.gitconfig",
+            "target": "/home/dev/.gitconfig",
+            "type": "bind"
+        }
+    ],
+    "remoteUser": "dev",
+    "updateRemoteUserUID": true,
+}

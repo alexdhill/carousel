@@ -1,51 +1,33 @@
-// SlideNode.
-//
-// A slide owns a single `root` ElementNode — always a Group whose children
-// are the top-level elements on the canvas. Wrapping everything in a Group
-// keeps the tree uniform: commands that operate on "the slide's elements"
-// just walk root.children, and slide-level layout could later sit on the
-// root's geometry without a special case.
-
 use crate::deck::animation::AnimationEntry;
 use crate::deck::canvas::{self, Canvas};
 use crate::deck::element::ElementNode;
 use crate::deck::ids::{LayoutId, SlideId};
 use serde::{Deserialize, Serialize};
 
-// The element-tree ops and their result types now live on the shared
-// Canvas surface. Re-export so existing
-// `crate::deck::slide::{RemovedElement, InsertError}` import paths still
-// resolve.
 pub use crate::deck::canvas::{InsertError, RemovedElement};
 
-// TransitionKind — the between-slide animation played in presentation mode when
-// LEAVING this slide forward. `None` is a hard cut (the default everywhere).
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum TransitionKind {
     #[default]
     None,
     Fade,
     Push,
-    // Advanced (present.js plays them; fixed directions, no extra storage).
+
     Dissolve,
     Wipe,
     Flip,
     Cube,
 }
 
-// SlideTransition — the slide's outgoing transition (kind + timing). Presentation
-// only: it never affects the static render. `kind == None` means cut (and the
-// editor stores `metadata.transition = None` rather than `Some(None-kind)`).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SlideTransition {
     pub kind: TransitionKind,
     pub duration_ms: u32,
-    // CSS easing token (e.g. "ease-out"), shared with the animations panel presets.
+
     pub easing: String,
 }
 
 impl Default for SlideTransition {
-    // Sensible default for a freshly-picked transition: 400ms ease.
     fn default() -> Self {
         Self {
             kind: TransitionKind::None,
@@ -59,87 +41,45 @@ impl Default for SlideTransition {
 pub struct SlideMetadata {
     pub title: Option<String>,
     pub notes: Option<String>,
-    // Per-slide background (Option = inherit the theme's .slide background).
-    // Rendered as an inline style on the slide <section> by the serializer, and
-    // persisted via the manifest SlideEntry (synced like `animations`).
+
     #[serde(default)]
     pub background: Option<String>,
-    // Per-slide background image, drawn OVER the background fill. Holds a CSS
-    // image value — in practice `var(--asset-<id>)` referencing an imported
-    // asset. Option = no image (inherit/none). Persisted via the manifest like
-    // `background`.
+
     #[serde(default)]
     pub background_image: Option<String>,
-    // Outgoing presentation transition (Option = inherit the cut default).
-    // Persisted via the manifest SlideEntry, synced like `background`.
+
     #[serde(default)]
     pub transition: Option<SlideTransition>,
 }
 
-// SlideNode
-// Inputs at construction: id, layout_id, root (must be a Group).
-// `dirty` is set by commands when the slide changes; clears on save.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SlideNode {
     pub id: SlideId,
     pub layout_id: LayoutId,
     pub root: ElementNode,
     pub metadata: SlideMetadata,
-    // The slide's ordered animation timeline (Stage: animations). Order is
-    // play order; the cursor state machine derives steps from it. Persisted
-    // via the manifest SlideEntry, not the slide HTML.
+
     #[serde(default)]
     pub animations: Vec<AnimationEntry>,
-    // Editor alignment guides (Stage: saveable guides). Persisted via the
-    // manifest SlideEntry like `animations`; never part of the element tree, so
-    // they are absent from presentation / export / thumbnails by construction.
+
     #[serde(default)]
     pub guides: Vec<crate::deck::guide::Guide>,
     pub dirty: bool,
 }
 
 impl SlideNode {
-    // new
-    // Inputs: id, layout_id, a root ElementNode that must be a Group.
-    // Output: a SlideNode with default metadata and dirty=false.
-    // Errors: panics if the root is not a Group — slides are always
-    // group-rooted by the model invariant.
-    // is_root_id
-    // Inputs: an element id.
-    // Output: true if it matches the slide's root group.
     pub fn is_root_id(&self, id: &str) -> bool {
         self.root.id == id
     }
 
-    // find_element
-    // Inputs: an element id to locate.
-    // Output: an immutable reference to the matching ElementNode, or None.
-    // Dataflow: iterative depth-first search over the owned tree using an
-    // explicit stack. The outer loop is bounded by MAX_TREE_NODES.
     pub fn find_element<'a>(&'a self, id: &str) -> Option<&'a ElementNode> {
         canvas::find_element(&self.root, id)
     }
 
-    // find_element_mut
-    // Inputs: an element id to locate.
-    // Output: a mutable reference to the matching ElementNode, or None.
-    // Dataflow: same iterative DFS as find_element, but the stack stores
-    // mutable references. The borrow checker accepts the pop-then-push
-    // pattern because each child is a disjoint subtree.
     pub fn find_element_mut<'a>(&'a mut self, id: &str) -> Option<&'a mut ElementNode> {
         canvas::find_element_mut(&mut self.root, id)
     }
 
-    // remove_non_root_element
-    // Inputs: an element id; must not equal the slide root id.
-    // Output: the removed subtree + its parent id + its prior position, or
-    // None if the id is not present in the tree.
-    // Dataflow:
-    //   1. Iterative DFS records the path-of-indices from root.children to
-    //      the parent of the target (a Vec<usize>); the search itself is
-    //      immutable so the borrow checker is content.
-    //   2. With the path in hand, walk it mutably to land on the parent,
-    //      then call Vec::remove at the recorded index.
     pub fn remove_non_root_element(&mut self, id: &str) -> Option<RemovedElement> {
         assert!(
             self.root.id != id,
@@ -148,11 +88,6 @@ impl SlideNode {
         canvas::remove_non_root_element(&mut self.root, id)
     }
 
-    // insert_child
-    // Inputs: parent id, 0-indexed position, the node to insert (consumed).
-    // Output: Ok(()) on success.
-    // Errors: parent absent (NotFound), or position > parent.children.len()
-    // (OutOfRange).
     pub fn insert_child(
         &mut self,
         parent_id: &str,
@@ -162,10 +97,6 @@ impl SlideNode {
         canvas::insert_child(&mut self.root, parent_id, position, node)
     }
 
-    // invalidate_index
-    // Stage 3 has no per-slide index (see SPEC §5.6 — added in a later
-    // stage). The hook lives here now so commands can call it without
-    // conditional code; it becomes meaningful when the index is added.
     pub fn invalidate_index(&mut self) {}
 
     pub fn new(id: SlideId, layout_id: LayoutId, root: ElementNode) -> Self {
@@ -190,9 +121,6 @@ impl SlideNode {
     }
 }
 
-// SlideNode is an editable Canvas. The inherent methods above delegate to
-// the same free functions these defaults use, so concrete-SlideNode call
-// sites and `&mut dyn Canvas` holders share one implementation.
 impl Canvas for SlideNode {
     fn root(&self) -> &ElementNode {
         &self.root
@@ -219,7 +147,6 @@ mod tests {
 
     #[test]
     fn transition_kinds_round_trip_by_name() {
-        // Locks the wire form for every kind, including the advanced ones.
         for kind in [
             TransitionKind::None,
             TransitionKind::Fade,
@@ -238,7 +165,7 @@ mod tests {
             let back: SlideTransition = serde_json::from_str(&json).unwrap();
             assert_eq!(back.kind, kind);
         }
-        // A representative advanced variant serializes to its plain name.
+
         let json = serde_json::to_string(&TransitionKind::Cube).unwrap();
         assert_eq!(json, "\"Cube\"");
     }

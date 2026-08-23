@@ -1,14 +1,3 @@
-// Theme archive I/O — the `.slidetheme` bundle.
-//
-// A theme is the reusable styling region of a deck: theme_css, globals_css, and
-// the set of layout templates (+ display order), plus the asset bytes those
-// layouts reference. This module factors that region into its own ZIP archive
-// and its own serialize/parse path, reusing the bundle primitives
-// (BundleWriter/BundleReader), the layout-HTML serialize/parse, and the
-// content-addressed AssetRegistry. It mirrors `deck_io`'s main-thread/worker
-// split: `serialize_theme` builds owned bytes on the main thread; `write_theme`
-// streams them on the worker; `read_theme` + `deserialize_theme` reverse it.
-
 #![allow(dead_code)]
 
 use crate::bundle::deck_io::LayoutMeta;
@@ -28,23 +17,13 @@ pub const PATH_THEME_CSS: &str = "theme.css";
 pub const PATH_GLOBALS_CSS: &str = "globals.css";
 pub const PATH_ASSETS_INDEX: &str = "assets/index.json";
 const THEME_FORMAT_VERSION: &str = "1.0";
-// Defensive bound for the layout element-tree walk (house style).
+
 const MAX_TREE_NODES: usize = 100_000;
 
-// theme_layout_path
-// Inputs: a layout id.
-// Output: the canonical archive path for that layout's serialized HTML root,
-// `layouts/<id>.html`. (The theme archive's root is the theme region, so there
-// is no `theme/` prefix as in the deck bundle.)
 fn theme_layout_path(id: &str) -> String {
     format!("layouts/{id}.html")
 }
 
-// ThemeArchiveManifest
-// On-disk schema for the archive's theme.json: a format version (validated on
-// load like the deck manifest), the theme id + display name, and the layout
-// list in display order. Reuses the deck bundle's LayoutMeta shape.
-// Not `Eq`: LayoutMeta carries f64 guide positions.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 struct ThemeArchiveManifest {
     format_version: String,
@@ -55,8 +34,6 @@ struct ThemeArchiveManifest {
     layouts: Vec<LayoutMeta>,
 }
 
-// SerializedTheme
-// A complete `.slidetheme` archive's worth of file contents, all owned + Send.
 #[derive(Debug, Default)]
 pub struct SerializedTheme {
     pub theme_json: String,
@@ -67,12 +44,6 @@ pub struct SerializedTheme {
     pub assets_index_json: String,
 }
 
-// serialize_theme
-// Inputs: the live theme and the deck's asset registry.
-// Output: a SerializedTheme holding every archive file. Only the assets the
-// theme's layouts reference are collected (§4).
-// Errors: BundleError::Json on encode; MalformedManifest if a layout in
-// layout_order is missing from the map.
 pub fn serialize_theme(theme: &ThemeData, assets: &AssetRegistry) -> BundleResult<SerializedTheme> {
     let mut layout_metas: Vec<LayoutMeta> = Vec::with_capacity(theme.layout_order.len());
     let mut layout_files: BTreeMap<String, String> = BTreeMap::new();
@@ -88,8 +59,7 @@ pub fn serialize_theme(theme: &ThemeData, assets: &AssetRegistry) -> BundleResul
             background_image: layout.background_image.clone(),
             guides: layout.guides.clone(),
         });
-        // Reuse the slide serializer via a transient SlideNode carrying the
-        // layout's own background (a layout root is a Group, like a slide root).
+
         layout_files.insert(
             theme_layout_path(lid),
             serialize_slide(&layout.preview_slide()),
@@ -104,8 +74,6 @@ pub fn serialize_theme(theme: &ThemeData, assets: &AssetRegistry) -> BundleResul
     };
     let theme_json: String = serde_json::to_string_pretty(&manifest)?;
 
-    // Collect only the assets the layouts reference, into a theme-scoped
-    // registry that becomes assets/index.json + the asset bytes.
     let referenced: BTreeSet<String> = collect_layout_asset_ids(theme);
     let mut scoped: AssetRegistry = AssetRegistry::new_empty();
     let mut asset_files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
@@ -140,9 +108,6 @@ pub fn serialize_theme(theme: &ThemeData, assets: &AssetRegistry) -> BundleResul
     })
 }
 
-// write_theme
-// Inputs: a target BundleWriter, a SerializedTheme.
-// Output: side-effect; streams every entry. The caller calls writer.finish().
 pub fn write_theme(writer: &mut BundleWriter, src: &SerializedTheme) -> BundleResult<()> {
     writer.write_string(PATH_THEME_JSON, &src.theme_json)?;
     writer.write_string(PATH_THEME_CSS, &src.theme_css)?;
@@ -157,11 +122,6 @@ pub fn write_theme(writer: &mut BundleWriter, src: &SerializedTheme) -> BundleRe
     Ok(())
 }
 
-// read_theme
-// Inputs: a BundleReader on an open archive.
-// Output: a SerializedTheme. Optional files (theme.css, globals.css, assets)
-// absent → empty defaults, so partial archives still open.
-// Errors: MissingEntry on absent theme.json; version validated here.
 pub fn read_theme(reader: &mut BundleReader) -> BundleResult<SerializedTheme> {
     let theme_json: String = reader.read_string(PATH_THEME_JSON)?;
     let manifest: ThemeArchiveManifest = serde_json::from_str(&theme_json)?;
@@ -209,18 +169,10 @@ pub fn read_theme(reader: &mut BundleReader) -> BundleResult<SerializedTheme> {
     })
 }
 
-// deserialize_theme
-// Inputs: a SerializedTheme from read_theme.
-// Output: the parsed ThemeData plus an AssetRegistry holding only the theme's
-// assets (entries + bytes) for the importer to merge.
-// Errors: MalformedManifest / IncompatibleVersion / MissingEntry / SlideParse.
 pub fn deserialize_theme(src: SerializedTheme) -> BundleResult<(ThemeData, AssetRegistry)> {
     let manifest: ThemeArchiveManifest = serde_json::from_str(&src.theme_json)?;
     validate_format_version(&manifest.format_version)?;
 
-    // Rebuild layouts from the manifest list + per-layout HTML. An empty list
-    // (degenerate theme) falls back to the Default "blank" seed so the editor
-    // always has a layout to show.
     let (layouts, layout_order): (BTreeMap<_, _>, Vec<_>) = if manifest.layouts.is_empty() {
         let seed: ThemeData = ThemeData::default();
         (seed.layouts, seed.layout_order)
@@ -264,10 +216,6 @@ pub fn deserialize_theme(src: SerializedTheme) -> BundleResult<(ThemeData, Asset
     Ok((theme, assets))
 }
 
-// collect_layout_asset_ids
-// Inputs: the theme.
-// Output: the set of asset ids referenced by Image/Media elements across every
-// layout's element tree, in sorted (deterministic) order.
 fn collect_layout_asset_ids(theme: &ThemeData) -> BTreeSet<String> {
     let mut out: BTreeSet<String> = BTreeSet::new();
     for lid in &theme.layout_order {
@@ -278,9 +226,6 @@ fn collect_layout_asset_ids(theme: &ThemeData) -> BTreeSet<String> {
     out
 }
 
-// collect_node_assets
-// Inputs: a root ElementNode, the accumulating id set.
-// Output: side-effect; bounded DFS recording every Image/Media asset id.
 fn collect_node_assets(root: &ElementNode, out: &mut BTreeSet<String>) {
     let mut stack: Vec<&ElementNode> = Vec::with_capacity(16);
     stack.push(root);
@@ -312,9 +257,6 @@ mod tests {
     use crate::deck::{LayoutNode, ThemeData};
     use tempfile::TempDir;
 
-    // theme_with_image_layout
-    // Build (theme, registry) where one layout references a registered image and
-    // a second registered asset is left unreferenced (must NOT travel).
     fn theme_with_image_layout() -> (ThemeData, AssetRegistry, String) {
         let mut assets = AssetRegistry::new_empty();
         let used = assets.insert_blob(
@@ -345,8 +287,7 @@ mod tests {
     fn serialize_collects_only_referenced_assets() {
         let (theme, assets, used_id) = theme_with_image_layout();
         let s = serialize_theme(&theme, &assets).unwrap();
-        // The referenced asset's index mentions the used id; the stray does not
-        // travel (only one asset file present).
+
         assert!(s.assets_index_json.contains(&used_id));
         assert_eq!(s.asset_files.len(), 1);
         assert!(s.layout_files.keys().any(|k| k.contains("title")));
@@ -370,10 +311,10 @@ mod tests {
         assert_eq!(back_theme.globals_css, theme.globals_css);
         assert!(back_theme.layout_order.contains(&"title".to_string()));
         assert_eq!(back_theme.layouts["title"].name, "Title");
-        // Layout element tree survived the HTML round-trip.
+
         let root = &back_theme.layouts["title"].root;
         assert!(root.children.iter().any(|c| c.id == "el_img"));
-        // The referenced asset travelled with its bytes; the stray did not.
+
         assert_eq!(back_assets.assets.len(), 1);
         let entry = back_assets
             .find_by_id(&used_id)

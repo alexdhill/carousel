@@ -1,20 +1,3 @@
-// IoThread.
-//
-// SPEC §6.4 — saves and loads can take tens of milliseconds for large
-// decks; running them on the main (event-loop) thread would freeze the
-// editor. This module owns a dedicated worker thread that pulls IoRequest
-// values off an mpsc channel and posts IoResponse values to another mpsc
-// channel that the main thread drains. After each response is sent the
-// worker calls a caller-supplied `wake` closure (typically posting a Tao
-// UserEvent) so the main thread knows to look at the inbox.
-//
-// The worker is intentionally single-threaded: file I/O on the host disk
-// is sequential anyway, and a single worker keeps the response ordering
-// predictable (an Open immediately followed by a Save completes Open
-// first, then Save). Shutdown is implicit — dropping the IoThread closes
-// the request channel; the worker's recv() returns Err and the thread
-// exits.
-
 #![allow(dead_code)]
 
 use crate::bundle::deck_io::{read_serialized, write_serialized};
@@ -25,9 +8,6 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 use tracing::{debug, error, info};
 
-// IoRequest
-// Work items posted from the main thread to the worker. SerializedDeck
-// holds owned String/Vec<u8> only, so it crosses thread boundaries cheaply.
 #[derive(Debug)]
 pub enum IoRequest {
     Save {
@@ -37,8 +17,7 @@ pub enum IoRequest {
     Load {
         path: PathBuf,
     },
-    // Theme save/load — the standalone `.slidetheme` archive. SerializedTheme
-    // holds owned String/Vec<u8> only, like SerializedDeck.
+
     SaveTheme {
         serialized: SerializedTheme,
         target_path: PathBuf,
@@ -46,16 +25,13 @@ pub enum IoRequest {
     LoadTheme {
         path: PathBuf,
     },
-    // ExportHtml — write a prebuilt set of (relative path, bytes) files into a
-    // chosen folder. The bundle is computed on the main thread; this is just IO.
+
     ExportHtml {
         files: Vec<(String, Vec<u8>)>,
         dest_dir: PathBuf,
     },
 }
 
-// IoResponse
-// Results posted from the worker back to the main thread.
 #[derive(Debug)]
 pub enum IoResponse {
     Saved {
@@ -82,27 +58,12 @@ pub enum IoResponse {
     },
 }
 
-// IoThread
-// Owns the request-side Sender and the thread handle. The response
-// Receiver is held by the caller (typically attached to the Tao event
-// loop), which is why `spawn` takes a Sender<IoResponse> as an argument.
 pub struct IoThread {
     sender: Sender<IoRequest>,
     handle: Option<JoinHandle<()>>,
 }
 
 impl IoThread {
-    // spawn
-    // Inputs:
-    //   - responses: a Sender the worker uses to push every IoResponse.
-    //   - wake: a closure the worker calls after each send so the main
-    //     thread's event loop notices the inbox. Typically posts a
-    //     UserEvent::IoResponse on the Tao event-loop proxy.
-    // Output: an IoThread holding the request Sender and the JoinHandle.
-    // Errors: std::io::Error if the OS refuses to start a thread (fatal;
-    // the caller has no recovery beyond aborting startup).
-    // Dataflow: build the request channel; spawn a worker that loops on
-    // recv(), processes each request, and forwards the response + wake.
     pub fn spawn(
         responses: Sender<IoResponse>,
         wake: Box<dyn Fn() + Send + 'static>,
@@ -118,25 +79,13 @@ impl IoThread {
         })
     }
 
-    // submit
-    // Inputs: an IoRequest.
-    // Output: Ok(()) if the request was enqueued; Err(()) if the worker
-    // has already exited (channel closed). The original request is
-    // dropped on the error path because every Stage 7 caller treats this
-    // condition as fatal-but-non-recoverable and just logs.
     pub fn submit(&self, request: IoRequest) -> Result<(), ()> {
         self.sender.send(request).map_err(|_| ())
     }
 }
 
 impl Drop for IoThread {
-    // drop
-    // Inputs: &mut self.
-    // Output: side-effect; close the request channel (drops Sender) so
-    // the worker's recv() returns Err and the loop exits. Then join the
-    // thread so the OS resources are cleaned up before the process exits.
     fn drop(&mut self) {
-        // Closing the channel signals shutdown.
         let _ = std::mem::replace(&mut self.sender, mpsc::channel().0);
         if let Some(h) = self.handle.take()
             && let Err(e) = h.join()
@@ -146,12 +95,6 @@ impl Drop for IoThread {
     }
 }
 
-// worker_loop
-// Inputs: the request Receiver, the response Sender, and the wake closure.
-// Output: returns when the request channel closes (Sender dropped).
-// Dataflow: loop pull -> dispatch -> send response -> wake. Caps the
-// upper bound on iterations to a defensively large number so a runaway
-// producer cannot loop forever.
 fn worker_loop(
     requests: Receiver<IoRequest>,
     responses: Sender<IoResponse>,
@@ -178,10 +121,6 @@ fn worker_loop(
     error!("IoThread: MAX_ITERATIONS hit; this should never happen");
 }
 
-// handle_request
-// Inputs: a single IoRequest.
-// Output: the corresponding IoResponse. Never panics; every error path
-// produces an IoResponse::Error carrying the operation tag.
 fn handle_request(request: IoRequest) -> IoResponse {
     match request {
         IoRequest::Save {
@@ -198,9 +137,6 @@ fn handle_request(request: IoRequest) -> IoResponse {
     }
 }
 
-// save_theme_blocking
-// Inputs: a SerializedTheme and target path.
-// Output: ThemeSaved or Error. Mirrors save_blocking using the theme writer.
 fn save_theme_blocking(serialized: SerializedTheme, target_path: PathBuf) -> IoResponse {
     debug!(target = %target_path.display(), "io: save theme begin");
     let mut writer: BundleWriter = match BundleWriter::create(&target_path) {
@@ -217,9 +153,6 @@ fn save_theme_blocking(serialized: SerializedTheme, target_path: PathBuf) -> IoR
     IoResponse::ThemeSaved { path: target_path }
 }
 
-// load_theme_blocking
-// Inputs: path to a `.slidetheme` file.
-// Output: ThemeLoaded or Error. Mirrors load_blocking using the theme reader.
 fn load_theme_blocking(path: PathBuf) -> IoResponse {
     debug!(path = %path.display(), "io: load theme begin");
     let mut reader: BundleReader = match BundleReader::open(&path) {
@@ -234,15 +167,6 @@ fn load_theme_blocking(path: PathBuf) -> IoResponse {
     IoResponse::ThemeLoaded { serialized, path }
 }
 
-// save_blocking
-// Inputs: serialized deck and target path.
-// Output: Saved or Error response.
-// Dataflow: open BundleWriter (creates the .tmp file) -> stream entries
-// -> finish (commits atomically). Any error returns IoResponse::Error.
-// export_html_blocking
-// Inputs: the (relative path, bytes) files and the destination folder.
-// Output: IoResponse::Exported on success, IoResponse::Error otherwise.
-// Dataflow: create the dest dir, then each file's parent dir, then write bytes.
 fn export_html_blocking(files: Vec<(String, Vec<u8>)>, dest_dir: PathBuf) -> IoResponse {
     if let Err(e) = std::fs::create_dir_all(&dest_dir) {
         return IoResponse::Error {
@@ -289,10 +213,6 @@ fn save_blocking(serialized: SerializedDeck, target_path: PathBuf) -> IoResponse
     IoResponse::Saved { path: target_path }
 }
 
-// load_blocking
-// Inputs: path to a .slidedeck file.
-// Output: Loaded or Error response.
-// Dataflow: open BundleReader -> read_serialized -> return SerializedDeck.
 fn load_blocking(path: PathBuf) -> IoResponse {
     debug!(path = %path.display(), "io: load begin");
     let mut reader: BundleReader = match BundleReader::open(&path) {
@@ -431,7 +351,7 @@ mod tests {
         let io = IoThread::spawn(rtx, Box::new(|| {})).unwrap();
         let deck = Deck::sample();
         let serialized = serialize_deck(&deck).unwrap();
-        // A directory we cannot create on macOS without privileges.
+
         io.submit(IoRequest::Save {
             serialized,
             target_path: PathBuf::from("/this/should/not/exist/anywhere/foo.slidedeck"),
@@ -447,8 +367,7 @@ mod tests {
     fn dropping_io_thread_exits_worker_cleanly() {
         let (rtx, _rrx) = mpsc::channel::<IoResponse>();
         let io = IoThread::spawn(rtx, Box::new(|| {})).unwrap();
-        // Drop ends the test — the Drop impl joins the worker thread; if
-        // it hangs the test will hang (and CI catches it).
+
         drop(io);
     }
 }

@@ -1,4 +1,3 @@
-// Deck export pipelines (playable HTML folder; per-stage PDF).
 pub mod chromium;
 pub mod fonts;
 pub mod html;

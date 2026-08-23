@@ -1,35 +1,16 @@
-// Landing-window IPC payloads.
-//
-// A small protocol between Rust and the dedicated landing webview
-// (`assets/landing.*`), independent of the editor's IpcMessage envelope.
-// Inbound (JS -> Rust) controls are internally tagged on `kind` (like
-// PresentInbound) so landing.js posts a flat object, e.g.
-// {"kind":"OpenTemplate","theme_id":"light","layout_id":"hero"}. Outbound
-// (Rust -> JS) is the single LandingData payload, serialized and delivered via
-// `window.__landing.receive(...)`.
-
 use serde::{Deserialize, Serialize};
 
-// LandingInbound
-// Controls the landing webview posts: a one-shot Ready (asking for data), the
-// three Open intents, and Cancel.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "kind")]
 pub enum LandingInbound {
     Ready,
     OpenTemplate { theme_id: String, layout_id: String },
     OpenRecent { path: String },
+    ForgetRecent { path: String },
     OpenDefault,
     Cancel,
 }
 
-// ThumbData
-// A self-contained render of a deck's first slide for the recents card. `html`
-// is the slide `<section>` fragment; `css` is the base + theme + globals sheet;
-// `asset_vars_css` maps `--asset-<id>` custom properties to inlined data-URI
-// images. `width`/`height` are the slide's native pixel dimensions, which the
-// card scales down. Mounted in a shadow root so `:host`-scoped theme variables
-// resolve exactly as they do in the editor.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ThumbData {
     pub html: String,
@@ -39,9 +20,6 @@ pub struct ThumbData {
     pub height: u32,
 }
 
-// LandingRecent
-// One recents card: bundle path, display title, last-modified unix seconds, and
-// a best-effort first-slide thumbnail (None when the bundle cannot be read).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct LandingRecent {
     pub path: String,
@@ -50,9 +28,6 @@ pub struct LandingRecent {
     pub thumb: Option<ThumbData>,
 }
 
-// LandingTemplate
-// One layout card: theme + layout identity, display names, and the three
-// palette colours the card paints its proportioned preview with.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct LandingTemplate {
     pub theme_id: String,
@@ -64,9 +39,6 @@ pub struct LandingTemplate {
     pub accent: String,
 }
 
-// LandingData
-// The payload sent to the landing webview on Ready: the recents row and the
-// layouts row.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct LandingData {
     pub recents: Vec<LandingRecent>,
@@ -92,6 +64,9 @@ mod tests {
                 layout_id: "hero".into(),
             },
             LandingInbound::OpenRecent {
+                path: "/x.slidedeck".into(),
+            },
+            LandingInbound::ForgetRecent {
                 path: "/x.slidedeck".into(),
             },
             LandingInbound::OpenDefault,

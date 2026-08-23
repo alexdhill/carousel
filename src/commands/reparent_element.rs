@@ -1,26 +1,3 @@
-// ReparentElement command.
-//
-// Stage 9 — Object Panel drag-and-drop. Moves an element from its current
-// parent to a target (parent, position) pair within the same slide,
-// preserving the element's subtree wholesale. Used by:
-//   - Drag-to-reorder within a parent (source parent == target parent).
-//   - Drag into a group (target parent is a Group element).
-//   - Drag out of a group to the slide root.
-//
-// `new_position` is interpreted as the post-removal index in the target
-// parent's children list. Callers moving within the same parent must
-// pre-adjust their position by -1 when the desired insertion point lies
-// after the source position. Doing the adjustment in the caller keeps the
-// command's semantics straightforward (it just calls remove + insert).
-//
-// Effects on render: because the slide HTML serialiser assigns z-index
-// from sibling positions, a reparent shifts the z-stack of every sibling
-// between source and target. Computing precise patches is fiddly; this
-// command emits none and sets `requires_remount = true`, letting the
-// dispatcher trigger a fresh MountSlide. For Stage 9 slide sizes the
-// remount cost is negligible; future optimisation may replace the remount
-// with targeted z-index + Insert/Remove patches.
-
 use crate::commands::{Command, CommandError, CommandOutput, resolve_canvas_mut};
 use crate::deck::canvas::{InsertError, RemovedElement};
 use crate::deck::element::ElementNode;
@@ -35,25 +12,6 @@ pub struct ReparentElement {
 }
 
 impl Command for ReparentElement {
-    // apply
-    // Inputs: &self, &mut Deck.
-    // Output: CommandOutput with no patches (the dispatcher remounts the
-    // active slide), an inverse ReparentElement carrying the prior parent
-    // + position, and the slide marked dirty.
-    // Errors:
-    //   SlideNotFound       — slide_id absent.
-    //   InvalidOperation    — moving the slide root, moving an element
-    //                         under itself, or moving into a non-existent
-    //                         parent.
-    //   ElementNotFound     — element_id absent in the tree.
-    // Dataflow:
-    //   1. Refuse to move the slide root.
-    //   2. Verify the target parent exists and is not a descendant of
-    //      element_id (cycle check).
-    //   3. Snapshot the source (parent_id, position) for the inverse.
-    //   4. Remove the element from its current parent.
-    //   5. Insert it into the target parent at new_position.
-    //   6. Build the inverse command.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.target.id().is_empty(),
@@ -84,16 +42,11 @@ impl Command for ReparentElement {
                 self.element_id, self.new_parent_id,
             )));
         }
-        // Verify target parent exists at all.
+
         if canvas.find_element(&self.new_parent_id).is_none() {
             return Err(CommandError::ElementNotFound(self.new_parent_id.clone()));
         }
 
-        // Capture coordinate frames BEFORE mutation so the moved element keeps
-        // its visual position/size when its coordinates switch parent spaces
-        // (each parent's children are stored in that parent's local, scaled
-        // space). Converting here is what makes a drag into/out of a scaled
-        // group not teleport the element; the subsequent relayout shrink-wraps.
         let move_frame = crate::deck::group_layout::element_frame(canvas.root(), &self.element_id);
         let np_frame = crate::deck::group_layout::element_frame(canvas.root(), &self.new_parent_id);
         let old_size: (f64, f64) = canvas
@@ -122,8 +75,7 @@ impl Command for ReparentElement {
                     ))
                 }
             })?;
-        // Convert the moved element into its new parent's coordinate space and
-        // re-fit the affected groups. No patches: the command remounts.
+
         if let (Some((mx, my, ms_anc, _)), Some((px, py, ps_anc, ps_own))) = (move_frame, np_frame)
         {
             let content_scale: f64 = {
@@ -173,11 +125,6 @@ impl Command for ReparentElement {
     }
 }
 
-// subtree_contains
-// Inputs: a node, a candidate id to search for.
-// Output: true if `candidate` equals the node itself or matches any
-// descendant id. Used as the cycle-detection check before reparenting.
-// Dataflow: iterative DFS over the node's children with a depth cap.
 fn subtree_contains(node: &ElementNode, candidate: &str) -> bool {
     assert!(!candidate.is_empty(), "subtree_contains: empty candidate");
     const MAX_DEPTH_FRAMES: usize = 4_096;
@@ -251,7 +198,6 @@ mod tests {
 
     #[test]
     fn move_across_parents_relocates_subtree() {
-        // Build: root -> [text_a, group_g -> [text_g_inner]].
         let inner = text_element("el_inner", "g");
         let group = group_element("el_group", vec![inner]);
         let outer = text_element("el_a", "a");
@@ -280,7 +226,6 @@ mod tests {
 
     #[test]
     fn reparent_into_group_shrinkwraps_and_preserves_position() {
-        // root -> [ a(200,100,20,10), g(@50,50) -> [ b(0,0,30,30) ] ]
         let mut a = text_element("el_a", "a");
         a.geometry.x = 200.0;
         a.geometry.y = 100.0;
@@ -313,13 +258,13 @@ mod tests {
 
         let sid: SlideId = "s".into();
         let g = deck.slides[&sid].find_element("el_group").unwrap();
-        // bbox of {b(0,0,30,30), a(150,50,20,10)} -> 170 x 60.
+
         assert_eq!(g.geometry.width, 170.0);
         assert_eq!(g.geometry.height, 60.0);
-        assert_eq!(g.geometry.x, 50.0); // origin unchanged (min was 0,0)
+        assert_eq!(g.geometry.x, 50.0);
         let a = g.children.iter().find(|c| c.id == "el_a").unwrap();
-        assert_eq!(a.geometry.x, 150.0); // 200 - 50 group origin
-        assert_eq!(a.geometry.y, 50.0); // 100 - 50
+        assert_eq!(a.geometry.x, 150.0);
+        assert_eq!(a.geometry.y, 50.0);
     }
 
     #[test]
@@ -356,7 +301,6 @@ mod tests {
 
     #[test]
     fn moving_element_under_itself_is_invalid() {
-        // Build: root -> [group_g -> [text_inner]].
         let inner = text_element("el_inner", "x");
         let group = group_element("el_group", vec![inner]);
         let root = group_element("el_root", vec![group]);

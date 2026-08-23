@@ -1,13 +1,3 @@
-// InsertElement command.
-//
-// SPEC §9.3 (element lifecycle). Inserts a complete ElementNode subtree
-// under a parent at a specific position. Used as a real command (tool
-// palette → insert shape) and as the inverse of RemoveElement.
-//
-// The emitted patch is `Patch::InsertElement { parent_id, position, html }`
-// where `html` is the serialized form of `self.node`. The JS host calls
-// the HTML parser to materialize the subtree into the shadow root.
-
 use crate::commands::remove_element::RemoveElementCommand;
 use crate::commands::{Command, CommandError, CommandOutput, resolve_canvas_mut};
 use crate::deck::canvas::InsertError;
@@ -25,16 +15,6 @@ pub struct InsertElement {
 }
 
 impl Command for InsertElement {
-    // apply
-    // Inputs: &self, &mut Deck.
-    // Output: CommandOutput with an InsertElement patch and a
-    // RemoveElementCommand inverse keyed on the inserted node's id.
-    // Errors:
-    //   SlideNotFound      — slide_id absent
-    //   ElementNotFound    — parent_id absent in the tree
-    //   InvalidOperation   — position out of range
-    // Dataflow: locate slide -> clone node into the tree at (parent, pos)
-    // -> serialize the inserted node -> build patch + inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.target.id().is_empty(),

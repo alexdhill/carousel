@@ -1,79 +1,42 @@
-// host.js
-//
-// Webview-side of the IPC bridge plus the editor's interaction loop.
-//
-// Stage 5 wires:
-//   - mousedown/mousemove/mouseup on the viewport, with shadow-DOM
-//     composedPath to identify the element under the cursor.
-//   - A 3px drag threshold separating click from drag.
-//   - Optimistic CSS transform during drag (no layout thrash).
-//   - rAF-throttled ElementDragged IPC (~one message per frame).
-//   - SetSelection handler that draws selection boxes in the host's
-//     #selection-overlay container (not inside the shadow root).
-//   - Selection overlay reposition during drag.
-
 (function () {
     "use strict";
 
-    // ---------- state ----------
     let currentShadow = null;
     let currentSlideHost = null;
-    // Pixel-grid snapping: session-only, never persisted or sent to Rust.
-    // Read into the snap engine's opts.gridEnabled each gesture move.
+
     let gridEnabled = false;
-    // Which editor region last received interaction; drives delete/copy/cut
-    // targeting. One of "objects" | "preview" | "navigator". Default preview.
+
     let focusRegion = "preview";
     const FOCUS_CONTAINERS = {
         objects: "object-panel",
         preview: "viewport-container",
         navigator: "thumbnail-row",
     };
-    // Crop mode: holds { elementId, assetId, mask, natural, state, preStyle }
-    // while an image is being cropped. null outside crop mode. The committed
-    // element is never mutated during the session — cancel is a clean teardown.
+
     let cropState = null;
     let cropPan = null;
     let cropResize = null;
     let dragState = null;
     let pendingDrag = null;
     let dragRafScheduled = false;
-    // Marquee (drag-to-select) session, null when idle. Armed on a background
-    // press; becomes active once the pointer crosses DRAG_THRESHOLD.
+
     let marquee = null;
     let currentSelectionIds = [];
-    // slideSelected — true only when the slide itself is the selection (an
-    // explicit thumbnail click), distinct from "nothing selected". Clicking
-    // negative space (slide background, around the thumbnails) leaves both this
-    // and the element selection empty, so nothing is highlighted. Managed by the
-    // click handlers, NOT inferred from an empty element selection.
+
     let slideSelected = false;
-    // Slide zoom. "fit" recomputes a width-fit scale on every layout change;
-    // "manual" pins zoomManualPct (50–250, stepped by 10). The viewport's CSS
-    // transform is the single source of truth read back by getViewportScale.
+
     let zoomMode = "fit";
     let zoomManualPct = 100;
     const ZOOM_MIN = 50;
     const ZOOM_MAX = 250;
     const ZOOM_STEP = 10;
-    // Pan offset (screen px) applied as a translate alongside the zoom scale.
-    // Clamped so the slide edge never pulls past the pane edge; always 0 when
-    // the scaled slide fits the pane (so panning has no effect when fitted).
+
     let panX = 0;
     let panY = 0;
-    // Active canvas tool: "select" (default) or "hand" (drag pans, no select).
+
     let activeTool = "select";
     let panSession = null;
-    // Rulers & guides. Guides are saveable (persisted per slide/layout on the
-    // Rust side) and editor-only — they live outside the element tree, so they
-    // never appear in presentation/export. The active canvas's guides arrive via
-    // GuidesUpdate: `guideOwn` are this canvas's editable guides, `guideInherited`
-    // are its layout's guides (read-only on a slide; empty when editing a layout).
-    // A guide is { id, index, orient: "h"|"v", pos } where pos is in slide pixels
-    // (0 at the slide's top-left). `id` is "g"+index (own) / "gi"+index
-    // (inherited): stable across the post-commit re-hydration so a selection
-    // survives a move. Horizontal guides come from the top ruler (move in Y),
-    // vertical from the left ruler (move in X).
+
     let rulersOn = false;
     const RULER = 18;
     let guideOwn = [];
@@ -81,12 +44,9 @@
     let selectedGuideId = null;
     let guideDragSession = null;
     let guideSeq = 0;
-    // focusChain — group ids the editor has entered (empty = top level). A
-    // click resolves to the deepest focused group's child; double-click drills.
+
     let focusChain = [];
 
-    // elementChain — the data-element-id ancestry of a node, innermost→outermost,
-    // bounded by .slide-host.
     function elementChain(node) {
         const out = [];
         let n = node;
@@ -103,66 +63,42 @@
         }
         return out;
     }
-    // pendingDragEnds: id -> DOM node. When mouseup fires we keep the
-    // optimistic transform on each dragged element so there is no visible flash
-    // between the transform clearing and the absolute-position patch landing.
-    // Each entry's transform is removed inside applyOnePatch the moment a
-    // SetStyle(left|top) patch for that id arrives. A safety timeout clears any
-    // stragglers after PENDING_TRANSFORM_TIMEOUT_MS. A map (not a single slot)
-    // so a multi-select drag can hold every moved element at once.
+
     const pendingDragEnds = Object.create(null);
-    // textEditState: non-null while a text element is being edited inline
-    // (double-click). Holds the element id, the contenteditable DOM node,
-    // its text at edit-start (for cancel), and the keydown/blur listeners
-    // so they can be detached on finish. See beginTextEdit / finishTextEdit.
+
     let textEditState = null;
 
     const DRAG_THRESHOLD = 3;
     const MAX_BATCH_ITER = 100000;
     const PENDING_TRANSFORM_TIMEOUT_MS = 200;
-    // Resizable panes (session-only). Canvas floor captured once at launch =
-    // its size in the default spawn window; panes may grow only into the spare
-    // room a larger window provides. Mins are the CSS defaults; fixed maxes are
-    // 750 (side panes) / 500 (thumbs). See resizable-panes spec.
+
     let canvasMinW = 0;
     let canvasMinH = 0;
     const PANE_MIN = { objects: 240, inspector: 300, thumbs: 160 };
     const PANE_MAX = { objects: 750, inspector: 750, thumbs: 500 };
     let paneDragSession = null;
-    // assetBlobCache: asset_id -> { url: blob URL, media_type } so the
-    // slide's CSS custom properties can resolve to image URLs.
-    // assetVarStyleEl: the <style> node injected into the active shadow
-    // root that maps :host { --asset-<id>: url(<blob-url>); }.
+
     const assetBlobCache = Object.create(null);
     let assetVarStyleEl = null;
-    // Deck-wide globals CSS (Stage 11). Injected into every shadow root —
-    // the viewport mount and every thumbnail — between theme CSS and the
-    // asset-vars block. Refreshed by MountSlide / LayoutListUpdate.
+
     let currentGlobalsCss = "";
-    // The active editor mode ("slide" | "layout"), echoed by the Rust side
-    // via SetMode. Drives body[data-mode] and which list the row shows.
+
     let currentMode = "slide";
-    // The immutable built-in @keyframes library (delivered once via Configure)
-    // injected into every shadow root for forthcoming playback.
+
     let builtinKeyframesCss = "";
-    // The effect catalog (from Configure): the single source for the add-menu
-    // and per-bar effect picker.
+
     let animationCatalog = [];
-    // The active slide's animation timeline (from SlideAnimationsUpdate); the
-    // animations panel filters this by the selected id and renders a bar stack.
+
     let slideAnimations = [];
-    // animation_id -> true while its bar is expanded (survives refreshes).
+
     const animExpanded = {};
-    // Guards the editor build preview so it cannot re-enter / double-restore.
+
     let animPreviewActive = false;
-    // The active slide's inspector data (from SlideInspectorUpdate); rendered in
-    // the Slide box when nothing is selected in slide mode.
+
     let slideInspectorData = null;
-    // The active layout's background (from LayoutListUpdate); feeds the Slide
-    // box's Fill/Image controls when editing a layout in layout mode.
+
     let layoutBgData = null;
 
-    // ---------- envelope id ----------
     function newId() {
         if (window.crypto && typeof window.crypto.randomUUID === "function") {
             return window.crypto.randomUUID();
@@ -170,12 +106,6 @@
         return "js_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
     }
 
-    // ---------- mounting ----------
-    // mountSlide
-    // Inputs: slideId, slideHtml, themeCss.
-    // Output: side-effect; replaces #viewport's slide-host with a fresh
-    // div whose shadow root contains theme CSS + slide HTML. Caches the
-    // shadow root and host for the selection overlay + patch applier.
     function mountSlide(slideId, slideHtml, themeCss, globalsCss) {
         const prevSlideId = currentSlideHost ? currentSlideHost.dataset.slideId : null;
         if (typeof globalsCss === "string") {
@@ -186,22 +116,13 @@
             console.error("mountSlide: #viewport not found");
             return;
         }
-        // A remount replaces the shadow DOM, so any in-progress text edit
-        // is referencing a node that is about to be discarded. Abandon the
-        // session silently (the node is gone; there is nothing to commit).
+
         textEditState = null;
         const host = document.createElement("div");
         host.className = "slide-host";
         host.dataset.slideId = slideId;
         const shadow = host.attachShadow({ mode: "open" });
-        // Three top-level children inside the shadow root:
-        //   <style id="theme-css">...</style>     theme tokens
-        //   <style id="asset-vars">...</style>    --asset-* → url(blob:)
-        //   ...slide HTML...
-        // The asset-vars block is rebuilt by refreshAssetVarStyle() so
-        // image elements (whose inline_styles set
-        //   background-image: var(--asset-<id>);
-        // ) resolve to actual blob URLs.
+
         shadow.innerHTML =
             "<style>" +
             themeCss +
@@ -213,9 +134,7 @@
             builtinKeyframesCss +
             "</style>" +
             '<style id="asset-vars"></style>' +
-            // Edit-mode only: reveal content positioned beyond the slide bounds
-            // (the canvas scrim greys it). Present/export/thumbnails omit this,
-            // so the theme's .slide overflow:hidden crops them.
+
             '<style id="edit-overflow">.slide{overflow:visible}</style>' +
             slideHtml;
         viewport.replaceChildren(host);
@@ -223,27 +142,17 @@
         currentSlideHost = host;
         assetVarStyleEl = shadow.getElementById("asset-vars");
         refreshAssetVarStyle();
-        // A remount of the SAME slide (e.g. toggling a morph transition) keeps
-        // the selection and redraws its overlay on the fresh nodes. Only a
-        // switch to a different slide drops the selection.
+
         if (prevSlideId === slideId && currentSelectionIds.length > 0) {
             updateSelectionOverlay();
         } else {
             currentSelectionIds = [];
             clearSelectionOverlay();
         }
-        // Re-apply the current zoom to the fresh host (fit recomputes for the
-        // new slide's dimensions).
+
         applyZoom();
     }
 
-    // ingestAssetPayload
-    // Inputs: an AssetPayload-shaped object { asset_id, media_type,
-    // content_base64 }.
-    // Output: side-effect; decodes the base64 bytes into a Blob,
-    // creates a URL.createObjectURL handle, caches under asset_id.
-    // Replacing an existing entry revokes the prior blob URL so we
-    // don't leak.
     function ingestAssetPayload(payload) {
         if (!payload || !payload.asset_id || !payload.content_base64) {
             return;
@@ -260,7 +169,7 @@
             try {
                 URL.revokeObjectURL(prior.url);
             } catch (_e) {
-                /* noop */
+
             }
         }
         assetBlobCache[payload.asset_id] = {
@@ -270,16 +179,11 @@
         };
     }
 
-    // assetFilename
-    // Inputs: an asset id. Output: its original filename, or "" when unknown.
     function assetFilename(assetId) {
         const entry = assetBlobCache[assetId];
         return (entry && entry.original_filename) || "";
     }
 
-    // base64ToUint8Array
-    // Inputs: a standard-alphabet base64 string.
-    // Output: a Uint8Array of the decoded bytes, or null on failure.
     function base64ToUint8Array(b64) {
         try {
             const binary = window.atob(b64);
@@ -295,13 +199,6 @@
         }
     }
 
-    // refreshAssetVarStyle
-    // Inputs: none (reads assetBlobCache + currentShadow).
-    // Output: side-effect; rewrites the asset-vars <style> tag's text
-    // content so every cached asset id maps to its current blob URL.
-    // Dataflow: build a single :host { ... } block listing every entry
-    // in assetBlobCache. Re-runs whenever the cache changes OR a new
-    // shadow root is mounted.
     function refreshAssetVarStyle() {
         if (!assetVarStyleEl) {
             return;
@@ -309,12 +206,6 @@
         assetVarStyleEl.textContent = buildAssetVarCss();
     }
 
-    // buildAssetVarCss
-    // Inputs: none (reads assetBlobCache).
-    // Output: a :host { --asset-<id>: url(blob:…); … } CSS string, or
-    // "" when no assets are cached. Shared by the viewport's
-    // asset-vars <style> and every thumbnail's shadow root so image
-    // elements resolve identically everywhere.
     function buildAssetVarCss() {
         const keys = Object.keys(assetBlobCache);
         if (keys.length === 0) {
@@ -331,9 +222,7 @@
             if (!entry || !entry.url) {
                 continue;
             }
-            // CSS custom property names allow alphanumeric + hyphen +
-            // underscore. asset_ids are produced by the Rust side as
-            // "asset_<hex>" so they pass cleanly without escaping.
+
             parts.push("  --asset-" + id + ": url(" + entry.url + ");");
             iter += 1;
         }
@@ -341,14 +230,6 @@
         return parts.join("\n");
     }
 
-    // getViewportScale
-    // Inputs: none (reads #viewport's computed transform).
-    // Output: the horizontal scale factor of the viewport's CSS transform
-    // (1.0 when no transform is set). Used to convert window-CSS-pixel
-    // drag deltas into slide-coordinate-pixel deltas so the optimistic
-    // transform and the absolute-position commit agree.
-    // Dataflow: parses `matrix(a, b, c, d, e, f)` from getComputedStyle;
-    // `a` is scaleX.
     function getViewportScale() {
         const viewport = document.getElementById("viewport");
         if (!viewport) {
@@ -376,12 +257,6 @@
         return a;
     }
 
-    // ---------- slide zoom ----------
-    // computeFitScale
-    // Output: scale that fits the slide width inside the canvas pane (with a
-    // little breathing room), or null when the slide/pane is not measurable.
-    // The slide-host's offsetWidth is its UNSCALED layout width (the CSS
-    // transform does not affect layout boxes), so it is the true slide width.
     function computeFitScale() {
         const stage = document.getElementById("viewport-container");
         const host = currentSlideHost;
@@ -396,9 +271,6 @@
         return avail / w;
     }
 
-    // effectiveZoomScale
-    // Output: the scale to apply — the fit scale in "fit" mode (falling back to
-    // the manual pct if unmeasurable), else the manual pct as a fraction.
     function effectiveZoomScale() {
         if (zoomMode === "fit") {
             const f = computeFitScale();
@@ -409,13 +281,6 @@
         return zoomManualPct / 100;
     }
 
-    // applyZoom
-    // Output: side-effect; writes the viewport transform, updates the readout
-    // ("Fit" or "NN%"), and re-syncs the selection overlay (which is measured
-    // in screen pixels and so must follow the scale).
-    // panBounds — max |pan| on each axis = half the overflow of the scaled
-    // slide past the pane (the viewport is centred, so it can shift each way by
-    // that much). Zero when the slide fits → panning is a no-op when fitted.
     function panBounds() {
         const stage = document.getElementById("viewport-container");
         const host = currentSlideHost;
@@ -463,10 +328,6 @@
         renderCanvasScrim();
     }
 
-    // setZoomFit / zoomStep
-    // setZoomFit returns to width-fit. zoomStep leaves fit (snapping the fit
-    // percentage to the nearest 10 first so steps stay round) and nudges the
-    // manual zoom by ±ZOOM_STEP, clamped to [ZOOM_MIN, ZOOM_MAX].
     function setZoomFit() {
         zoomMode = "fit";
         panX = 0;
@@ -492,9 +353,6 @@
         applyZoom();
     }
 
-    // ---------- hand / pan tool ----------
-    // setTool — switch between "select" and "hand". Updates the toolbar pressed
-    // state and the canvas cursor (grab in hand mode).
     function setTool(name) {
         activeTool = name === "hand" ? "hand" : "select";
         const sel = document.getElementById("tool-select");
@@ -531,10 +389,6 @@
         window.removeEventListener("mouseup", onPanMouseUp);
     }
 
-    // ---------- patch applier ----------
-    // findElement
-    // Inputs: an element id.
-    // Output: the matching DOM Element inside currentShadow, or null.
     function findElement(id) {
         if (!currentShadow) {
             return null;
@@ -543,9 +397,6 @@
         return currentShadow.querySelector('[data-element-id="' + safe + '"]');
     }
 
-    // applyOnePatch
-    // Inputs: a single (non-Batch) patch object.
-    // Output: side-effect on the DOM.
     function applyOnePatch(patch) {
         if (patch.op === "InsertElement") {
             const parent = findElement(patch.parent_id);
@@ -578,8 +429,7 @@
                 break;
             case "SetStyle":
                 el.style.setProperty(patch.property, patch.value);
-                // Clear the optimistic drag transform the moment the
-                // authoritative absolute position arrives from Rust.
+
                 if (
                     pendingDragEnds[patch.element_id] &&
                     (patch.property === "left" || patch.property === "top")
@@ -621,11 +471,6 @@
         }
     }
 
-    // applyPatch
-    // Inputs: a top-level patch (possibly a Batch wrapping more patches).
-    // Output: side-effect; applies every patch in source order using an
-    // explicit stack — no recursion — so a deep Batch cannot blow the
-    // JS stack.
     function applyPatch(rootPatch) {
         const stack = [rootPatch];
         let iter = 0;
@@ -645,17 +490,12 @@
         if (iter >= MAX_BATCH_ITER) {
             console.warn("applyPatch hit MAX_BATCH_ITER; truncating");
         }
-        // After any patch, reposition the selection overlay because
-        // element geometry may have changed (e.g., MoveElement → SetStyle).
+
         if (currentSelectionIds.length > 0) {
             updateSelectionOverlay();
         }
     }
 
-    // ---------- selection overlay ----------
-    // clearSelectionOverlay
-    // Inputs: none.
-    // Output: side-effect; removes all box children from #selection-overlay.
     function clearSelectionOverlay() {
         const overlay = document.getElementById("selection-overlay");
         if (overlay) {
@@ -663,18 +503,8 @@
         }
     }
 
-    // updateSelectionOverlay
-    // Inputs: none (reads currentSelectionIds + currentSlideHost).
-    // Output: side-effect; redraws one absolutely-positioned box per
-    // selected element using getBoundingClientRect coordinates. Positions
-    // are computed relative to #viewport-container so the boxes track the
-    // slide host's transform (e.g., scale).
-    // Selection box outline offset (px) so the blue rectangle sits a
-    // hair outside the element rather than clipping its edge.
     const SELECTION_OUTSET_PX = 0;
-    // Handle order matches CSS [data-handle="…"]. The (dx, dy) pair is
-    // the handle's offset within the selection box, expressed as
-    // fractions (0..1) of width/height.
+
     const SELECTION_HANDLES = [
         { name: "nw", fx: 0, fy: 0 },
         { name: "n", fx: 0.5, fy: 0 },
@@ -692,15 +522,14 @@
             return;
         }
         overlay.replaceChildren();
-        // While cropping, the crop overlay owns the element's chrome; drawing
-        // selection handles here would overlap and steal resize gestures.
+
         if (cropState) {
             return;
         }
         if (!currentShadow || !currentSlideHost) {
             return;
         }
-        // Table focus mode: draw the cell selection instead of the element box.
+
         if (tableCellSel && focusedTableId() === tableCellSel.elementId) {
             renderCellSelection(overlay);
             return;
@@ -752,7 +581,7 @@
                     const spec = SELECTION_HANDLES[h];
                     if (isGroup && spec.name.length === 1) {
                         continue;
-                    } // skip edges n/e/s/w
+                    }
                     const handle = document.createElement("div");
                     handle.className = "selection-handle";
                     handle.dataset.handle = spec.name;
@@ -764,8 +593,7 @@
                 }
             }
         }
-        // Multi-selection: a union bounding box with corner-only handles for
-        // proportional scaling of the whole set.
+
         if (multi && unionR > unionL && unionB > unionT) {
             const bx = unionL - overlayRect.left;
             const by = unionT - overlayRect.top;
@@ -801,16 +629,8 @@
         }
     }
 
-    // ===================== table cell editing (focus mode) =====================
-    // When a table is the deepest focus (entered via double-click, like a
-    // group), clicks select cells by (row, col) instead of dragging the element.
-    // The selected-cell set lives only here; it is serialized into the command
-    // messages so Rust stays stateless about cell selection.
-    // tableCellSel: { elementId, anchor: [r,c], cells: [[r,c], ...] } | null
     let tableCellSel = null;
 
-    // focusedTableId — the deepest focused element id if it is a table, else
-    // null. Used to gate cell-selection behavior in the pointer pipeline.
     function focusedTableId() {
         if (focusChain.length === 0 || !currentShadow) {
             return null;
@@ -821,9 +641,6 @@
         return el && el.dataset.elementType === "table" ? top : null;
     }
 
-    // tableCellGrid — the rendered cells of a table as grid[r][c] = { r, c, td }.
-    // Row index is the <tr> index; column index is the cell index within the row
-    // (v1 has no merged cells, so this is a plain rectangle).
     function tableCellGrid(tableId) {
         const safe =
             window.CSS && window.CSS.escape ? window.CSS.escape(tableId) : tableId;
@@ -847,7 +664,6 @@
         return grid;
     }
 
-    // cellAtPoint — the [r, c] of the cell under a client point, or null.
     function cellAtPoint(tableId, clientX, clientY) {
         const grid = tableCellGrid(tableId);
         for (let r = 0; r < grid.length; r++) {
@@ -870,7 +686,6 @@
         return rc[0] + "," + rc[1];
     }
 
-    // rangeCells — every [r,c] in the rectangle spanned by two corners.
     function rangeCells(a, b) {
         const r0 = Math.min(a[0], b[0]),
             r1 = Math.max(a[0], b[0]);
@@ -885,9 +700,6 @@
         return out;
     }
 
-    // selectCell — update the cell selection from a click: plain click selects
-    // one (new anchor); Shift extends a rectangular range from the anchor;
-    // Cmd/Ctrl toggles an individual cell.
     function selectCell(tableId, rc, e) {
         const sameTable = tableCellSel && tableCellSel.elementId === tableId;
         if (sameTable && e && e.shiftKey) {
@@ -910,7 +722,6 @@
         refreshInspector();
     }
 
-    // selectAllCells — select every cell (whole-table styling affordance).
     function selectAllCells(tableId) {
         const grid = tableCellGrid(tableId);
         const all = [];
@@ -932,8 +743,6 @@
         }
     }
 
-    // renderCellSelection — accent outline over each selected cell, drawn into
-    // the selection overlay in place of the element box/handles.
     function renderCellSelection(overlay) {
         const overlayRect = overlay.getBoundingClientRect();
         const grid = tableCellGrid(tableCellSel.elementId);
@@ -957,9 +766,6 @@
         }
     }
 
-    // beginCellEdit — inline-edit one cell's text (contenteditable on the <td>).
-    // Enter / blur commit via CellTextEditRequested; Escape cancels. The slide
-    // remounts on commit (ReplaceElement), replacing the editable node.
     function beginCellEdit(tableId, rc) {
         const grid = tableCellGrid(tableId);
         const cellObj = grid[rc[0]] && grid[rc[0]][rc[1]];
@@ -1005,8 +811,6 @@
         td.addEventListener("keydown", onKey);
     }
 
-    // tableContextId — the table id the inspector's Table section acts on: the
-    // focused table (cell mode) or a singly-selected table element, else null.
     function tableContextId() {
         if (tableCellSel) {
             return tableCellSel.elementId;
@@ -1035,8 +839,6 @@
         );
     }
 
-    // refreshTableBox — show the Table inspector section for a table context and
-    // sync the header toggles from the rendered table's data-* attrs.
     function refreshTableBox() {
         const box = document.getElementById("table-box");
         if (!box) {
@@ -1075,9 +877,6 @@
         );
     }
 
-    // wireTableBox — bind the Table section's structural buttons + header
-    // toggles. Insert lands after the anchor cell; delete removes the anchor's
-    // row/column.
     function wireTableBox() {
         const bind = function (id, fn) {
             const el = document.getElementById(id);
@@ -1107,12 +906,6 @@
         });
     }
 
-    // ---------- snap guides ----------
-    // ensureGuideLayer
-    // Inputs: none. Output: the #snap-guides element, created once as a
-    // SIBLING of #selection-overlay inside #viewport-container. It must not
-    // live inside #selection-overlay because updateSelectionOverlay() calls
-    // overlay.replaceChildren() each frame, which would wipe the guides.
     function ensureGuideLayer() {
         const container = document.getElementById("viewport-container");
         if (!container) {
@@ -1127,13 +920,6 @@
         return layer;
     }
 
-    // slideToScreen
-    // Inputs: the guide layer element. Output: { ox, oy, scale } mapping slide
-    // coordinates to layer-local px: screen = origin + coord*scale. Reads the
-    // slide-host rect once; returns null when unavailable. The slide-host is
-    // the shadow HOST (light-DOM div), cached as currentSlideHost — it is not
-    // a descendant of its own shadow root, so a shadow-internal query would
-    // never find it.
     function slideToScreen(layer) {
         const host = currentSlideHost;
         if (!host || !layer) {
@@ -1144,10 +930,6 @@
         return { ox: hr.left - lr.left, oy: hr.top - lr.top, scale: hr.width / 1920 };
     }
 
-    // ---------- rulers & guides ----------
-    // canvasMetrics — map slide pixels to viewport-container-local px, plus the
-    // slide's natural size. screen = origin + slidePx * scale. Null when no
-    // slide is mounted.
     function canvasMetrics() {
         const host = currentSlideHost;
         const stage = document.getElementById("viewport-container");
@@ -1169,11 +951,6 @@
         };
     }
 
-    // renderCanvasScrim — grey the area outside the slide bounds in edit mode.
-    // Four translucent canvas-colored rects fill the viewport minus the slide
-    // rect, so content positioned off-slide (shown via the edit-overflow style)
-    // fades toward the canvas colour. Pointer-events:none → interaction passes
-    // through. Present/export crop instead (no scrim, .slide overflow:hidden).
     function renderCanvasScrim() {
         const stage = document.getElementById("viewport-container");
         if (!stage) {
@@ -1199,7 +976,7 @@
         const sw = m.slideW * m.scale;
         const sh = m.slideH * m.scale;
         const r = layer.children;
-        // top, bottom, left, right of the slide rect (clamped to >= 0).
+
         const set = function (el, x, y, w, h) {
             el.style.left = x + "px";
             el.style.top = y + "px";
@@ -1212,8 +989,6 @@
         set(r[3], m.ox + sw, m.oy, m.stageW - (m.ox + sw), sh);
     }
 
-    // ensureRulers — create the two ruler canvases + corner once, wiring the
-    // drag-out-a-guide gesture on each ruler.
     function ensureRulers() {
         const stage = document.getElementById("viewport-container");
         if (!stage || document.getElementById("ruler-top")) {
@@ -1237,7 +1012,6 @@
         stage.append(top, left, corner);
     }
 
-    // toggleRulers — Cmd+R.
     function toggleRulers() {
         rulersOn = !rulersOn;
         ensureRulers();
@@ -1245,7 +1019,6 @@
         renderRulerGuides();
     }
 
-    // refreshRulers — show/draw or hide the rulers for the current zoom/slide.
     function refreshRulers() {
         const top = document.getElementById("ruler-top");
         const left = document.getElementById("ruler-left");
@@ -1267,7 +1040,6 @@
         }
     }
 
-    // rulerStep — slide-px between labelled ticks so labels stay ~64px apart.
     function rulerStep(scale) {
         const cands = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000];
         for (let i = 0; i < cands.length; i++) {
@@ -1278,9 +1050,6 @@
         return cands[cands.length - 1];
     }
 
-    // drawRuler — paint ticks/labels in slide pixels onto a ruler canvas.
-    // Only the span that lies over the slide (0..slideDim) gets ticks; the rest
-    // (e.g. when zoomed out) stays blank.
     function drawRuler(cv, m, orient) {
         const horiz = orient === "h";
         const cssW = horiz ? m.stageW : RULER;
@@ -1340,7 +1109,6 @@
         }
     }
 
-    // ---- guides ----
     function ensureGuideOverlay() {
         const stage = document.getElementById("viewport-container");
         if (!stage) {
@@ -1355,21 +1123,14 @@
         return layer;
     }
 
-    // currentGuides — the active canvas's own (editable) guides.
     function currentGuides() {
         return guideOwn;
     }
 
-    // sendGuideEvent — dispatch one guide interaction to Rust (which owns the
-    // saveable guide state and echoes a GuidesUpdate that re-hydrates the
-    // overlay). `kind` is GuideAdded / GuideMoved / GuideRemoved.
     function sendGuideEvent(payload) {
         window.__deck.send("Interaction", payload);
     }
 
-    // renderRulerGuides — redraw the active canvas's guides at the current
-    // zoom: inherited (layout) guides first, read-only and beneath the editable
-    // own guides. (Distinct from the snap engine's renderGuides.)
     function renderRulerGuides() {
         const layer = ensureGuideOverlay();
         if (!layer) {
@@ -1411,8 +1172,7 @@
             line.style.top = m.oy + "px";
             line.style.height = m.slideH * m.scale + "px";
         }
-        // Inherited guides are read-only (edit them on the layout); only own
-        // guides take the drag/select gesture.
+
         if (!readOnly) {
             line.addEventListener("mousedown", function (e) {
                 startGuideDrag(e, g);
@@ -1421,7 +1181,6 @@
         return line;
     }
 
-    // pointerToSlide — slide-pixel coordinate of a pointer event along an axis.
     function pointerToSlide(e, orient, m) {
         const sr = document.getElementById("viewport-container").getBoundingClientRect();
         if (orient === "h") {
@@ -1435,8 +1194,6 @@
         return Math.max(0, Math.min(max, pos));
     }
 
-    // overRuler — is the pointer over the ruler the given orientation drags from
-    // (top ruler for h-guides, left ruler for v-guides)? Used to delete-on-drop.
     function overRuler(e, orient) {
         const sr = document.getElementById("viewport-container").getBoundingClientRect();
         if (orient === "h") {
@@ -1445,8 +1202,6 @@
         return e.clientX - sr.left < RULER;
     }
 
-    // startGuideCreate — drag a new guide out of a ruler. It lives only once the
-    // pointer leaves the ruler band; releasing back on the ruler discards it.
     function startGuideCreate(e, orient) {
         if (!rulersOn || e.button !== 0) {
             return;
@@ -1457,9 +1212,7 @@
         }
         e.preventDefault();
         e.stopPropagation();
-        // A local, server-less temp guide rendered live during the drag; on
-        // drop GuideAdded is dispatched and the GuidesUpdate echo replaces it
-        // with the authoritative guide. Released back on the ruler: discarded.
+
         const g = {
             id: "gtmp",
             index: -1,
@@ -1473,7 +1226,6 @@
         beginGuideSession(g, orient, true);
     }
 
-    // startGuideDrag — move (or delete) an existing guide.
     function startGuideDrag(e, g) {
         if (e.button !== 0) {
             return;
@@ -1484,11 +1236,6 @@
         beginGuideSession(g, g.orient, false);
     }
 
-    // beginGuideSession — shared move loop for create + drag, with its own
-    // listeners so it never tangles with element dragging. Positions update
-    // locally for a smooth drag; the authoritative change is dispatched to Rust
-    // once on drop (GuideAdded / GuideMoved), or the guide is removed
-    // (GuideRemoved / discarded) when dropped back over its ruler.
     function beginGuideSession(g, orient, isCreate) {
         guideDragSession = { g: g, orient: orient, isCreate: isCreate };
         const move = function (ev) {
@@ -1506,7 +1253,7 @@
             guideDragSession = null;
             const onRuler = overRuler(ev, orient);
             if (isCreate) {
-                // Temp guide: commit it as a new guide, or drop it silently.
+
                 guideOwn = guideOwn.filter(function (x) {
                     return x !== g;
                 });
@@ -1531,8 +1278,7 @@
 
     function selectGuide(id) {
         selectedGuideId = id;
-        // A guide selection is not an element selection — clear any element
-        // selection (and slide focus) so only the guide reads as selected.
+
         slideSelected = false;
         if (currentSelectionIds.length > 0) {
             window.__deck.send("Interaction", {
@@ -1553,9 +1299,6 @@
         hideGuideInspector();
     }
 
-    // deleteGuide — dispatch a removal for the own guide with this id. Rust
-    // applies it and echoes GuidesUpdate, which re-hydrates the overlay (so the
-    // local splice and re-render happen there, not here).
     function deleteGuide(id) {
         const g = guideOwn.find(function (x) {
             return x.id === id;
@@ -1570,8 +1313,6 @@
         sendGuideEvent({ kind: "GuideRemoved", index: g.index });
     }
 
-    // showGuideInspector / hideGuideInspector — the selected guide's only
-    // editable property is its position (px along its axis).
     function showGuideInspector() {
         const box = document.getElementById("guide-box");
         if (!box) {
@@ -1608,7 +1349,6 @@
         }
     }
 
-    // wireGuideInspector — commit the position field to the selected guide.
     function wireGuideInspector() {
         const input = document.getElementById("guide-pos");
         if (!input) {
@@ -1628,15 +1368,11 @@
             }
             const pos = m ? clampGuidePos(g.orient, v, m) : Math.max(0, v);
             input.value = String(pos);
-            // Commit via Rust; the GuidesUpdate echo re-renders the overlay.
+
             sendGuideEvent({ kind: "GuideMoved", index: g.index, pos: pos });
         });
     }
 
-    // ---------- resizable panes ----------
-    // captureCanvasMin — record the canvas content size at launch (the default
-    // spawn window). This is the floor pane growth may not push the canvas
-    // below. Captured once.
     function captureCanvasMin() {
         if (canvasMinW > 0) {
             return;
@@ -1652,9 +1388,6 @@
         }
     }
 
-    // positionDividers — lay the three hit strips over the inter-pane gutters,
-    // tracking the live pane rects. Coordinates are body-relative (body is the
-    // fixed positioning context).
     function positionDividers() {
         const objects = document.getElementById("object-panel");
         const inspector = document.getElementById("inspector-panel");
@@ -1681,8 +1414,6 @@
         place(dThu, th.left, th.top - gut / 2, th.width, gut);
     }
 
-    // refitThumbnails — size every thumbnail preview to fill the thumbs pane
-    // height (margins unchanged), then refit each slide mount to its new box.
     function refitThumbnails() {
         const strip = document.getElementById("thumbnail-row");
         if (!strip) {
@@ -1692,7 +1423,7 @@
         const padV = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
         const cap = strip.querySelector(".thumb__caption");
         const capH = cap ? cap.offsetHeight : 16;
-        const gap = 6; // .thumb column gap (preview ↔ caption)
+        const gap = 6;
         let ph = strip.clientHeight - padV - capH - gap;
         if (!(ph > 0)) {
             return;
@@ -1714,7 +1445,6 @@
         }
     }
 
-    // wirePaneResizers — bind the three dividers.
     function wirePaneResizers() {
         const map = {
             "divider-objects": "objects",
@@ -1732,9 +1462,6 @@
         positionDividers();
     }
 
-    // beginPaneDrag — drag one divider. Recomputes the clamp from live rects on
-    // every move so a pane grows only into the canvas's spare room (zero at the
-    // spawn window), capped at its fixed max, and never below its default min.
     function beginPaneDrag(e, kind, el) {
         if (e.button !== 0) {
             return;
@@ -1781,7 +1508,7 @@
             const w = Math.max(PANE_MIN[kind], Math.min(desired, max));
             pane.style.width = w + "px";
         }
-        // Keep overlays aligned with the reflowed canvas.
+
         if (zoomMode === "fit") {
             applyZoom();
         } else {
@@ -1792,9 +1519,6 @@
         }
     }
 
-    // drawAlignLine
-    // Inputs: the layer, an align/center guide { axis, pos }, the mapping.
-    // Output: side-effect; one full-length 1px line over the slide surface.
     function drawAlignLine(layer, g, m) {
         const line = document.createElement("div");
         line.className = "snap-guide snap-guide--line";
@@ -1812,9 +1536,6 @@
         layer.appendChild(line);
     }
 
-    // drawSpacing
-    // Inputs: the layer, a spacing guide { axis, gaps }, the mapping. Output:
-    // side-effect; a thin bar with end ticks for each equal gap.
     function drawSpacing(layer, g, m) {
         let i = 0;
         for (i = 0; i < g.gaps.length; i = i + 1) {
@@ -1836,9 +1557,6 @@
         }
     }
 
-    // renderGuides
-    // Inputs: guide descriptors from the snap engine. Output: side-effect;
-    // draws magenta lines/ticks into #snap-guides. Clears first each frame.
     function renderGuides(guides) {
         const layer = ensureGuideLayer();
         if (!layer) {
@@ -1859,8 +1577,6 @@
         }
     }
 
-    // clearGuides
-    // Inputs: none. Output: empties the #snap-guides layer.
     function clearGuides() {
         const layer = document.getElementById("snap-guides");
         if (layer) {
@@ -1868,11 +1584,6 @@
         }
     }
 
-    // buildSnapTargets
-    // Inputs: the element id to EXCLUDE (the one being manipulated). Output:
-    // { xLines, yLines, rects } from __snap.__build_targets, built from every
-    // other element's inline rect plus the slide pseudo-rect. Read once per
-    // gesture (siblings do not move mid-gesture).
     function buildSnapTargets(excludeId) {
         const rects = [{ x: 0, y: 0, w: 1920, h: 1080 }];
         if (currentShadow) {
@@ -1889,9 +1600,7 @@
             }
         }
         const targets = window.__snap.__build_targets(rects);
-        // Ruler guides are snap targets too — both the canvas's own and the
-        // inherited layout guides: vertical guides add an x line, horizontal a
-        // y line.
+
         const guides = guideOwn.concat(guideInherited);
         for (let g = 0; g < guides.length; g++) {
             if (guides[g].orient === "v") {
@@ -1903,8 +1612,6 @@
         return targets;
     }
 
-    // movingRectFromStyle
-    // Inputs: a target element. Output: its current inline rect in slide px.
     function movingRectFromStyle(el) {
         const d = parseStyleAttr(el.getAttribute("style") || "");
         return {
@@ -1915,11 +1622,6 @@
         };
     }
 
-    // ---------- crop mode ----------
-    // ensureCropLayer
-    // Inputs: none. Output: the #crop-overlay element, created once as a
-    // SIBLING of #selection-overlay inside #viewport-container (NOT inside it,
-    // which updateSelectionOverlay wipes via replaceChildren).
     function ensureCropLayer() {
         const container = document.getElementById("viewport-container");
         if (!container) {
@@ -1934,15 +1636,11 @@
         return layer;
     }
 
-    // cropImageUrl
-    // Inputs: an asset id. Output: the cached blob URL, or "".
     function cropImageUrl(assetId) {
         const entry = assetBlobCache[assetId];
         return entry && entry.url ? entry.url : "";
     }
 
-    // clearCropOverlay
-    // Inputs: none. Output: empties #crop-overlay.
     function clearCropOverlay() {
         const layer = document.getElementById("crop-overlay");
         if (layer) {
@@ -1950,9 +1648,6 @@
         }
     }
 
-    // cropPlaceImg
-    // Inputs: a div, blob url, and a screen rect. Output: side-effect; styles
-    // it as a background image filling that rect.
     function cropPlaceImg(el, url, x, y, w, h) {
         el.style.position = "absolute";
         el.style.left = x + "px";
@@ -1964,9 +1659,6 @@
         el.style.backgroundRepeat = "no-repeat";
     }
 
-    // cropDrawMaskFrame
-    // Inputs: layer + mask screen rect. Output: side-effect; outline div + the
-    // 8 resize handles (reusing the SELECTION_HANDLES fraction table).
     function cropDrawMaskFrame(layer, x, y, w, h) {
         const box = document.createElement("div");
         box.className = "crop-mask-box";
@@ -1988,9 +1680,6 @@
         }
     }
 
-    // cropDrawToolbar
-    // Inputs: layer + the mask's top-right screen point. Output: side-effect;
-    // the floating toolbar (zoom slider, %, Reset, ✕ cancel, ✓ confirm).
     function cropDrawToolbar(layer, rightX, topY) {
         const bar = document.createElement("div");
         bar.className = "crop-toolbar";
@@ -2016,10 +1705,6 @@
         layer.appendChild(bar);
     }
 
-    // renderCropOverlay
-    // Inputs: none (reads cropState). Output: side-effect; draws the dimmed
-    // full image, the bright in-mask region, a pan catcher, the mask frame +
-    // handles, and the toolbar. Cleared and redrawn each interaction.
     function renderCropOverlay() {
         const layer = ensureCropLayer();
         if (!layer || !cropState) {
@@ -2041,12 +1726,12 @@
         const mY = m.oy + mask.y * m.scale;
         const mW = mask.w * m.scale;
         const mH = mask.h * m.scale;
-        // (1) dimmed full image
+
         const dim = document.createElement("div");
         dim.className = "crop-img crop-img--dim";
         cropPlaceImg(dim, url, imgX, imgY, imgW, imgH);
         layer.appendChild(dim);
-        // (2) bright in-mask region: same image, clipped to the mask box
+
         const bright = document.createElement("div");
         bright.className = "crop-img crop-img--bright";
         cropPlaceImg(bright, url, imgX, imgY, imgW, imgH);
@@ -2061,7 +1746,7 @@
             (mX - imgX) +
             "px)";
         layer.appendChild(bright);
-        // (3) transparent catcher for pan + scroll-zoom over the mask
+
         const catcher = document.createElement("div");
         catcher.className = "crop-catcher";
         catcher.style.position = "absolute";
@@ -2074,15 +1759,11 @@
         catcher.addEventListener("mousedown", onCropPanMouseDown);
         catcher.addEventListener("wheel", onCropWheel, { passive: false });
         layer.appendChild(catcher);
-        // (4) mask outline + handles, then (5) toolbar pinned top-right
+
         cropDrawMaskFrame(layer, mX, mY, mW, mH);
         cropDrawToolbar(layer, mX + mW, mY);
     }
 
-    // enterCropMode
-    // Inputs: an image element id. Output: side-effect; loads natural dims,
-    // seeds cropState from existing crop styles or the cover baseline, and
-    // renders the overlay. No IPC (fully optimistic until commit).
     function enterCropMode(elementId) {
         const el = findElement(elementId);
         if (!el || el.dataset.elementType !== "image") {
@@ -2118,8 +1799,7 @@
                 state: state,
                 preStyle: el.getAttribute("style") || "",
             };
-            // Hide the real element so the overlay is the sole image source —
-            // otherwise its full-opacity render defeats the dim preview.
+
             el.style.visibility = "hidden";
             document.body.dataset.crop = "1";
             updateSelectionOverlay();
@@ -2128,7 +1808,6 @@
         img.src = url;
     }
 
-    // onCropPanMouseDown / Move / Up — drag inside the mask pans the image.
     function onCropPanMouseDown(e) {
         if (!cropState || e.button !== 0) {
             return;
@@ -2156,7 +1835,6 @@
         window.removeEventListener("mouseup", onCropPanMouseUp);
     }
 
-    // onCropWheel — scroll zooms about the mask center.
     function onCropWheel(e) {
         if (!cropState) {
             return;
@@ -2172,7 +1850,6 @@
         renderCropOverlay();
     }
 
-    // onCropZoomInput — slider sets an absolute zoom percent.
     function onCropZoomInput(e) {
         if (!cropState) {
             return;
@@ -2187,8 +1864,6 @@
         renderCropOverlay();
     }
 
-    // onCropHandleMouseDown / Move / Up — resize the mask window (reveal/clip),
-    // reusing the snap engine for the box and re-clamping the image to cover.
     function onCropHandleMouseDown(e) {
         if (!cropState || e.button !== 0) {
             return;
@@ -2204,8 +1879,7 @@
                 w: cropState.mask.w,
                 h: cropState.mask.h,
             },
-            // The image's top-left in canvas/slide coords, captured so the
-            // image stays put while the mask window is resized around it.
+
             imgOrigin: {
                 x: cropState.mask.x + cropState.state.dx,
                 y: cropState.mask.y + cropState.state.dy,
@@ -2222,8 +1896,7 @@
         const scale = getViewportScale();
         const dx = (e.clientX - cropResize.startMouse.x) / scale;
         const dy = (e.clientY - cropResize.startMouse.y) / scale;
-        // Reuse the element resize math so the mask box honors Shift
-        // (proportional) and Alt (from-center) exactly like a normal resize.
+
         const raw = computeResizeRect(
             { handle: cropResize.handle, startRect: cropResize.startMask },
             dx,
@@ -2250,7 +1923,7 @@
             w: snapped.rect.w,
             h: snapped.rect.h,
         };
-        // Hold the image fixed in canvas space — only the mask window moves.
+
         cropState.state = window.__crop.placeImage(
             cropState.state,
             cropState.mask,
@@ -2268,7 +1941,6 @@
         window.removeEventListener("mouseup", onCropHandleMouseUp);
     }
 
-    // resetCrop — back to the seamless cover baseline (live, in crop mode).
     function resetCrop() {
         if (!cropState) {
             return;
@@ -2277,7 +1949,6 @@
         renderCropOverlay();
     }
 
-    // commitCrop — send ElementCropCommitted and tear down the overlay.
     function commitCrop() {
         if (!cropState) {
             return;
@@ -2294,13 +1965,10 @@
         exitCropMode();
     }
 
-    // cancelCrop — discard the session; no IPC (element was never mutated).
     function cancelCrop() {
         exitCropMode();
     }
 
-    // exitCropMode — restore the hidden element, clear crop state, guides,
-    // and the overlay.
     function exitCropMode() {
         if (cropState && cropState.el) {
             cropState.el.style.removeProperty("visibility");
@@ -2314,11 +1982,6 @@
         updateSelectionOverlay();
     }
 
-    // refreshCropBox
-    // Inputs: none (reads currentSelectionIds + shadow). Output: side-effect;
-    // shows the Inspector crop section and syncs Offset X/Y for a single
-    // selected image, else hides it. Zoom % is left for the user to type (it
-    // needs natural dims, loaded on edit).
     function refreshCropBox() {
         const box = document.getElementById("crop-box");
         if (!box) {
@@ -2348,10 +2011,6 @@
         document.getElementById("crop-zoom-pct").value = "";
     }
 
-    // withImageNatural
-    // Inputs: an image element id and a callback (el, mask, natural, decls).
-    // Output: loads the asset's natural dims via an Image, then invokes the
-    // callback. No-op when the element is not a loadable image.
     function withImageNatural(id, cb) {
         const el = findElement(id);
         if (!el || el.dataset.elementType !== "image") {
@@ -2373,8 +2032,6 @@
         img.src = url;
     }
 
-    // onCropInspectorEdit — recompute crop from the edited fields and commit
-    // background-size + background-position via PropertyChanged.
     function onCropInspectorEdit() {
         if (currentSelectionIds.length !== 1) {
             return;
@@ -2401,7 +2058,6 @@
         });
     }
 
-    // inspectorResetCrop — reset to the cover baseline and commit.
     function inspectorResetCrop(id) {
         withImageNatural(id, function (el, mask, natural) {
             sendCropStyleEdits(
@@ -2411,8 +2067,6 @@
         });
     }
 
-    // sendCropStyleEdits — commit background-size + background-position via the
-    // existing PropertyChanged → SetInlineStyle path.
     function sendCropStyleEdits(id, css) {
         window.__deck.send("Interaction", {
             kind: "PropertyChanged",
@@ -2428,7 +2082,6 @@
         });
     }
 
-    // bindCropInspectorControls — wire the crop section's buttons + fields.
     function bindCropInspectorControls() {
         const enterBtn = document.getElementById("crop-enter");
         if (enterBtn) {
@@ -2456,12 +2109,6 @@
         }
     }
 
-    // ---------- interaction capture ----------
-    // findInteractionTarget
-    // Inputs: a DOM Event.
-    // Output: the first ancestor along composedPath carrying
-    // data-element-id, or null. Skips elements without the attribute and
-    // stops at the slide host (so background clicks return null).
     function findInteractionTarget(e) {
         const path = typeof e.composedPath === "function" ? e.composedPath() : [];
         let hit = null;
@@ -2481,11 +2128,11 @@
         if (!hit) {
             return null;
         }
-        const chain = elementChain(hit); // innermost..outermost
+        const chain = elementChain(hit);
         if (focusChain.length === 0) {
-            return chain[chain.length - 1]; // outermost element under the slide
+            return chain[chain.length - 1];
         }
-        // Focused: return the child of the deepest focused group in the chain.
+
         const deep = focusChain[focusChain.length - 1];
         for (let i = 0; i < chain.length; i++) {
             const parent = chain[i].parentElement;
@@ -2496,9 +2143,6 @@
         return chain[chain.length - 1];
     }
 
-    // readModifiers
-    // Inputs: an Event with modifier-key flags.
-    // Output: a Modifiers object matching the Rust struct shape.
     function readModifiers(e) {
         return {
             shift: !!e.shiftKey,
@@ -2508,12 +2152,6 @@
         };
     }
 
-    // ---------- inline text editing ----------
-    // onViewportDblClick
-    // Inputs: a dblclick MouseEvent on the viewport container.
-    // Output: side-effect; if the double-clicked element is a Text
-    // element, enters inline editing on it. Other element types are
-    // ignored (double-click has no meaning for them yet).
     function onViewportDblClick(e) {
         const target = findInteractionTarget(e);
         if (!target) {
@@ -2522,7 +2160,7 @@
         if (target.dataset.elementType === "group") {
             e.preventDefault();
             focusChain.push(target.dataset.elementId);
-            // Select the child under the cursor at the new level.
+
             const inner = findInteractionTarget(e);
             if (inner && inner.dataset.elementId) {
                 window.__deck.send("Interaction", {
@@ -2555,8 +2193,7 @@
             if (!rc) {
                 return;
             }
-            // First double-click enters cell-focus and selects the cell; a
-            // second double-click (already focused) edits the cell text.
+
             if (already) {
                 beginCellEdit(tid, rc);
             } else {
@@ -2571,11 +2208,6 @@
         beginTextEdit(target);
     }
 
-    // openEmbedEditor
-    // Inputs: an embed element id and its current raw inner HTML.
-    // Output: side-effect; pops a modal textarea to edit the block's HTML.
-    // Save commits via EmbedHtmlEditRequested (Rust dispatches SetEmbedHtml);
-    // Cancel / Esc / backdrop click dismisses without changes.
     function openEmbedEditor(elementId, currentHtml) {
         const existing = document.getElementById("embed-editor");
         if (existing) {
@@ -2644,16 +2276,6 @@
         area.focus();
     }
 
-    // beginTextEdit
-    // Inputs: the Text element's DOM node (inside the slide shadow root).
-    // Output: side-effect; makes the node contenteditable, focuses it,
-    // selects its text, records textEditState, and notifies Rust with
-    // TextEditStarted. Enter inserts a newline in the box (default
-    // contenteditable behavior); the edit commits on blur / clicking away
-    // and cancels on Escape. The keydown listener stopPropagation()s so
-    // the global hotkey dispatcher never sees — or crash-guards — edit
-    // keystrokes, while leaving that dispatcher (and its Enter handling)
-    // intact for use outside edit mode.
     function beginTextEdit(target) {
         const elementId = target.dataset.elementId;
         if (!elementId) {
@@ -2666,10 +2288,7 @@
             commitTextEdit();
         }
         const onKeydown = function (ev) {
-            // Keep edit keystrokes out of the global shortcut dispatcher.
-            // Enter is deliberately NOT handled here: it falls through to
-            // the contenteditable default and types a newline. Escape
-            // cancels the edit.
+
             ev.stopPropagation();
             if (ev.key === "Escape") {
                 ev.preventDefault();
@@ -2686,7 +2305,7 @@
             onKeydown: onKeydown,
             onBlur: onBlur,
         };
-        // Tokened text renders its resolved value; edit the raw ${…} source.
+
         if (target.dataset && typeof target.dataset.src === "string") {
             target.textContent = target.dataset.src;
         }
@@ -2702,12 +2321,6 @@
         });
     }
 
-    // finishTextEdit
-    // Inputs: commit — true to keep the edited text (send TextEditEnded so
-    // Rust dispatches SetTextContent), false to revert to the original.
-    // Output: side-effect; tears down the contenteditable session exactly
-    // once. textEditState is cleared FIRST so the blur fired by our own
-    // .blur() call re-enters as a no-op.
     function finishTextEdit(commit) {
         const state = textEditState;
         if (!state) {
@@ -2719,9 +2332,7 @@
         target.removeEventListener("blur", state.onBlur);
         target.removeAttribute("contenteditable");
         if (commit) {
-            // innerText (not textContent) so the line breaks the user
-            // typed with Enter survive as "\n" characters in the committed
-            // text rather than being flattened away.
+
             window.__deck.send("Interaction", {
                 kind: "TextEditEnded",
                 element_id: state.elementId,
@@ -2743,11 +2354,6 @@
         finishTextEdit(false);
     }
 
-    // selectAllText
-    // Inputs: a DOM element. Output: side-effect; selects all of its text
-    // so the user can type over it immediately. Best-effort: selection
-    // across shadow boundaries is inconsistent between engines, so any
-    // failure is swallowed (focus alone still allows editing).
     function selectAllText(el) {
         try {
             const sel = window.getSelection();
@@ -2759,23 +2365,16 @@
             sel.removeAllRanges();
             sel.addRange(range);
         } catch (err) {
-            // No selection available; editing still works via the caret.
+
         }
     }
 
-    // onMouseDown
-    // Inputs: a MouseEvent on #viewport (the host of slide-host).
-    // Output: side-effect; sends ElementClicked or BackgroundClicked and
-    // arms dragState. The drag only "starts" once mousemove crosses
-    // DRAG_THRESHOLD pixels (see onMouseMove).
     function onMouseDown(e) {
-        // Only react to primary button.
+
         if (e.button !== 0) {
             return;
         }
-        // While cropping, a press on the overlay (catcher / handles / toolbar)
-        // is handled by the overlay's own listeners; a press anywhere else
-        // commits the crop. Either way we stop here so no drag/select arms.
+
         if (cropState) {
             const inOverlay =
                 e.target && e.target.closest && e.target.closest("#crop-overlay");
@@ -2784,10 +2383,7 @@
             }
             return;
         }
-        // While a text element is being edited, let the contenteditable
-        // own pointer interactions (caret placement, text selection). A
-        // click inside the editor is left alone; a click anywhere else
-        // commits the edit and then proceeds with normal handling.
+
         if (textEditState) {
             const path = (e.composedPath && e.composedPath()) || [];
             if (path.indexOf(textEditState.target) >= 0) {
@@ -2795,8 +2391,7 @@
             }
             commitTextEdit();
         }
-        // Hand tool: a press starts a pan instead of any selection/drag. No
-        // effect when the slide already fits (panBounds is then 0,0).
+
         if (activeTool === "hand") {
             e.preventDefault();
             panSession = {
@@ -2814,14 +2409,10 @@
             window.addEventListener("mouseup", onPanMouseUp);
             return;
         }
-        // Any canvas press is element-level focus, never a slide selection —
-        // including a background click, which deselects everything (guides too).
+
         slideSelected = false;
         deselectGuide();
-        // No element under the cursor (gray margin OR slide background) → arm a
-        // marquee. A no-drag release falls back to a deselect click; a drag
-        // selects overlapped elements. focusChain is snapshotted now and left
-        // untouched during the marquee (only the no-drag click drops focus).
+
         const focusSnapshot = focusChain.slice();
         const slideHost = e.target.closest && e.target.closest(".slide-host");
         const target = slideHost ? findInteractionTarget(e) : null;
@@ -2829,8 +2420,7 @@
             armMarquee(e, focusSnapshot);
             return;
         }
-        // Table focus mode: a press inside the focused table selects cells
-        // (plain / Shift range / Cmd toggle) instead of dragging the element.
+
         const ftid = focusedTableId();
         if (
             ftid &&
@@ -2845,8 +2435,7 @@
                 return;
             }
         }
-        // Element press. Leaving the deepest focused group (clicking an element
-        // outside it) drops back to top-level selection before sending.
+
         if (focusChain.length > 0) {
             const deep = focusChain[focusChain.length - 1];
             const insideFocus = elementChain(target).some(function (n) {
@@ -2858,9 +2447,7 @@
             }
         }
         const elementId = target.dataset.elementId;
-        // Pressing an already-selected element while several are selected (no
-        // Shift) starts a MULTI drag: keep the selection and drag them all. A
-        // no-drag release collapses to just this element (handled in mouseup).
+
         const inSelection = currentSelectionIds.indexOf(elementId) >= 0;
         const multi = inSelection && currentSelectionIds.length > 1 && !e.shiftKey;
         if (multi) {
@@ -2894,22 +2481,10 @@
                 target: target,
             };
         }
-        // Disable browser text selection for the duration of this gesture.
-        // Cleared unconditionally in onMouseUp regardless of whether a drag started.
+
         document.body.style.userSelect = "none";
     }
 
-    // onMouseMove
-    // Inputs: a MouseEvent on window (so the drag continues even outside
-    // the viewport).
-    // Output: side-effect; if dragState is armed and the cursor crossed
-    // DRAG_THRESHOLD, sends ElementDragStarted once, then optimistically
-    // transforms the element and throttles an ElementDragged IPC via rAF.
-    // Deltas are divided by the viewport scale so translate values are in
-    // slide coordinates (1920px space), not screen pixels.
-    // ---------- marquee (drag-to-select) ----------
-    // armMarquee — start a marquee session on a background press. focusSnapshot
-    // is the level whose elements the marquee will select within.
     function armMarquee(e, focusSnapshot) {
         marquee = {
             startX: e.clientX,
@@ -2966,9 +2541,6 @@
         );
     }
 
-    // marqueeCandidates — elements at the given focus level: top-level elements
-    // (no element ancestor) when the snapshot is empty, else the direct children
-    // of the deepest snapshot group.
     function marqueeCandidates(focusSnapshot) {
         if (!currentShadow) {
             return [];
@@ -2999,8 +2571,6 @@
         return out;
     }
 
-    // marqueeIds — selection ids for the current box (Shift unions with the
-    // baseline). Pure read of the DOM + the marquee session.
     function marqueeIds(cx, cy) {
         const rect = {
             left: Math.min(marquee.startX, cx),
@@ -3027,8 +2597,6 @@
         return ids;
     }
 
-    // sendMarqueeSelection — push the selection only when the id set changed,
-    // so a live-updating marquee does not flood the same selection every frame.
     function sendMarqueeSelection(ids) {
         const key = ids.join(",");
         if (key === marquee.lastSentKey) {
@@ -3041,8 +2609,6 @@
         });
     }
 
-    // finalizeMarquee — on release: a no-drag click deselects (as before); a
-    // drag commits the final overlapped selection.
     function finalizeMarquee(e) {
         const m = marquee;
         const active = m.active;
@@ -3088,8 +2654,7 @@
             dragState.started = true;
             dragState.snapTargets = buildSnapTargets(dragState.element_id);
             dragState.baseRect = movingRectFromStyle(dragState.target);
-            // Track Shift press/release during the drag so axis-lock toggles
-            // live even when the mouse is stationary.
+
             window.addEventListener("keydown", onDragKeyChange);
             window.addEventListener("keyup", onDragKeyChange);
             window.__deck.send("Interaction", {
@@ -3101,12 +2666,6 @@
         renderDrag(e.clientX, e.clientY, e.shiftKey, e.metaKey);
     }
 
-    // snappedDragDelta
-    // Inputs: the raw slide-space delta (dxSlide, dySlide), the viewport scale,
-    // the Cmd suppress flag, and whether to draw guides. Output: { x, y }
-    // snapped slide-space delta. Feeds the raw target rect through the snap
-    // engine and returns the corrected delta; renders guides as a side-effect
-    // when draw is true. Falls back to the raw delta when no snapshot exists.
     function snappedDragDelta(dxSlide, dySlide, scale, suppress, draw) {
         if (!dragState || !dragState.snapTargets || !dragState.baseRect) {
             return { x: dxSlide, y: dySlide };
@@ -3131,11 +2690,6 @@
         };
     }
 
-    // computeDragDelta
-    // Inputs: the pointer position (screen px), viewport scale, and the live
-    // Shift/Cmd state, plus whether to draw guides. Output: the final
-    // slide-space { x, y } delta after axis-lock (Shift), snapping, and a
-    // re-zero of the locked axis so snapping can't nudge it off the line.
     function computeDragDelta(clientX, clientY, scale, shiftHeld, metaHeld, draw) {
         const dxSlide = (clientX - dragState.start.x) / scale;
         const dySlide = (clientY - dragState.start.y) / scale;
@@ -3149,20 +2703,13 @@
         return snapped;
     }
 
-    // renderDrag
-    // Inputs: the pointer position and live Shift/Cmd state. Output: side-effect;
-    // records lastMouse, applies the optimistic transform for the computed
-    // delta, and posts a throttled ElementDragged. Shared by onMouseMove and the
-    // drag-scoped Shift key handler (so a Shift press/release with a stationary
-    // mouse still updates the preview).
     function renderDrag(clientX, clientY, shiftHeld, metaHeld) {
         if (!dragState || !dragState.started) {
             return;
         }
         const scale = getViewportScale();
         dragState.lastMouse = { x: clientX, y: clientY };
-        // Delta is computed once from the primary element (snapping uses its
-        // rect); in a multi drag every selected element gets the same delta.
+
         const d = computeDragDelta(clientX, clientY, scale, shiftHeld, metaHeld, true);
         if (dragState.multi) {
             for (let i = 0; i < dragState.targets.length; i++) {
@@ -3178,10 +2725,6 @@
         }
     }
 
-    // onDragKeyChange
-    // Inputs: a Shift keydown/keyup during a drag. Output: side-effect; re-runs
-    // the drag render at the last mouse position so the element snaps to / leaves
-    // the locked axis the instant Shift changes, without any mouse movement.
     function onDragKeyChange(e) {
         if (
             e.key !== "Shift" ||
@@ -3194,15 +2737,6 @@
         renderDrag(dragState.lastMouse.x, dragState.lastMouse.y, e.shiftKey, e.metaKey);
     }
 
-    // onMouseUp
-    // Inputs: a MouseEvent on window.
-    // Output: side-effect; if a drag was in progress, sends
-    // ElementDragEnded with the final delta (in slide coordinates) and
-    // registers pendingDragEnd so the optimistic transform is held until
-    // the SetStyle(left|top) patch arrives — avoiding a visible flash.
-    // A safety timeout removes the transform if no patch arrives within
-    // PENDING_TRANSFORM_TIMEOUT_MS. If no drag was in progress (click
-    // only), clears dragState.
     function onMouseUp(e) {
         if (marquee) {
             finalizeMarquee(e);
@@ -3223,9 +2757,7 @@
                 e.metaKey,
                 false,
             );
-            // Hold each moved element's optimistic transform until its
-            // SetStyle(left|top) patch lands (applyOnePatch clears it); a safety
-            // timeout clears any straggler.
+
             const held = dragState.multi
                 ? dragState.targets.slice()
                 : [{ id: dragState.element_id, node: dragState.target }];
@@ -3262,24 +2794,18 @@
                 });
             }
         } else if (dragState.multi && !e.shiftKey) {
-            // No-drag click on one of several selected items → collapse to it.
+
             window.__deck.send("Interaction", {
                 kind: "SetSelectionFromPanel",
                 element_ids: [dragState.collapseId],
             });
         }
-        // Restore text selectability now that the gesture is over.
+
         document.body.style.userSelect = "";
         clearGuides();
         dragState = null;
     }
 
-    // optimisticTransform
-    // Inputs: the DOM element to transform, the cumulative dx/dy in
-    // viewport CSS pixels.
-    // Output: side-effect; sets `transform: translate(dx, dy)` while
-    // dragging, removes the property when dx == dy == 0. Also nudges
-    // the selection overlay to track the optimistic position.
     function optimisticTransform(el, dx, dy) {
         if (!el) {
             return;
@@ -3294,11 +2820,6 @@
         }
     }
 
-    // reportDragThrottled
-    // Inputs: element id, cumulative delta from drag start, current
-    // pointer position.
-    // Output: side-effect; coalesces multiple mouse events per frame
-    // into one Interaction message via requestAnimationFrame.
     function reportDragThrottled(elementId, delta, position) {
         pendingDrag = { element_id: elementId, delta: delta, position: position };
         if (dragRafScheduled) {
@@ -3319,7 +2840,6 @@
         });
     }
 
-    // ---------- IPC handlers ----------
     const handlers = {
         MountSlide: function (payload) {
             mountSlide(
@@ -3329,14 +2849,10 @@
                 payload.globals_css,
             );
             refreshInspector();
-            // Keep the cached HTML for this slide fresh so its thumbnail
-            // reflects the latest mount. Theme CSS may also have changed
-            // (theme editor mode, future). Each thumbnail re-renders the
-            // affected slide only.
+
             updateThumbnailHtml(payload.slide_id, payload.slide_html, payload.theme_css);
             highlightActiveThumbnail(payload.slide_id);
-            // Guides belong to a slide; a switch deselects any guide and redraws
-            // for the newly active slide.
+
             selectedGuideId = null;
             refreshRulers();
             renderRulerGuides();
@@ -3344,16 +2860,14 @@
         },
         ApplyPatch: function (payload) {
             applyPatch(payload);
-            // Any patch may have moved or restyled the selected element.
-            // Inspector reads from the shadow DOM, so it stays the
-            // single source of truth visible to the user.
+
             refreshInspector();
         },
         SetSelection: function (payload) {
             const ids =
                 payload && Array.isArray(payload.element_ids) ? payload.element_ids : [];
             currentSelectionIds = ids.slice();
-            // An element selection is never also a slide or guide selection.
+
             if (currentSelectionIds.length > 0) {
                 slideSelected = false;
                 if (selectedGuideId !== null) {
@@ -3375,8 +2889,7 @@
         },
         LayoutListUpdate: function (payload) {
             renderThumbnailRow(payload, "layout");
-            // Cache the active layout's background so the Slide box can show its
-            // Fill/Image controls in layout mode.
+
             layoutBgData = null;
             if (payload && Array.isArray(payload.layouts)) {
                 for (let i = 0; i < payload.layouts.length; i++) {
@@ -3389,7 +2902,7 @@
             if (currentMode === "layout" && currentSelectionIds.length === 0) {
                 refreshInspector();
             }
-            // Keep the globals textarea in sync with the committed value.
+
             if (payload && typeof payload.globals_css === "string") {
                 currentGlobalsCss = payload.globals_css;
                 const ta = document.getElementById("globals-css");
@@ -3411,8 +2924,7 @@
             const mode = (payload && payload.mode) || "slide";
             currentMode = mode;
             document.body.dataset.mode = mode;
-            // The no-selection pane differs by mode (Slide box vs globals), so
-            // re-evaluate inspector visibility on a mode switch.
+
             refreshInspector();
         },
         Configure: function (payload) {
@@ -3426,9 +2938,7 @@
             renderSlideAnimations();
         },
         GuidesUpdate: function (payload) {
-            // Re-hydrate the active canvas's guides from authoritative state.
-            // ids are index-based so a selection survives the post-commit echo
-            // (a moved guide keeps its index). Inherited guides are read-only.
+
             const own = (payload && payload.own) || [];
             const inh = (payload && payload.inherited) || [];
             guideOwn = own.map(function (g, i) {
@@ -3460,8 +2970,7 @@
         },
         SlideInspectorUpdate: function (payload) {
             slideInspectorData = payload || null;
-            // Refresh the Slide box if it is the visible state (no selection,
-            // slide mode). refreshInspector decides whether to render it.
+
             if (currentSelectionIds.length === 0) {
                 refreshInspector();
             }
@@ -3537,7 +3046,6 @@
         },
     };
 
-    // ---------- __deck bridge ----------
     window.__deck = {
         send: function (type, payload) {
             const envelope = {
@@ -3571,37 +3079,15 @@
         },
     };
 
-    // ---------- resize handles ----------
-    // resizeState lives for the duration of one resize gesture:
-    //   target           – the DOM element being resized (in the shadow)
-    //   elementId        – the slide-coordinate id
-    //   handle           – "nw" / "n" / "ne" / ... matching the dot
-    //   startMouse       – pointer position at mousedown (screen px)
-    //   startRect        – element rect at mousedown in SLIDE coords
-    //                      { x, y, w, h }; used as the source of truth
-    //                      for every mousemove geometry calculation
-    //   aspect           – startRect.w / startRect.h, cached so shift-
-    //                      constrained drags don't drift
-    //   savedTransform   – the element's prior transform style, restored
-    //                      after the resize commits (we set 'none' to
-    //                      avoid stacking with the new size).
     let resizeState = null;
     let resizeRafScheduled = false;
     let pendingResize = null;
-    // Multi-select proportional scale session (null when idle).
-    let multiScaleState = null;
-    // Minimum visual size in slide pixels — mirrors the Rust-side
-    // MIN_DIMENSION_PX safety clamp so the user can't drag an element
-    // to a degenerate state mid-drag either.
-    const RESIZE_MIN_PX = 1;
-    const RESIZE_THROTTLE_KEY = "kind"; // future: switch between rAF / immediate
 
-    // onResizeHandleMouseDown
-    // Inputs: a mousedown MouseEvent on a .selection-handle.
-    // Output: side-effect; reads the target element's slide-space rect
-    // from its inline style, arms resizeState, sends ElementResizeStarted,
-    // and binds window-level move/up handlers so the gesture survives
-    // the cursor leaving the handle.
+    let multiScaleState = null;
+
+    const RESIZE_MIN_PX = 1;
+    const RESIZE_THROTTLE_KEY = "kind";
+
     function onResizeHandleMouseDown(e) {
         if (e.button !== 0) {
             return;
@@ -3625,14 +3111,10 @@
         if (startRect.w <= 0 || startRect.h <= 0) {
             return;
         }
-        // Stop propagation so the viewport mousedown handler does not
-        // also fire and arm a drag (that would race with the resize).
+
         e.stopPropagation();
         e.preventDefault();
 
-        // A cropped image (explicit px background-size) scales its picture
-        // proportionally with the box (B-proportional); capture its crop
-        // state so each move can rescale the background.
         const cropStart =
             target.dataset.elementType === "image"
                 ? window.__crop.fromStyles(
@@ -3640,11 +3122,7 @@
                       decls["background-position"],
                   )
                 : null;
-        // Groups resize by uniform scale (transform), not by box geometry, and
-        // commit via SetGroupScale on drop — entirely client-side. They must NOT
-        // open a resize transaction (ElementResizeStarted) since no
-        // ElementResizeEnded ever closes it; a leftover open transaction would
-        // panic the next undo.
+
         const isGroup = target.dataset.elementType === "group";
         const priorScale = isGroup ? parseFloat(target.dataset.flexScale || "1") || 1 : 1;
         resizeState = {
@@ -3659,8 +3137,7 @@
             cropStart: cropStart,
             isGroup: isGroup,
             priorScale: priorScale,
-            // The grabbed (visual) box is the unscaled box times the prior
-            // scale; map corner drags against it to derive the new scale.
+
             visualRect: {
                 x: startRect.x,
                 y: startRect.y,
@@ -3669,13 +3146,11 @@
             },
         };
         if (isGroup) {
-            // Anchor the scale at the box origin so the handle math matches the
-            // visual box. (Rotation, if any, is dropped for the preview only.)
+
             // ponytail: scale-only preview; rotated groups re-render correct on commit.
             target.style.transformOrigin = "0 0";
         } else {
-            // Clear any optimistic transform from a prior drag so the
-            // resize math operates on the inline left/top/width/height.
+
             target.style.transform = "none";
         }
         document.body.style.userSelect = "none";
@@ -3693,9 +3168,6 @@
         window.addEventListener("mouseup", onResizeMouseUp);
     }
 
-    // resizeHandleToRustEnum
-    // Inputs: a handle name from the CSS data-handle attribute.
-    // Output: the matching ResizeHandle variant name on the Rust side.
     function resizeHandleToRustEnum(name) {
         switch (name) {
             case "nw":
@@ -3719,9 +3191,6 @@
         }
     }
 
-    // handleEdges
-    // Inputs: a handle name ("nw".."e"). Output: { west, east, north, south }
-    // booleans for the edges that move under that handle.
     function handleEdges(name) {
         return {
             west: name.indexOf("w") >= 0,
@@ -3731,12 +3200,6 @@
         };
     }
 
-    // snappedResizeRect
-    // Inputs: the rect from computeResizeRect, the source MouseEvent, the
-    // viewport scale, and whether to draw guides. Output: the snapped rect.
-    // Feeds active edges through the snap engine (alignment + dimension-match
-    // + grid) and renders guides as a side-effect when draw is true. Falls
-    // back to the input rect when no snapshot exists.
     function snappedResizeRect(rect, e, scale, draw) {
         if (!resizeState || !resizeState.snapTargets) {
             return rect;
@@ -3760,24 +3223,10 @@
         return out.rect;
     }
 
-    // computeResizeRect
-    // Inputs: the resize state and the cumulative mouse delta in SLIDE
-    // pixels (already scaled), plus modifier flags.
-    // Output: { x, y, w, h } — the new slide-space rect.
-    // Dataflow:
-    //   - Each handle picks which edges move (nw moves left+top,
-    //     ne moves right+top, etc).
-    //   - shift (aspect): for corner handles, constrain the larger
-    //     proportional change to the source aspect ratio.
-    //   - alt (center): the OPPOSITE edge mirrors the moving edge, so
-    //     the element grows symmetrically around its center.
     function computeResizeRect(state, dx, dy, shift, alt) {
         const handle = state.handle;
         const start = state.startRect;
 
-        // Sign per handle: how dx, dy translate into edge offsets.
-        // For each edge, we track the moving offset (dWest, dNorth,
-        // dEast, dSouth) — positive values push that edge outward.
         let dWest = 0,
             dEast = 0,
             dNorth = 0,
@@ -3795,9 +3244,6 @@
             dSouth = dy;
         }
 
-        // Aspect-lock: corner handles get the dominant proportional
-        // change applied to both axes. Edge handles ignore shift (their
-        // perpendicular dimension is fixed by definition).
         if (shift && isCornerHandle(handle)) {
             const propW = (dWest + dEast) / start.w;
             const propH = (dNorth + dSouth) / start.h;
@@ -3822,8 +3268,6 @@
             }
         }
 
-        // Center mode: mirror each moving edge to the opposite edge so
-        // the centre of the element stays put.
         if (alt) {
             if (dWest !== 0) {
                 dEast = dWest;
@@ -3845,7 +3289,7 @@
         let newY = start.y - dNorth;
 
         if (newW < RESIZE_MIN_PX) {
-            // Clamp without flipping: keep the un-moving edge fixed.
+
             if (handle.indexOf("w") >= 0) {
                 newX = start.x + start.w - RESIZE_MIN_PX;
             }
@@ -3864,15 +3308,6 @@
         return name === "nw" || name === "ne" || name === "sw" || name === "se";
     }
 
-    // onResizeMouseMove
-    // Inputs: a mousemove MouseEvent at window level.
-    // Output: side-effect; computes the new slide-space rect, applies
-    // it optimistically by writing inline left/top/width/height on the
-    // shadow-DOM element, refreshes the overlay handles, and posts a
-    // throttled ElementResized event.
-    // groupResizeScale — absolute group scale for the current pointer position,
-    // derived from the corner drag against the grabbed visual box (aspect
-    // locked). Floored at 0.01 so the commit's scale-must-be-positive holds.
     function groupResizeScale(e, scale) {
         const dx = (e.clientX - resizeState.startMouse.x) / scale;
         const dy = (e.clientY - resizeState.startMouse.y) / scale;
@@ -3891,8 +3326,7 @@
         }
         const scale = getViewportScale();
         if (resizeState.isGroup) {
-            // Live uniform-scale preview so the group's contents grow/shrink
-            // while dragging instead of snapping on drop.
+
             const s = groupResizeScale(e, scale);
             resizeState.target.style.transform = "scale(" + s + ")";
             updateSelectionOverlay();
@@ -3912,10 +3346,6 @@
         scheduleResizeReport(rect, e);
     }
 
-    // croppedResizeStyles
-    // Inputs: the new box rect. Output: { backgroundSize, backgroundPosition }
-    // scaled proportionally with the box for a cropped image, or null when the
-    // element being resized is not a cropped image.
     function croppedResizeStyles(rect) {
         if (!resizeState || !resizeState.cropStart) {
             return null;
@@ -3930,10 +3360,6 @@
         return window.__crop.toStyles(scaled);
     }
 
-    // applyOptimisticCropScale
-    // Inputs: the new box rect. Output: side-effect; writes the scaled
-    // background-size/position on a cropped image so the picture scales with
-    // the box during the gesture. No-op otherwise.
     function applyOptimisticCropScale(rect) {
         const css = croppedResizeStyles(rect);
         if (css && resizeState) {
@@ -3978,11 +3404,6 @@
         });
     }
 
-    // onResizeMouseUp
-    // Inputs: a mouseup MouseEvent.
-    // Output: side-effect; ends the gesture, sends ElementResizeEnded
-    // with the final slide-space rect, restores the saved transform,
-    // and detaches the window-level listeners.
     function onResizeMouseUp(e) {
         if (!resizeState) {
             return;
@@ -3990,11 +3411,14 @@
         const scale = getViewportScale();
         const dx = (e.clientX - resizeState.startMouse.x) / scale;
         const dy = (e.clientY - resizeState.startMouse.y) / scale;
-        // Groups scale uniformly: commit the previewed scale via SetGroupScale.
-        // The optimistic transform stays until the remount re-bakes it (avoids a
-        // flash). No transaction was opened, so nothing to close here.
+
         if (resizeState.isGroup) {
             const finalScale = groupResizeScale(e, scale);
+            if (resizeState.savedTransform === "") {
+                resizeState.target.style.removeProperty("transform");
+            } else {
+                resizeState.target.style.transform = resizeState.savedTransform;
+            }
             window.__deck.send("Interaction", {
                 kind: "SetGroupScale",
                 element_id: resizeState.elementId,
@@ -4043,10 +3467,6 @@
         updateSelectionOverlay();
     }
 
-    // ---------- multi-select proportional scale ----------
-    // onMultiScaleMouseDown — grab a corner of the multi-selection bbox. Builds
-    // the slide-space union box + per-element rects, anchors at the opposite
-    // corner, and previews via a per-element transform about that anchor.
     function onMultiScaleMouseDown(e) {
         if (e.button !== 0 || !currentShadow) {
             return;
@@ -4074,7 +3494,7 @@
             return;
         }
         const name = e.currentTarget.dataset.handle;
-        // Grabbed corner + opposite corner (anchor) in slide coords.
+
         const cornerX = name.indexOf("w") >= 0 ? ul : ur;
         const cornerY = name.indexOf("n") >= 0 ? ut : ub;
         const anchor = {
@@ -4091,8 +3511,6 @@
         window.addEventListener("mouseup", onMultiScaleMouseUp);
     }
 
-    // multiScaleFactor — uniform factor from the pointer vs the anchor, using
-    // the axis that moved most (so either-axis drag scales proportionally).
     function multiScaleFactor(e) {
         const stage = document
             .getElementById("viewport-container")
@@ -4135,7 +3553,7 @@
             return;
         }
         const f = multiScaleFactor(e);
-        // Clear the preview transforms; the remount re-bakes the geometry.
+
         for (let i = 0; i < s.items.length; i++) {
             s.items[i].node.style.removeProperty("transform");
             s.items[i].node.style.removeProperty("transform-origin");
@@ -4153,28 +3571,12 @@
         });
     }
 
-    // ---------- inspector ----------
-    // Section definitions. Each entry describes one collapsable section
-    // with one or more property rows. `prop` is the wire name posted in
-    // PropertyChanged events. `kind` controls coercion: "number" sends a
-    // plain numeric string, "rotation-deg" converts degrees → radians on
-    // send and radians → degrees on display, "css" sends the raw string.
-    // `readonly` sections (z-index) render disabled inputs.
-    // Element types an inspector section applies to. Shared geometry sections
-    // (Position/Size/Transform) apply to every type; Appearance to boxy element
-    // types; Typography to text only. Shared sections are listed first so
-    // switching selection only changes the tail of the pane.
     const ALL_TYPES = ["text", "image", "shape", "media", "group", "table", "embed"];
     const NON_GROUP_TYPES = ["text", "image", "shape", "media", "table", "embed"];
-    // Tables join the boxy + text type lists so the table ELEMENT gets Fill /
-    // Border / Shadow / Typography. The same controls drive per-cell styling
-    // when a cell set is active (sendPropertyChanged routes to CellStyleChanged);
-    // table-level styles render behind cell style_overrides via inheritance.
+
     const BOXY_TYPES = ["text", "image", "shape", "media", "table"];
     const TEXT_TYPES = ["text", "table"];
 
-    // Segmented-selector icons (inline SVG markup, currentColor stroke).
-    // Declared before INSPECTOR_SECTIONS because its initializer references them.
     function segIcon(d) {
         return (
             '<svg width="15" height="15" viewBox="0 0 24 24" fill="none"' +
@@ -4397,8 +3799,7 @@
                 { prop: "color", label: "Color", kind: "color", full: true },
             ],
         },
-        // Custom sections — collapsible chrome wrapping pre-existing DOM (the
-        // Custom CSS form and the Animations panel) rather than field rows.
+
         {
             id: "flexbox",
             label: "Flexbox",
@@ -4419,36 +3820,18 @@
         },
     ];
 
-    // Cache of input elements keyed by property name so refreshInspector
-    // can fill them in O(1) and the change handlers can be wired once.
     const inspectorInputs = {};
-    // Set of properties that the current pending PropertyChanged round
-    // trip is waiting on. Used to suppress refresh-from-DOM clobbering
-    // the user's in-flight typing.
+
     const inspectorPending = new Set();
-    // Composite text-style (B/I/U/S) controls. They span multiple CSS props
-    // so they are not keyed by a single prop in inspectorInputs; populate
-    // re-syncs each from the selected element's declarations.
+
     const textStyleControls = [];
 
-    // Composite Fill/Border/Shadow controls (swatch+opacity, 4-cell clusters,
-    // shadow). Like text-style they wire their own commits and re-sync from the
-    // declaration map via `.syncDecls(decls)` rather than the single-prop
-    // populate path. Reset alongside textStyleControls in buildInspectorSections.
     const compositeControls = [];
 
-    // Transform Width/Height aspect-ratio lock. Ephemeral UI state (default
-    // off); when on, editing one dimension scales the other by the element's
-    // live ratio (see onInspectorFieldCommit).
     let sizeRatioLinked = false;
 
-    // Installed font families delivered by the Rust FontList message. The
-    // font-family combobox reads this live, so a list arriving after the
-    // inspector is built needs no rebuild.
     let availableFonts = [];
 
-    // Border style segmented options. "None" shows as a word; the three line
-    // styles render as a short stroked line preview (mirrors the mockup).
     function borderLine(dash) {
         const da = dash ? ' stroke-dasharray="' + dash + '"' : "";
         const cap = dash === "2 4" ? ' stroke-linecap="round"' : "";
@@ -4467,8 +3850,6 @@
         { value: "dotted", icon: borderLine("2 4"), tip: "Dotted" },
     ];
 
-    // Object-fit segmented options for a fill image. Values are the
-    // background-size each fit maps to ("fit" = natural size, see design spec).
     const OBJECT_FIT_OPTIONS = [
         { value: "100% 100%", icon: "Fill", tip: "Stretch to fill" },
         { value: "cover", icon: "Cover", tip: "Cover the box" },
@@ -4476,9 +3857,6 @@
         { value: "auto", icon: "Fit", tip: "Natural size" },
     ];
 
-    // Cluster cell specs: the four longhand props (in cell order) plus the short
-    // label each cell shows. `parse` reads the live values off a decl map.
-    // Length units offered by the inspector unit chips (px is the default).
     const UNITS = ["px", "em", "rem", "pt", "in", "pc", "cm", "mm"];
 
     const CLUSTER_SPECS = {
@@ -4528,9 +3906,6 @@
         },
     };
 
-    // The B/I/U/S toggle specs. `list` props (text-decoration) add/remove
-    // their token within a space-separated list; `min` (font-weight) treats
-    // any weight >= the threshold as "on".
     const TEXT_STYLE_BUTTONS = [
         { prop: "font-weight", on: "700", min: 600, glyph: "B", cls: "b", tip: "Bold" },
         { prop: "font-style", on: "italic", glyph: "I", cls: "i", tip: "Italic" },
@@ -4552,9 +3927,6 @@
         },
     ];
 
-    // Properties already surfaced by structured inspector fields (or set
-    // structurally). Everything else on the element shows in the Custom CSS
-    // declarations list.
     const KNOWN_PROPS = {
         position: 1,
         display: 1,
@@ -4596,16 +3968,10 @@
         "letter-spacing": 1,
         "font-style": 1,
         "text-decoration": 1,
-        // Structural invariant, not user-editable junk (see WYSIWYG principle).
+
         "white-space": 1,
     };
 
-    // buildInspectorSections
-    // Inputs: none (reads INSPECTOR_SECTIONS).
-    // Output: side-effect; populates #inspector-scroll with one
-    // <section> per group, each with a collapsable header and a body of
-    // <input> fields. Wires the change handlers so every commit posts
-    // PropertyChanged.
     function buildInspectorSections() {
         const root = document.getElementById("inspector-scroll");
         if (!root) {
@@ -4625,9 +3991,6 @@
         }
     }
 
-    // buildSection
-    // Inputs: a section definition.
-    // Output: a <section> DOM node with header + body, fully wired.
     function buildSection(def) {
         const sec = document.createElement("section");
         sec.className = "inspector__section";
@@ -4650,8 +4013,7 @@
         const body = document.createElement("div");
         body.className = "inspector__section-body";
         if (def.custom) {
-            // Relocate the pre-built node (Custom CSS form / Animations panel)
-            // into this section's body; flow layout, not the field grid.
+
             body.classList.add("inspector__section-body--flow");
             const node = document.getElementById(def.custom);
             if (node) {
@@ -4666,10 +4028,6 @@
         return sec;
     }
 
-    // buildField
-    // Inputs: a field definition.
-    // Output: a labelled control (text input, number input, color swatch, or
-    // select) registered in inspectorInputs and wired with the change handler.
     function buildField(field) {
         const wrap = document.createElement("div");
         wrap.className = "inspector__field";
@@ -4684,8 +4042,7 @@
         const control = buildFieldControl(field);
         control.dataset.prop = field.prop;
         control.dataset.kind = field.kind;
-        // noLabel fields carry their own per-input labels (e.g. the shadow grid),
-        // so suppress the redundant row label.
+
         if (field.noLabel) {
             const id = "inspector-input-" + field.prop.replace(/[^a-z0-9]/gi, "-");
             control.id = id;
@@ -4693,18 +4050,14 @@
             wrap.appendChild(control);
             return wrap;
         }
-        // CSS number fields carry a unit (e.g. "px") the bare value must be
-        // suffixed with on commit; geometry number fields (x/y/w/h) have no
-        // unit and stay bare floats for the Rust geometry path.
+
         if (field.unit) {
             control.dataset.unit = field.unit;
         }
         if (field.percent) {
             control.dataset.percent = "1";
         }
-        // Composite controls (swatch/cluster/shadow/border-style/size-row) wire
-        // their own commits internally, so skip the single-prop change handler
-        // that would double-post.
+
         if (!field.readonly && !field.composite) {
             control.addEventListener("change", onInspectorFieldCommit);
         }
@@ -4717,15 +4070,11 @@
         return wrap;
     }
 
-    // UNIT_CHEVRON: the small down-caret drawn inside a unit chip.
     const UNIT_CHEVRON =
         '<svg width="9" height="9" viewBox="0 0 24 24" fill="none"' +
         ' stroke="currentColor" stroke-width="3" stroke-linecap="round"' +
         ' stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
 
-    // FIELD_ICONS: inner SVG markup for each inspector field icon (wrapped by
-    // makeFieldIcon in a 24-box, 1.8-stroke svg). The design-doc icons plus
-    // three matched additions (rotation / font size / font weight).
     const FIELD_ICONS = {
         opacity:
             '<circle cx="12" cy="12" r="8"/>' +
@@ -4743,10 +4092,8 @@
         cornerBL: '<path d="M19 19h-8a6 6 0 0 1-6-6V5"/>',
     };
 
-    // Per-icon stroke overrides (default 1.8); the weight "B" reads bolder.
     const FIELD_ICON_STROKE = { fontWeight: 3 };
 
-    // fieldIconSvg — the 14px svg markup for a field icon key ("" if unknown).
     function fieldIconSvg(key) {
         const inner = FIELD_ICONS[key];
         if (!inner) {
@@ -4764,7 +4111,6 @@
         );
     }
 
-    // makeFieldIcon — a leading icon span for a number field.
     function makeFieldIcon(key) {
         const span = document.createElement("span");
         span.className = "inspector__field-icon";
@@ -4772,14 +4118,6 @@
         return span;
     }
 
-    // makeDropdown
-    // Inputs: { label, options:[{value,label}], value, placeholder, variant,
-    //   className, onChange }. Output: a trigger element (button for "field",
-    //   span chip for "chip") styled like the Add-Animation menu. It owns a
-    //   fixed-position popover (single header = `label`, then the options) built
-    //   lazily on open; click-off / Esc close it. Exposes `.value` get/set,
-    //   `.setOptions()`, and fires `change` on selection (drop-in for a native
-    //   <select>). See docs/… unified-dropdown spec.
     function makeDropdown(opts) {
         const variant = opts.variant === "chip" ? "chip" : "field";
         const label = opts.label || "";
@@ -4911,10 +4249,6 @@
         return trigger;
     }
 
-    // makeUnitChip
-    // Inputs: getUnit() → current unit string, setUnit(u) → commit a new unit.
-    // Output: the "px ▾" chip (a chip-variant dropdown of UNITS). `.sync()`
-    // relabels from getUnit(). Errors: asserts both callbacks are functions.
     function makeUnitChip(getUnit, setUnit) {
         console.assert(
             typeof getUnit === "function" && typeof setUnit === "function",
@@ -4937,13 +4271,6 @@
         return chip;
     }
 
-    // makeNumberField
-    // Inputs: a number / rotation-deg field carrying `icon` and/or `unitSelect`
-    // (else `suffix`). Output: a box laid out `[icon][input][chip | suffix]`.
-    // Exposes `.value` (proxying the input); unit fields also carry a live
-    // `dataset.unit` + `setUnit()`. Fires `change` on number commit and (unit
-    // fields) on unit change. Reused for opacity/rotation/line-height/weight and
-    // the unit-select fields (font-size / letter-spacing).
     function makeNumberField(field) {
         const box = document.createElement("div");
         box.className = "inspector__unitfield";
@@ -4999,11 +4326,6 @@
         return box;
     }
 
-    // buildFieldControl
-    // Inputs: a field definition.
-    // Output: the bare control element for the field's kind — a <select> for
-    // "select", a color swatch for "color", otherwise a text <input> (the
-    // Enter-to-blur affordance is wired for text inputs only).
     function buildFieldControl(field) {
         if (
             (field.kind === "number" || field.kind === "rotation-deg") &&
@@ -5064,12 +4386,6 @@
         return input;
     }
 
-    // makeSegmentControl
-    // Inputs: an array of { value, icon, tip } options.
-    // Output: a segmented button row that behaves like a form control: it
-    // exposes a synthetic `.value` (the selected option) and dispatches a
-    // `change` event on click, so it reuses the existing commit + populate
-    // plumbing unchanged. Setting `.value` reflects the pressed button.
     function makeSegmentControl(options) {
         console.assert(Array.isArray(options), "segment options must be array");
         const box = document.createElement("div");
@@ -5107,11 +4423,6 @@
         return box;
     }
 
-    // makeColorSlider
-    // Inputs: label text, max value, and onInput / onCommit callbacks.
-    // Output: { row, input, readout } — a labelled range slider row used for
-    // the H/S/L/A axes of the colour popover. `input` fires onInput live and
-    // onCommit on release (commit-on-change, preview-on-input).
     function makeColorSlider(label, max, onInput, onCommit) {
         const row = document.createElement("div");
         row.className = "colorpop__slider";
@@ -5133,10 +4444,6 @@
         return { row: row, input: input, readout: readout };
     }
 
-    // positionColorPopover
-    // Inputs: the popover element and its anchor (the inline swatch). Output:
-    // side-effect; pins the popover (position:fixed) just below the anchor,
-    // clamped into the viewport so it never spills off-screen.
     function positionColorPopover(pop, anchor) {
         const r = anchor.getBoundingClientRect();
         const pw = pop.offsetWidth || 240;
@@ -5156,12 +4463,6 @@
         pop.style.setProperty("--arrow-x", Math.max(10, Math.min(cx, pw - 10)) + "px");
     }
 
-    // makeColorControl
-    // Output: an inline swatch trigger whose `.value` round-trips a full
-    // hex-or-rgba() colour string and which dispatches `change` on commit
-    // (unchanged public contract). Clicking the swatch opens a popover with an
-    // HS wheel and H/S/L/A sliders; HSL is the edit model, rgba() the stored
-    // value. See docs/superpowers/specs/2026-06-27-color-picker-design.md.
     function makeColorControl() {
         const box = document.createElement("div");
         box.className = "inspector__color";
@@ -5174,8 +4475,7 @@
         const hexInput = document.createElement("input");
         hexInput.className = "inspector__color-hex";
         hexInput.spellcheck = false;
-        // Growing gap between the hex text and the percentage: clicking here
-        // opens the picker (only the hex text itself edits).
+
         const gap = document.createElement("span");
         gap.className = "inspector__color-gap";
         const pct = document.createElement("span");
@@ -5196,8 +4496,7 @@
             const rgb = window.__style.hslToRgb(state.h, state.s, state.l);
             return window.__style.rgbToHex(rgb.r, rgb.g, rgb.b);
         }
-        // render: repaint the inline row + popovers from state. No commit
-        // (callers commit explicitly). Skips inputs the user is editing.
+
         function render() {
             const hex = stateHex();
             const css = window.__style.composeRgba(hex, state.a);
@@ -5229,8 +4528,7 @@
             render();
             commit();
         }
-        // Apply a parsed { hex, alpha } to state, keeping hue on achromatic
-        // colours so the wheel doesn't snap to red on grey/black/white.
+
         function applyColor(hex, alpha, setAlpha) {
             const rgb = window.__style.hexToRgb(hex);
             const hsl = window.__style.rgbToHsl(rgb.r, rgb.g, rgb.b);
@@ -5302,7 +4600,6 @@
             }
         }
 
-        // Zone 1: swatch (and the gap after the hex text) → colour popover.
         function togglePop(e) {
             e.stopPropagation();
             if (pop.el.classList.contains("colorpop--open")) {
@@ -5313,7 +4610,7 @@
         }
         swatch.addEventListener("click", togglePop);
         gap.addEventListener("click", togglePop);
-        // Zone 3: percentage → opacity popover.
+
         pct.addEventListener("click", function (e) {
             e.stopPropagation();
             if (alphaPop.el.classList.contains("colorpop--open")) {
@@ -5322,8 +4619,7 @@
                 openAlpha();
             }
         });
-        // Zone 2: hex text → inline edit. 8-digit hex sets colour + alpha;
-        // "none"/empty clears; invalid reverts on blur.
+
         hexInput.addEventListener("change", function () {
             const raw = hexInput.value.trim().toLowerCase();
             if (raw === "" || raw === "none") {
@@ -5358,8 +4654,7 @@
         Object.defineProperty(box, "value", {
             get: currentCss,
             set: function (v) {
-                // While a popover is open the user is editing — ignore the echo
-                // from the committed round-trip so it can't reset live edits.
+
                 if (
                     pop.el.classList.contains("colorpop--open") ||
                     alphaPop.el.classList.contains("colorpop--open")
@@ -5383,12 +4678,6 @@
         return box;
     }
 
-    // buildColorPopover
-    // Inputs: shared `state` ({h,s,l,a}), a render() that repaints from state,
-    // and a commit() that fires the control's `change`. Output: { el, render }
-    // — the popover DOM (an HS wheel + H/S/L/A sliders + hex field) wired to
-    // mutate state then render/commit. `render(state, hex, css)` syncs the
-    // popover's own controls (called by the parent's render).
     function buildColorPopover(state, render, commit, setNone) {
         const el = document.createElement("div");
         el.className = "colorpop";
@@ -5402,9 +4691,7 @@
         el.appendChild(noneBtn);
         const wheel = document.createElement("div");
         wheel.className = "colorpop__wheel";
-        // Lightness wash over the hue/sat disc: white above L=50, black below,
-        // opacity tracking distance from 50 so the wheel reads at the actual
-        // lightness (WYSIWYG). Sits under the dot.
+
         const lum = document.createElement("span");
         lum.className = "colorpop__wheel-lum";
         const dot = document.createElement("span");
@@ -5492,11 +4779,6 @@
         return { el: el, render: renderPopover };
     }
 
-    // buildAlphaPopover
-    // Inputs: shared `state`, render(), commit(). Output: { el, render } — a
-    // small popover holding one 0..100 alpha slider + readout. Drag mutates
-    // state.a then render()s live; release commits. Opened from the row's
-    // percentage span; positioned by positionColorPopover.
     function buildAlphaPopover(state, render, commit) {
         const el = document.createElement("div");
         el.className = "colorpop colorpop--alpha";
@@ -5518,8 +4800,6 @@
         return { el: el, render: renderAlpha };
     }
 
-    // setColorAxis: set a slider's value (unless the user is dragging it) and
-    // its numeric readout. Keeps live drags from being clobbered by render.
     function setColorAxis(slider, value, shown) {
         if (document.activeElement !== slider.input) {
             slider.input.value = String(Math.round(value));
@@ -5527,11 +4807,6 @@
         slider.readout.textContent = String(shown);
     }
 
-    // wireColorWheel
-    // Inputs: the wheel element, shared state, render(), commit(). Output:
-    // side-effect; pointer drag on the wheel sets hue (angle) + saturation
-    // (radius), rendering live and committing on release. Angle is measured
-    // clockwise from top to match the conic hue gradient.
     function wireColorWheel(wheel, state, render, commit) {
         function fromPointer(e) {
             const r = wheel.getBoundingClientRect();
@@ -5564,7 +4839,6 @@
         });
     }
 
-    // Chain glyph shared by the cluster link toggle and the ratio lock.
     const LINK_ICON =
         '<svg width="12" height="12" viewBox="0 0 24 24" fill="none"' +
         ' stroke="currentColor" stroke-width="2" stroke-linecap="round"' +
@@ -5572,7 +4846,6 @@
         ' 0-5.6-5.6L11 7"/><path d="M14 11a4 4 0 0 0-5.6-.5L5.9 13a4 4 0 0 0 5.6' +
         ' 5.6L13 17"/></svg>';
 
-    // numOr0: coerce an inspector input string to a finite number (0 fallback).
     function numOr0(v) {
         const n = Number(
             String(v == null ? "" : v)
@@ -5587,12 +4860,6 @@
         }
     }
 
-    // makeSwatchOpacityControl
-    // Inputs: the CSS property the control owns (background-color / border-color).
-    // Output: a composite control wrapping the colour picker — alpha now lives
-    // inside the picker, so the standalone opacity field is gone. Commits the
-    // picker's full hex/rgba() value on change and re-syncs via syncDecls.
-    // Registered in compositeControls. Errors: asserts a non-empty prop.
     function makeSwatchOpacityControl(prop) {
         console.assert(typeof prop === "string" && prop !== "", "swatch prop required");
         const box = document.createElement("div");
@@ -5616,10 +4883,6 @@
         return box;
     }
 
-    // makeBorderStyleControl
-    // Output: a segmented None/solid/dashed/dotted selector that commits
-    // `border-style` and re-syncs from parseBorder (so a legacy `border`
-    // shorthand still lights the right segment). Registered in compositeControls.
     function makeBorderStyleControl() {
         const box = makeSegmentControl(BORDER_STYLE_OPTIONS);
         box.addEventListener("change", function () {
@@ -5632,10 +4895,6 @@
         return box;
     }
 
-    // makeClusterCell
-    // Inputs: a { label, tip } cell spec. Output: { wrap, input } — a labelled
-    // mini number field used by the border-width / corner-radius clusters and
-    // the shadow grid.
     function makeClusterCell(cell) {
         const wrap = document.createElement("div");
         wrap.className = "inspector__cluster-cell tt";
@@ -5656,10 +4915,6 @@
         return { wrap: wrap, input: input };
     }
 
-    // makeShadowCell
-    // Inputs: a label string. Output: { wrap, input } — a number field with its
-    // label stacked ABOVE the input (vs. the cluster cell's inline single-char
-    // label), so multi-char names like "Blur"/"Spread" don't crowd the value.
     function makeShadowCell(label) {
         const wrap = document.createElement("div");
         wrap.className = "inspector__shadow-cell";
@@ -5674,13 +4929,6 @@
         return { wrap: wrap, input: input };
     }
 
-    // makeClusterControl
-    // Inputs: a CLUSTER_SPECS entry (four longhand props + a parse fn).
-    // Output: a 4-cell number cluster with a link toggle. Linked edits write
-    // the value to all four longhands; unlinked edits write only the touched
-    // cell. The link auto-reflects uniformity on sync; clicking it while
-    // unlinked collapses all cells to the first and re-links. Registered in
-    // compositeControls. Errors: asserts a well-formed spec.
     function makeClusterControl(spec) {
         console.assert(spec && Array.isArray(spec.cells), "cluster spec required");
         const box = document.createElement("div");
@@ -5711,8 +4959,7 @@
                 sendPropertyChanged(spec.cells[j].prop, v + unit);
             }
         }
-        // Re-post every cell with its own current number (used on unit switch —
-        // reinterpret, so per-side values are kept).
+
         function recommitAll() {
             for (let j = 0; j < inputs.length; j++) {
                 sendPropertyChanged(spec.cells[j].prop, numOr0(inputs[j].value) + unit);
@@ -5760,7 +5007,7 @@
             }
             linked = uniform;
             box.dataset.linked = linked ? "true" : "false";
-            // Reflect the stored unit from the first present longhand (else px).
+
             let found = "";
             for (let j = 0; j < spec.cells.length && found === ""; j++) {
                 found = window.__style.splitLength(decls[spec.cells[j].prop] || "").unit;
@@ -5779,11 +5026,6 @@
         return box;
     }
 
-    // makeShadowControl
-    // Output: an X/Y/Blur/Spread number grid plus a colour swatch that commit a
-    // single composed `box-shadow` on any change and re-sync from
-    // parseBoxShadow. Shadow colour is hex only (no alpha) for now. Registered
-    // in compositeControls.
     function makeShadowControl() {
         const box = document.createElement("div");
         box.className = "inspector__shadow";
@@ -5845,21 +5087,11 @@
         return box;
     }
 
-    // parseAssetId
-    // Inputs: a background-image value. Output: the asset id inside a
-    // var(--asset-<id>) reference, or "" when none.
     function parseAssetId(bg) {
         const m = /var\(--asset-([^)]+)\)/.exec(String(bg == null ? "" : bg));
         return m ? m[1] : "";
     }
 
-    // makeFillImageControl
-    // Output: a no-preview image picker (same field chrome as other rows) for
-    // the element's fill image. Clicking opens a file dialog; the upload routes
-    // through importImageFile with the selected element id (as_element_fill),
-    // so Rust writes background-image over background-color. syncDecls shows the
-    // asset filename (or "Choose…") and toggles the clear button. Registered in
-    // compositeControls.
     function makeFillImageControl() {
         const box = document.createElement("div");
         box.className = "inspector__fillimage";
@@ -5924,10 +5156,6 @@
         return box;
     }
 
-    // makeObjectFitControl
-    // Output: a segmented Fill/Cover/Contain/Fit selector that maps to
-    // background-size. The whole field hides when the element has no fill image.
-    // Registered in compositeControls.
     function makeObjectFitControl() {
         const box = makeSegmentControl(OBJECT_FIT_OPTIONS);
         box.addEventListener("change", function () {
@@ -5945,22 +5173,12 @@
         return box;
     }
 
-    // fontUnquote
-    // Inputs: a font-family value. Output: the first family with surrounding
-    // quotes stripped (the combobox shows a single bare name).
     function fontUnquote(v) {
         const s = String(v == null ? "" : v).trim();
         const first = s.split(",")[0].trim();
         return first.replace(/^["']|["']$/g, "").trim();
     }
 
-    // makeFontComboControl
-    // Output: a searchable font-family combobox — a text input plus a filtered
-    // popover over the installed families (availableFonts). Typing filters;
-    // ArrowUp/Down move the highlight; Enter or click commits; Esc/blur closes.
-    // A free-typed value still commits (manual entry survives when a font is not
-    // enumerated). Commits send a quoted font-family. Registered in
-    // compositeControls; syncDecls fills the input from the element.
     function makeFontComboControl() {
         const box = document.createElement("div");
         box.className = "inspector__fontcombo";
@@ -5974,8 +5192,7 @@
         pop.hidden = true;
         box.appendChild(input);
         box.appendChild(pop);
-        // Buffered rendering: matches holds the full filtered list, `shown` how
-        // many <li> are mounted. The popover scrolls the rest in by the chunk.
+
         const FONT_CHUNK = 80;
         let matches = [];
         let shown = 0;
@@ -6064,9 +5281,7 @@
         });
         box.syncDecls = function (decls) {
             const raw = String(decls["font-family"] || "").trim();
-            // A theme binding (var(--theme-*)) or no value means "system
-            // default" — show the placeholder, not the raw token. Committing an
-            // empty value clears the inline override back to that default.
+
             const isDefault = raw === "" || raw.indexOf("var(") === 0;
             current = isDefault ? "" : fontUnquote(raw);
             if (document.activeElement !== input) {
@@ -6083,10 +5298,6 @@
         return box;
     }
 
-    // buildFontItem
-    // Inputs: a family name and the commit callback. Output: a popover <li>
-    // previewing the family in its own face; mousedown commits (preventDefault
-    // keeps input focus so no blur-close race).
     function buildFontItem(name, commit) {
         const li = document.createElement("li");
         li.className = "inspector__fontcombo-item";
@@ -6099,10 +5310,6 @@
         return li;
     }
 
-    // onFontComboKey
-    // Inputs: the keydown event plus the combobox parts and highlight
-    // get/set/render/close helpers. Output: side-effect; arrow keys move the
-    // highlight, Enter commits the highlighted (or typed) value, Esc closes.
     function onFontComboKey(e, pop, input, commit, setHi, getHi, renderPop, closePop) {
         if (pop.hidden && e.key === "ArrowDown") {
             renderPop();
@@ -6127,9 +5334,6 @@
         }
     }
 
-    // Declarations excluded when saving a preset: layout/identity plus the
-    // element-bound fill image (an asset ref + placement belong to one element,
-    // not a reusable style).
     const PRESET_EXCLUDE = {
         left: 1,
         top: 1,
@@ -6146,9 +5350,6 @@
         "background-position": 1,
     };
 
-    // capturePresetDecls
-    // Inputs: an element node. Output: its style-attribute declarations minus
-    // the excluded set — the reusable "look" to store in a preset rule.
     function capturePresetDecls(el) {
         const all = parseStyleAttr(el.getAttribute("style") || "");
         const out = {};
@@ -6161,8 +5362,6 @@
         return out;
     }
 
-    // selectedElementType
-    // Output: the data-element-type of the single selected element, or "".
     function selectedElementType() {
         if (currentSelectionIds.length !== 1) {
             return "";
@@ -6171,10 +5370,6 @@
         return (el && el.dataset.elementType) || "";
     }
 
-    // applyPreset
-    // Inputs: an element type and preset class name. Output: side-effect;
-    // replays the preset's declarations as PropertyChanged commits (injecting
-    // over the element's inline styles, exactly like manual field edits).
     function applyPreset(type, className) {
         const presets = window.__preset.parsePresets(currentGlobalsCss);
         let hit = null;
@@ -6193,11 +5388,6 @@
         }
     }
 
-    // onSavePreset
-    // Inputs: the name input. Output: side-effect; captures the selected
-    // element's look, upserts a [data-element-type].class rule into the globals
-    // CSS, and ships GlobalsCssEditRequested. No-op without a single selection,
-    // a name, or any capturable declaration.
     function onSavePreset(nameInput) {
         if (currentSelectionIds.length !== 1) {
             return;
@@ -6229,10 +5419,6 @@
         nameInput.value = "";
     }
 
-    // makePresetsControl
-    // Output: the Presets section — an Apply dropdown (filtered to the selected
-    // element's type) and a name+Save row. Registered in compositeControls;
-    // syncDecls repopulates the dropdown from the live globals CSS.
     function makePresetsControl() {
         const box = document.createElement("div");
         box.className = "inspector__presets";
@@ -6303,10 +5489,6 @@
         return box;
     }
 
-    // makeSizeInput
-    // Inputs: the geometry prop ("width"/"height") and its short label.
-    // Output: { wrap, input } — a labelled number field wired to the generic
-    // single-prop commit path (dataset.prop/kind drive onInspectorFieldCommit).
     function makeSizeInput(prop, label) {
         const wrap = document.createElement("div");
         wrap.className = "inspector__sizerow-cell";
@@ -6330,12 +5512,6 @@
         return { wrap: wrap, input: input };
     }
 
-    // makeSizeRowControl
-    // Output: the Width [chain] Height row. The two inputs register directly in
-    // inspectorInputs (so populate/commit reach them by prop) and the centre
-    // chain toggles the module-level sizeRatioLinked aspect lock that
-    // maybeScaleSibling reads. The wrapper is composite (its own children are
-    // wired), so buildField skips the wrapper-level change handler.
     function makeSizeRowControl() {
         const box = document.createElement("div");
         box.className = "inspector__sizerow";
@@ -6366,12 +5542,6 @@
         return box;
     }
 
-    // makeTextStyleControl
-    // Output: the B/I/U/S toggle group. Each button commits its own CSS
-    // prop directly (sendPropertyChanged), so the group is wired internally
-    // rather than through the single-prop change handler. `syncDecls(decls)`
-    // (called by populateInspector) stores the live declarations and reflects
-    // the pressed state.
     function makeTextStyleControl() {
         const box = document.createElement("div");
         box.className = "inspector__tstyle";
@@ -6397,7 +5567,7 @@
                 return "";
             },
             set: function () {
-                /* state comes from syncDecls, not .value */
+
             },
         });
         box.syncDecls = function (decls) {
@@ -6407,9 +5577,6 @@
         return box;
     }
 
-    // isTextStyleActive
-    // Inputs: a declaration map and a TEXT_STYLE_BUTTONS spec.
-    // Output: true when that style is currently applied.
     function isTextStyleActive(decls, spec) {
         const cur = String(decls[spec.prop] || "").trim();
         if (spec.list) {
@@ -6422,12 +5589,8 @@
         return cur === spec.on;
     }
 
-    // toggleTextStyle
-    // Inputs: the control box (holds ._decls) and the clicked spec.
-    // Output: side-effect; commits the toggled value. For list props the
-    // token is added/removed within the space-separated list; otherwise the
-    // value flips between `on` and "" (clear). ponytail: a stale ._decls
-    // between commits could drop a sibling token; the round trip re-syncs.
+    // ponytail: writes box._decls optimistically so clicks inside one round trip compose;
+    // a rejected commit leaves it wrong until the next syncTextStyle corrects it.
     function toggleTextStyle(box, spec) {
         const decls = box._decls || {};
         const active = isTextStyleActive(decls, spec);
@@ -6445,12 +5608,11 @@
         } else {
             next = active ? "" : spec.on;
         }
+        box._decls = Object.assign({}, decls);
+        box._decls[spec.prop] = next;
         sendPropertyChanged(spec.prop, next);
     }
 
-    // syncTextStyle
-    // Inputs: the control box and a declaration map.
-    // Output: side-effect; stores the decls and reflects the pressed state.
     function syncTextStyle(box, decls) {
         box._decls = decls;
         for (let i = 0; i < TEXT_STYLE_BUTTONS.length; i++) {
@@ -6459,10 +5621,6 @@
         }
     }
 
-    // renderCustomDeclarations
-    // Inputs: a declaration map for the selected element.
-    // Output: side-effect; fills #inspector-custom-list with a removable chip
-    // for every declaration not covered by a structured field (KNOWN_PROPS).
     function renderCustomDeclarations(decls) {
         const list = document.getElementById("inspector-custom-list");
         if (!list) {
@@ -6479,9 +5637,6 @@
         }
     }
 
-    // buildDeclChip
-    // Inputs: a CSS property name and its value.
-    // Output: a "prop : value [×]" row; the × commits an empty value (clear).
     function buildDeclChip(prop, value) {
         const row = document.createElement("div");
         row.className = "inspector__decl";
@@ -6513,11 +5668,6 @@
         return row;
     }
 
-    // onInspectorFieldCommit
-    // Inputs: an Event from a wired inspector input (change / Enter blur).
-    // Output: side-effect; posts a PropertyChanged event with the field's
-    // wire-encoded value. Suppresses the post when the value is unchanged
-    // from what the DOM already shows (avoids round-trip churn).
     function onInspectorFieldCommit(e) {
         const input = e.target;
         if (!input || input.readOnly) {
@@ -6527,17 +5677,16 @@
         const kind = input.dataset.kind || "css";
         const raw = input.value;
         let wire = encodeForWire(kind, raw);
-        // Append the CSS unit so a typed "16" lands as "16px" inline; empty
-        // (clear) and null (invalid) pass through untouched.
+
         if (kind === "number" && input.dataset.unit && wire !== null && wire !== "") {
             wire = wire + input.dataset.unit;
         }
-        // Percent fields show 0..100 but store the CSS fraction 0..1.
+
         if (kind === "number" && input.dataset.percent && wire !== null && wire !== "") {
             wire = String(Number(wire) / 100);
         }
         if (wire === null) {
-            // Invalid input — restore the displayed value from DOM and bail.
+
             refreshInspector();
             return;
         }
@@ -6549,11 +5698,6 @@
         maybeScaleSibling(prop, wire);
     }
 
-    // maybeScaleSibling
-    // Inputs: the committed property and its wire value. Output: side-effect;
-    // when the aspect lock is on and a width/height was committed, scales the
-    // paired dimension by the element's live ratio and commits it too (option A
-    // — ratio recomputed from the pre-edit geometry on every edit).
     function maybeScaleSibling(prop, wire) {
         if (!sizeRatioLinked || (prop !== "width" && prop !== "height")) {
             return;
@@ -6582,16 +5726,8 @@
         sendPropertyChanged(otherProp, other);
     }
 
-    // encodeForWire
-    // Inputs: the input field's kind, the raw string the user typed.
-    // Output: the value string to send in PropertyChanged, or null when
-    // the input was invalid (e.g. non-numeric for a numeric field).
-    // Dataflow: strip suffix-y characters from numeric inputs, then parse
-    // and reformat; for rotation, convert degrees → radians; for css,
-    // pass through verbatim (empty → clear, see interpret_property_changed
-    // on the Rust side).
     function encodeForWire(kind, raw) {
-        // CSS strings, select/segment tokens, and color hexes pass through.
+
         if (
             kind === "css" ||
             kind === "select" ||
@@ -6602,10 +5738,9 @@
         }
         const trimmed = String(raw).trim();
         if (trimmed === "") {
-            return ""; // empty → clear (only meaningful for CSS in Rust; numeric returns "" → Nothing).
+            return "";
         }
-        // Strip optional unit suffixes ("px", "°") so the user can type
-        // "200px" or "45°" and it still parses.
+
         const numeric = trimmed
             .replace(/(px|em|rem|pt|in|pc|cm|mm|deg|rad|°|%)\s*$/i, "")
             .trim();
@@ -6619,10 +5754,6 @@
         return String(n);
     }
 
-    // onCustomCssSubmit
-    // Inputs: a submit Event from the custom CSS form.
-    // Output: side-effect; sends one PropertyChanged keyed on the typed
-    // CSS property, with the typed value. Clears the inputs on success.
     function onCustomCssSubmit(e) {
         e.preventDefault();
         const keyInput = document.getElementById("inspector-custom-key");
@@ -6643,11 +5774,6 @@
         valInput.value = "";
     }
 
-    // cssValueRejected
-    // Inputs: a CSS property name and a value. Output: true when the value is
-    // non-empty AND the browser rejects it for that property (so applying it
-    // would silently no-op); raises an error toast as a side-effect. Empty
-    // values are allowed (they clear the property).
     function cssValueRejected(property, value) {
         const v = String(value).trim();
         if (v === "") {
@@ -6667,13 +5793,8 @@
         return false;
     }
 
-    // sendPropertyChanged
-    // Inputs: a property name, a wire-formatted value.
-    // Output: side-effect; posts a PropertyChanged IPC envelope for the
-    // currently-selected element (no-op if no single selection).
     function sendPropertyChanged(prop, value) {
-        // When a cell set is active, style writes target those cells instead of
-        // the element's inline styles (per-cell style_overrides).
+
         if (
             tableCellSel &&
             focusedTableId() === tableCellSel.elementId &&
@@ -6703,14 +5824,6 @@
         });
     }
 
-    // refreshInspector
-    // Inputs: none (reads currentSelectionIds + shadow DOM).
-    // Output: side-effect; updates the inspector subtitle and every
-    // input's value. When no element is selected the inputs go blank
-    // and a placeholder message appears; for a single selection the
-    // values are read out of the element's `style` attribute (the DOM
-    // is the source of truth visible to the user, and the tree → DOM
-    // pipeline keeps the two synced).
     function refreshInspector() {
         const subtitle = document.getElementById("inspector-target");
         if (!subtitle) {
@@ -6718,21 +5831,18 @@
         }
         refreshCropBox();
         refreshTableBox();
-        // A selected guide owns the inspector (position only).
+
         if (selectedGuideId !== null) {
             clearInspectorInputs();
             showGuideInspector();
             return;
         }
         hideGuideInspector();
-        // No selection: in slide mode the pane targets the slide (Slide box);
-        // otherwise (layout mode) just blank the element controls.
+
         if (currentSelectionIds.length === 0) {
             clearInspectorInputs();
             const slideMode = currentMode === "slide";
-            // Both modes show the Slide box with no selection: slide mode edits
-            // the active slide; layout mode edits the active layout's theme
-            // background (only the Fill/Image controls — slide-only fields hide).
+
             subtitle.textContent = slideMode ? "Slide" : "Layout";
             setSlideBoxVisible(true);
             setElementInspectorVisible(false, null);
@@ -6762,10 +5872,6 @@
         inspectorPending.clear();
     }
 
-    // setSectionVisible / setElementInspectorVisible
-    // Toggle inspector sections by the selected element's type, plus the
-    // custom-CSS form and Animations section (single-element chrome). When
-    // `show` is false (no/multi selection) everything element-specific hides.
     function setElementInspectorVisible(show, type) {
         const root = document.getElementById("inspector-scroll");
         if (root) {
@@ -6795,9 +5901,6 @@
         }
     }
 
-    // setSlideBoxVisible
-    // Show/hide the Slide box (#slide-box), the no-selection slide-mode pane.
-    // Uses an explicit display (the box's stylesheet default is hidden).
     function setSlideBoxVisible(show) {
         const el = document.getElementById("slide-box");
         if (el) {
@@ -6805,15 +5908,10 @@
         }
     }
 
-    // renderSlideBox
-    // Inputs: none (reads slideInspectorData).
-    // Output: side-effect; fills the Slide box controls from the latest
-    // SlideInspectorUpdate and (once) wires their commit handlers.
     function renderSlideBox() {
         wireSlideBox();
         const layoutMode = currentMode === "layout";
-        // Background source: the active layout in layout mode, the active slide
-        // otherwise. Slide-only fields (title/layout/notes) hide in layout mode.
+
         const data = layoutMode ? layoutBgData : slideInspectorData;
         const box = document.getElementById("slide-box");
         if (box) {
@@ -6845,9 +5943,7 @@
         if (notes && document.activeElement !== notes) {
             notes.value = (data && data.notes) || "";
         }
-        // Background-image well: show a thumbnail of the current image (resolved
-        // from the asset blob cache via its var(--asset-<id>) id) and toggle the
-        // clear button.
+
         const bgImgPick = document.getElementById("slide-bg-image");
         const bgImgClear = document.getElementById("slide-bg-image-clear");
         if (bgImgPick) {
@@ -6876,21 +5972,16 @@
             );
             layout.value = (data && data.layout_id) || "";
         }
-        // Transition controls (slide-only): dropdown + duration/easing, the
-        // timing row hidden when the transition is None (a cut).
+
         if (!layoutMode) {
             renderSlideTransition(data);
         }
-        // Slide animation controller (slide mode only; the field is slide-only).
+
         if (!layoutMode) {
             renderSlideAnimations();
         }
     }
 
-    // renderSlideTransition
-    // Inputs: the active slide's inspector data.
-    // Output: side-effect; reflects data.transition into the dropdown + the
-    // duration/easing controls, hiding the timing row for a None (cut).
     function renderSlideTransition(data) {
         wireSlideTransition();
         const sel = document.getElementById("slide-transition");
@@ -6917,17 +6008,13 @@
         return /^#[0-9a-f]{6}$/i.test(String(s));
     }
 
-    // wireSlideBox
-    // Wire the Slide box controls once. Each posts an Interaction targeting the
-    // active slide (the Rust side supplies the id, except the title which reuses
-    // the thumbnail-rename event carrying the slide id from the cached data).
     function wireSlideBox() {
         const box = document.getElementById("slide-box");
         if (!box || box.dataset.wired) {
             return;
         }
         box.dataset.wired = "1";
-        // Collapse toggle, matching the inspector sections.
+
         const header = document.getElementById("slide-box-header");
         if (header) {
             header.addEventListener("click", function () {
@@ -6935,9 +6022,7 @@
                 box.dataset.collapsed = collapsed ? "false" : "true";
             });
         }
-        // Mount the custom color control (chromeless swatch + hex) in place
-        // of a raw <input type=color>; id "slide-bg" so render/commit below
-        // find it. It exposes a synthetic .value + a "change" event.
+
         const mount = document.getElementById("slide-bg-mount");
         const bg = makeColorControl();
         bg.id = "slide-bg";
@@ -6958,8 +6043,7 @@
                 background: bg.value,
             });
         });
-        // Background-image well: pick imports the file as the slide bg, clear
-        // resets it. Both target the active slide (Rust supplies the id).
+
         const bgImgPick = document.getElementById("slide-bg-image");
         const bgImgFile = document.getElementById("slide-bg-image-file");
         const bgImgClear = document.getElementById("slide-bg-image-clear");
@@ -7031,9 +6115,6 @@
         wireSlideTransition();
     }
 
-    // readSlideTransition: assemble a SlideTransition from the controls, or null
-    // (cut) when the dropdown is None. Duration falls back to 400, easing to the
-    // first preset, so a partly-filled form still sends a valid struct.
     function readSlideTransition() {
         const sel = document.getElementById("slide-transition");
         const kind = sel ? sel.value : "None";
@@ -7048,8 +6129,6 @@
         return { kind: kind, duration_ms: dur, easing: easing };
     }
 
-    // wireSlideTransition: mount the easing segmented control and wire the three
-    // transition controls; each change posts the full transition (or null).
     function wireSlideTransition() {
         const mount = document.getElementById("slide-transition-easing-mount");
         if (mount && !mount.dataset.wired) {
@@ -7088,7 +6167,6 @@
         }
     }
 
-    // sendSlideTransition: post the active slide's transition (Rust supplies id).
     function sendSlideTransition() {
         window.__deck.send("Interaction", {
             kind: "SetSlideTransitionRequested",
@@ -7096,12 +6174,6 @@
         });
     }
 
-    // initDeckTitle
-    // Inputs: the deck title string and a focus flag (both from Configure).
-    // Output: side-effect; fills the top-left title input, wires its commit
-    // handlers once (blur + Enter post SetDeckTitleRequested), and — when
-    // launched as a new deck from a layout — focuses and selects the field so
-    // the user can immediately name the deck.
     function initDeckTitle(title, focus) {
         const input = document.getElementById("deck-title");
         if (!input) {
@@ -7126,7 +6198,7 @@
             });
         }
         if (focus) {
-            // Defer so the input is laid out and the webview has focus.
+
             window.requestAnimationFrame(function () {
                 input.focus();
                 input.select();
@@ -7134,10 +6206,6 @@
         }
     }
 
-    // clearInspectorInputs
-    // Inputs: none.
-    // Output: side-effect; empties every registered inspector input so
-    // stale values do not survive a selection change.
     function clearInspectorInputs() {
         const keys = Object.keys(inspectorInputs);
         for (let i = 0; i < keys.length; i++) {
@@ -7155,16 +6223,6 @@
         renderCustomDeclarations({});
     }
 
-    // populateInspector
-    // Inputs: a parsed declaration map (property → value).
-    // Output: side-effect; fills each registered input with the matching
-    // declaration, mapping CSS → inspector kinds:
-    //   "x"/"y"        ← left/top         (strip "px")
-    //   "width"/"height" ← width/height   (strip "px")
-    //   "rotation"     ← transform        (extract rad, → degrees)
-    //   "opacity"      ← opacity          (verbatim)
-    //   z-index        ← z-index          (verbatim, readonly)
-    //   other          ← match by name    (verbatim CSS string)
     function populateInspector(decls) {
         setIfNotPending("x", stripPx(decls.left));
         setIfNotPending("y", stripPx(decls.top));
@@ -7177,11 +6235,7 @@
         );
         setIfNotPending("z-index", decls["z-index"] || "");
         const cssOnly = [
-            // Fill/Border/Shadow now drive composite controls (below), not these
-            // verbatim fields.
-            // Typography props whose inspector name IS the CSS property, set
-            // verbatim (select tokens, color hex, unitless nums). font-family
-            // drives the combobox composite (syncDecls), not this path.
+
             "font-weight",
             "color",
             "text-align",
@@ -7192,11 +6246,10 @@
             const key = cssOnly[i];
             setIfNotPending(key, decls[key] || "");
         }
-        // Typography length fields split the stored value into the number input
-        // and the unit chip.
+
         setUnitNumber("font-size", decls["font-size"]);
         setUnitNumber("letter-spacing", decls["letter-spacing"], "0");
-        // Composite controls + the Custom CSS declarations list.
+
         for (let i = 0; i < textStyleControls.length; i++) {
             textStyleControls[i].syncDecls(decls);
         }
@@ -7206,9 +6259,6 @@
         renderCustomDeclarations(decls);
     }
 
-    // setUnitNumber: populate a unit-number control (font-size / letter-spacing)
-    // from its raw CSS value — the bare number into the input, the unit into the
-    // chip. Respects the same pending / active-edit guards as setIfNotPending.
     function setUnitNumber(prop, raw, defNum) {
         const box = inspectorInputs[prop];
         if (!box || inspectorPending.has(prop)) {
@@ -7225,8 +6275,6 @@
         box.value = parts.num !== "" ? parts.num : defNum || "";
     }
 
-    // setPercentNumber: populate a percent field (opacity) — the CSS fraction
-    // 0..1 shows as 0..100; an absent value falls back to `def`.
     function setPercentNumber(prop, raw, def) {
         const box = inspectorInputs[prop];
         if (!box || inspectorPending.has(prop)) {
@@ -7245,10 +6293,7 @@
         if (!input) {
             return;
         }
-        // If the user is mid-edit and waiting on the round trip, leave
-        // their typed value alone. inspectorPending is cleared at the
-        // end of refreshInspector — the next round arrives with the
-        // commit they were waiting on.
+
         if (inspectorPending.has(prop)) {
             return;
         }
@@ -7258,9 +6303,6 @@
         input.value = value;
     }
 
-    // parseStyleAttr
-    // Inputs: a `style` attribute string ("k: v; k: v;").
-    // Output: an object map from property name → value (trimmed).
     function parseStyleAttr(s) {
         const out = {};
         const parts = s.split(";");
@@ -7287,10 +6329,6 @@
         return v.replace(/px\s*$/i, "").trim();
     }
 
-    // extractRotationRad
-    // Inputs: a transform CSS value (e.g. "rotate(0.5rad)").
-    // Output: the rotation in radians as a number, or 0 when absent /
-    // unparseable.
     function extractRotationRad(transform) {
         if (typeof transform !== "string") {
             return 0;
@@ -7305,35 +6343,23 @@
 
     function radiansToDegreesStr(rad) {
         const deg = (rad * 180) / Math.PI;
-        // Round to two decimals to keep the display clean while preserving
-        // round-trip stability (the wire roundtrips via the unrounded rad).
+
         return String(Math.round(deg * 100) / 100);
     }
 
-    // ---------- object panel ----------
-    // Last ObjectTreeUpdate payload, retained so we can re-render
-    // selection highlights without a fresh tree payload arriving.
     let lastObjectTree = null;
-    // Object-pane collapse state: group element ids whose children are hidden
-    // (absent = expanded). Session-only; survives ObjectTreeUpdate re-renders.
+
     const collapsedGroups = new Set();
-    // Long-click timer + the threshold (in ms and px) that distinguishes
-    // a click from a press-and-hold to rename.
+
     const LONG_CLICK_MS = 500;
     const LONG_CLICK_MOVE_PX = 4;
     let longClickTimer = null;
-    let longClickAnchor = null; // {x, y, elementId, labelNode}
-    // The data-transfer key used for drag-and-drop. We never inspect
-    // dataTransfer values cross-window so any unique string works.
+    let longClickAnchor = null;
+
     const DRAG_TYPE = "application/x-carousel-element-id";
-    // Tracks which element id is currently being dragged so the drop
-    // target computation does not have to read dataTransfer (its values
-    // are unavailable during dragover on some browsers).
+
     let panelDragId = null;
 
-    // renderObjectPanel
-    // Inputs: an ObjectTreeData payload (or null to render empty).
-    // Output: side-effect; rebuilds #objects-tree from scratch.
     function renderObjectPanel(tree) {
         lastObjectTree = tree;
         const host = document.getElementById("objects-tree");
@@ -7348,18 +6374,13 @@
             host.appendChild(empty);
             return;
         }
-        // Top-level z-order: index 0 is bottom of stack visually. The
-        // panel matches that — first row in the panel = z-index 0. (Some
-        // UIs invert this and list "top-most first"; we follow the data
-        // model literally so the panel order matches the SPEC §11.2
-        // "tree mirror" wording.)
+
         for (let i = 0; i < tree.nodes.length; i++) {
             host.appendChild(buildObjectNode(tree.nodes[i], 0));
         }
         updateObjectPanelSelection();
     }
 
-    // collectGroupIds — every group element id at any depth in the tree.
     function collectGroupIds(nodes, out) {
         const list = nodes || (lastObjectTree && lastObjectTree.nodes) || [];
         const acc = out || [];
@@ -7374,7 +6395,6 @@
         return acc;
     }
 
-    // toggleGroupCollapsed — flip one group's collapse state and re-render.
     function toggleGroupCollapsed(id) {
         if (collapsedGroups.has(id)) {
             collapsedGroups.delete(id);
@@ -7384,8 +6404,6 @@
         renderObjectPanel(lastObjectTree);
     }
 
-    // toggleAllGroups — the header button. If more than one group is expanded,
-    // collapse every group (any depth); otherwise expand all.
     function toggleAllGroups() {
         const ids = collectGroupIds();
         let expanded = 0;
@@ -7404,10 +6422,6 @@
         renderObjectPanel(lastObjectTree);
     }
 
-    // buildObjectNode
-    // Inputs: an ObjectTreeNode (id, element_type, children), the depth
-    // (used purely so future styling can target nesting level).
-    // Output: a DOM subtree representing this node and its descendants.
     function buildObjectNode(node, depth) {
         const wrap = document.createElement("div");
         wrap.className = "objects__node-wrap";
@@ -7422,8 +6436,6 @@
         row.dataset.elementType = node.element_type;
         row.tabIndex = 0;
 
-        // Disclosure triangle — visible-but-inert for non-groups so
-        // alignment stays consistent.
         const disclosure = document.createElement("span");
         disclosure.className = "objects__disclosure";
         const collapsed = node.element_type === "group" && collapsedGroups.has(node.id);
@@ -7454,7 +6466,6 @@
         label.dataset.role = "label";
         row.appendChild(label);
 
-        // Listeners.
         row.addEventListener("mousedown", onPanelMouseDown);
         row.addEventListener("dragstart", onPanelDragStart);
         row.addEventListener("dragover", onPanelDragOver);
@@ -7462,9 +6473,7 @@
         row.addEventListener("drop", onPanelDrop);
         row.addEventListener("dragend", onPanelDragEnd);
         row.addEventListener("dblclick", function (e) {
-            // Double-click (and long-click) edit the element's id — the
-            // value shown on the row, the data-element-id, and the
-            // object-tree key, all one and the same.
+
             e.preventDefault();
             editElementId(label, node.id);
         });
@@ -7503,10 +6512,6 @@
         }
     }
 
-    // updateObjectPanelSelection
-    // Inputs: none (reads currentSelectionIds + the rendered tree).
-    // Output: side-effect; sets aria-selected on every row whose id
-    // appears in the current selection set, clears the others.
     function updateObjectPanelSelection() {
         const host = document.getElementById("objects-tree");
         if (!host) {
@@ -7520,18 +6525,11 @@
         }
     }
 
-    // onPanelMouseDown
-    // Inputs: mousedown on a node row.
-    // Output: side-effect; (a) sends SetSelectionFromPanel for the
-    // clicked element (shift extends selection), (b) starts the
-    // long-click timer that escalates a hold into rename mode.
     function onPanelMouseDown(e) {
         if (e.button !== 0) {
             return;
         }
-        // Ignore clicks that started on the disclosure chevron — those
-        // are reserved for future expand/collapse; passing through to
-        // selection here would be confusing.
+
         if (e.target && e.target.dataset && e.target.dataset.role === "disclosure") {
             return;
         }
@@ -7605,18 +6603,9 @@
         cancelLongClick();
     }
 
-    // floatingEdit
-    // Inputs: an anchor node to position over, the initial text, and a
-    // commit callback invoked with the final value (only on commit, not on
-    // cancel). Spawns a fixed-position <input> overlaid on the anchor
-    // rather than nesting one inside it — so it works even when the anchor
-    // lives inside a <button> (the thumbnail label), where a nested input
-    // would be invalid HTML. Enter / blur commit; Escape cancels. The
-    // backend is authoritative for the committed value (it sanitizes ids
-    // and rebroadcasts), so this only sends the raw text.
     function floatingEdit(anchorNode, initialValue, commitFn) {
         if (!anchorNode || document.querySelector(".floating-edit")) {
-            return; // one editor at a time
+            return;
         }
         const rect = anchorNode.getBoundingClientRect();
         const input = document.createElement("input");
@@ -7659,13 +6648,6 @@
         });
     }
 
-    // editElementId
-    // Inputs: the label DOM node to overlay, and the element's current id.
-    // Output: side-effect; opens a floating editor prefilled with the id
-    // and, on commit, sends ElementIdEditRequested. The Rust side
-    // sanitizes the value (whitespace runs → '_'), renames the element,
-    // remounts, and refreshes the panel. Shared by the object panel's
-    // double-click and long-click affordances.
     function editElementId(labelNode, elementId) {
         floatingEdit(labelNode, elementId, function (value) {
             window.__deck.send("Interaction", {
@@ -7675,8 +6657,6 @@
             });
         });
     }
-
-    // ----- drag-and-drop -----
 
     function onPanelDragStart(e) {
         cancelLongClick();
@@ -7709,10 +6689,6 @@
         }
     }
 
-    // onPanelDragOver
-    // Inputs: dragover event on a row.
-    // Output: side-effect; sets data-drop-target on this row to one of
-    // "before" / "after" / "inside", governs the visual cue.
     function onPanelDragOver(e) {
         if (!panelDragId) {
             return;
@@ -7720,7 +6696,7 @@
         const row = e.currentTarget;
         const targetId = row.dataset.elementId || "";
         if (targetId === panelDragId) {
-            return; // cannot drop on itself
+            return;
         }
         e.preventDefault();
         if (e.dataTransfer) {
@@ -7747,19 +6723,13 @@
 
     function onPanelDragLeave(e) {
         const row = e.currentTarget;
-        // Only clear if leaving for an unrelated target — re-entering
-        // immediately on dragover will set it again.
+
         if (e.relatedTarget && row.contains(e.relatedTarget)) {
             return;
         }
         row.removeAttribute("data-drop-target");
     }
 
-    // onPanelDrop
-    // Inputs: drop event on a row.
-    // Output: side-effect; sends ReparentElementRequested with the
-    // computed (parent, position) coordinates. Position is in
-    // post-removal terms — see ReparentElement docs on the Rust side.
     function onPanelDrop(e) {
         if (!panelDragId) {
             return;
@@ -7787,20 +6757,6 @@
         });
     }
 
-    // computeDropTarget
-    // Inputs: the dragging element id, the row id under the cursor,
-    // and the zone ("before" | "after" | "inside").
-    // Output: { new_parent_id, new_position } in post-removal coordinates,
-    // or null when the result would be a no-op or invalid.
-    // Dataflow:
-    //   1. Look up source (parent_id, index) in lastObjectTree.
-    //   2. Look up target (parent_id, index) in lastObjectTree.
-    //   3. Translate zone into a target parent + display index:
-    //        "before" → target.parent, target.index
-    //        "after"  → target.parent, target.index + 1
-    //        "inside" → target.id itself, end-of-children
-    //   4. Adjust for post-removal: when source.parent == target.parent
-    //      and source.index < display_index, subtract 1.
     function computeDropTarget(dragId, targetId, zone) {
         if (!lastObjectTree) {
             return null;
@@ -7814,8 +6770,7 @@
         let newParentId;
         let displayIndex;
         if (zone === "inside") {
-            // Cannot drop onto self-as-parent already filtered above.
-            // Also guard against dropping under one's own descendant.
+
             if (containsDescendant(source.node, targetId)) {
                 return null;
             }
@@ -7830,15 +6785,11 @@
             position -= 1;
         }
         if (source.parentId === newParentId && source.index === position) {
-            return null; // no-op
+            return null;
         }
         return { new_parent_id: newParentId, new_position: position };
     }
 
-    // locateInTree
-    // Inputs: an ObjectTreeData payload and an element id.
-    // Output: { node, parentId, index } when found, else null. parentId
-    // for top-level nodes is the slide root id (tree.root_id).
     function locateInTree(tree, elementId) {
         if (!tree || !Array.isArray(tree.nodes)) {
             return null;
@@ -7876,8 +6827,6 @@
         return false;
     }
 
-    // ----- toolbar -----
-
     function wireObjectsToolbar() {
         const buttons = document.querySelectorAll(".objects__add");
         for (let i = 0; i < buttons.length; i++) {
@@ -7897,8 +6846,7 @@
         if (collapseAll) {
             collapseAll.addEventListener("click", toggleAllGroups);
         }
-        // Add image: pick a file, then import it as a centered new image
-        // element (position null -> Rust centers it on the slide).
+
         const addImage = document.getElementById("tool-add-image");
         if (addImage) {
             const picker = document.createElement("input");
@@ -7917,7 +6865,7 @@
                 picker.value = "";
             });
         }
-        // Undo / redo: reuse the synthetic-key path the accelerators use.
+
         const undoBtn = document.getElementById("undo-btn");
         if (undoBtn) {
             undoBtn.addEventListener("click", function () {
@@ -7932,11 +6880,6 @@
         }
     }
 
-    // ----- share / export menu -----
-
-    // The three export actions, each a card in the Share dropdown. `key` is the
-    // synthetic accelerator name the Rust side already handles (Save / Export
-    // HTML / Print PDF); `icon` is inline SVG markup.
     const SHARE_EXPORTS = [
         {
             key: "save_deck",
@@ -7958,9 +6901,6 @@
         },
     ];
 
-    // buildShareMenu — the export dropdown: one rectangular icon+name card per
-    // SHARE_EXPORTS entry. Clicking a card fires its synthetic accelerator and
-    // closes the menu (the close handler is wired by the caller).
     function buildShareMenu(onPick) {
         const menu = document.createElement("div");
         menu.id = "share-menu";
@@ -7999,9 +6939,6 @@
         return menu;
     }
 
-    // wireShareMenu — toggle the export dropdown under the Share button. A card
-    // click runs the matching synthetic accelerator; an outside click or Escape
-    // closes it.
     function wireShareMenu() {
         const btn = document.getElementById("share-btn");
         if (!btn) {
@@ -8053,8 +6990,6 @@
         });
     }
 
-    // showChromiumDownload — open/update the PDF-export Chromium download modal.
-    // total null -> indeterminate bar; else a percentage fill.
     function showChromiumDownload(received, total) {
         let box = document.getElementById("chromium-download");
         if (!box) {
@@ -8078,7 +7013,6 @@
         }
     }
 
-    // finishChromiumDownload — close on success, or show the error inline.
     function finishChromiumDownload(ok, message) {
         const box = document.getElementById("chromium-download");
         if (!box) {
@@ -8095,10 +7029,6 @@
         }
     }
 
-    // showQuitDialog — raise the unsaved-changes quit confirmation. Cancel
-    // dismisses locally; the other two buttons reply with QuitConfirmed and let
-    // Rust drive the save (if any) and the exit. Idempotent: re-raising while
-    // already open is a no-op.
     function showQuitDialog() {
         if (document.getElementById("quit-dialog")) {
             return;
@@ -8133,33 +7063,18 @@
         document.body.appendChild(box);
     }
 
-    // ---------- thumbnail row ----------
-    // Slide dimensions sent by the last SlideListUpdate. Thumbnails
-    // are rendered by mounting a copy of the slide HTML inside a small
-    // container and applying a CSS scale so the 1920×1080 slide fits
-    // into ~160×90.
     let thumbnailDims = { width: 1920, height: 1080 };
     let thumbnailThemeCss = "";
-    // slideId -> cached HTML. MountSlide refreshes individual entries.
+
     const thumbnailHtmlCache = Object.create(null);
-    // The currently-mounted slide id, kept locally so highlightActive…
-    // can run even if SlideListUpdate hasn't arrived yet.
+
     let activeSlideId = null;
-    // Slide id of the thumbnail being dragged (reorder), null when idle.
+
     let thumbDragSourceId = null;
-    // Off-screen node used as the drag ghost (a single scaled slide), and the
-    // reusable insertion-line element. Both are module-scoped so they survive
-    // the per-render row rebuild (which wipes row children).
+
     let thumbDragGhost = null;
     let thumbDropLine = null;
 
-    // THUMB_KINDS
-    // Per-mode descriptors so the thumbnail row renders slides or layouts
-    // from one set of functions (Stage 11). Each maps the payload/entry
-    // shape and the interaction events for its kind. The DOM mount id stays
-    // `dataset.slideId` for both so MountSlide's updateThumbnailHtml(id)
-    // keys uniformly (in layout mode the mounted canvas id IS the layout
-    // id).
     const THUMB_KINDS = {
         slide: {
             listKey: "slides",
@@ -8170,8 +7085,7 @@
             labelOf: function (e) {
                 return e.title || e.slide_id;
             },
-            // Untitled slides fall back to the id; start the rename editor
-            // empty rather than prefilling a ULID.
+
             editInitial: function (e) {
                 return e.title === e.slide_id ? "" : e.title || "";
             },
@@ -8180,8 +7094,7 @@
             renameKind: "SlideTitleEditRequested",
             renameField: "new_title",
             addKind: "AddSlideRequested",
-            // Slides open a layout picker first (previews of the theme's
-            // layouts) instead of inserting a blank slide outright.
+
             pickerKind: "SlideLayoutPickerRequested",
             emptyText: "No slides.",
             addTitle: "New slide",
@@ -8208,12 +7121,6 @@
         },
     };
 
-    // renderThumbnailRow
-    // Inputs: a SlideListData / LayoutListData payload and the kind
-    // ("slide" | "layout").
-    // Output: side-effect; rebuilds #thumbnail-row from scratch with one
-    // .thumb per item, each mounting the item HTML inside its own shadow
-    // root at a scaled-down size, followed by the "+" add tile.
     function renderThumbnailRow(payload, kind) {
         const spec = THUMB_KINDS[kind] || THUMB_KINDS.slide;
         const row = document.getElementById("thumbnail-row");
@@ -8230,14 +7137,14 @@
         }
         const items =
             payload && Array.isArray(payload[spec.listKey]) ? payload[spec.listKey] : [];
-        // Slide count badge in the thumbnails header.
+
         if (kind === "slide") {
             const badge = document.getElementById("thumbs-count");
             if (badge) {
                 badge.textContent = String(items.length);
             }
         }
-        // Seed / refresh the HTML cache from the payload.
+
         for (let i = 0; i < items.length; i++) {
             const entry = items[i];
             const id = entry && spec.idOf(entry);
@@ -8267,11 +7174,6 @@
         scrollActiveThumbnailIntoView();
     }
 
-    // buildAddTile
-    // Inputs: the kind spec.
-    // Output: a <button>.thumb--add DOM node that asks the Rust side to
-    // insert a blank slide / layout after the active one. Lives at the tail
-    // of the row so it reads as "append".
     function buildAddTile(spec) {
         const btn = document.createElement("button");
         btn.type = "button";
@@ -8296,9 +7198,6 @@
         return btn;
     }
 
-    // closeLayoutPicker
-    // Output: side-effect; removes the new-slide layout picker overlay and its
-    // Esc listener, if present.
     function closeLayoutPicker() {
         const existing = document.getElementById("layout-picker");
         if (existing) {
@@ -8307,8 +7206,6 @@
         document.removeEventListener("keydown", onLayoutPickerKey, true);
     }
 
-    // onLayoutPickerKey — Esc dismisses the picker (capture so it wins over
-    // other global keydown handlers).
     function onLayoutPickerKey(e) {
         if (e.key === "Escape") {
             e.preventDefault();
@@ -8317,11 +7214,6 @@
         }
     }
 
-    // pickLayoutTile
-    // Inputs: a layout id ("" for blank), a display label, and the optional
-    // entry HTML for the preview (empty -> a plain blank tile).
-    // Output: a button mounting a scaled preview that, on click, inserts a new
-    // slide seeded from that layout and closes the picker.
     function pickLayoutTile(layoutId, label, html) {
         const btn = document.createElement("button");
         btn.type = "button";
@@ -8364,12 +7256,6 @@
         return btn;
     }
 
-    // openLayoutPicker
-    // Inputs: a SlideLayoutPickerData payload (theme layouts + preview HTML,
-    // theme/globals CSS, dimensions).
-    // Output: side-effect; pops a modal overlay of layout previews (plus a
-    // Blank option). Choosing one inserts a new slide on that layout. Backdrop
-    // click or Esc dismisses.
     function openLayoutPicker(payload) {
         closeLayoutPicker();
         thumbnailDims = {
@@ -8408,11 +7294,6 @@
         document.addEventListener("keydown", onLayoutPickerKey, true);
     }
 
-    // buildThumbnail
-    // Inputs: a list entry, its display index (1-based badge), the active
-    // id, and the kind spec.
-    // Output: a <button>.thumb DOM node fully wired (click → switch active
-    // slide/layout; dblclick label → rename).
     function buildThumbnail(entry, index, activeId, spec) {
         const itemId = spec.idOf(entry);
         const btn = document.createElement("button");
@@ -8430,9 +7311,7 @@
         const mount = document.createElement("div");
         mount.className = "thumb__mount";
         mount.dataset.slideId = itemId;
-        // Mount inside its own shadow root so theme + globals CSS are
-        // scoped. The asset-vars block resolves any image elements to blob
-        // URLs, mirroring the viewport mount.
+
         const shadow = mount.attachShadow({ mode: "open" });
         shadow.innerHTML =
             "<style>" +
@@ -8450,7 +7329,6 @@
             (entry.html || "");
         preview.appendChild(mount);
 
-        // Caption row: slide number (mono, accent) left of the title.
         const caption = document.createElement("div");
         caption.className = "thumb__caption";
         const num = document.createElement("span");
@@ -8460,8 +7338,7 @@
         label.className = "thumb__label";
         label.textContent = spec.labelOf(entry);
         label.addEventListener("dblclick", function (e) {
-            // Edit the item's display name. stopPropagation so the
-            // double-click does not also fire the switch-active click.
+
             e.preventDefault();
             e.stopPropagation();
             floatingEdit(label, spec.editInitial(entry), function (value) {
@@ -8477,8 +7354,6 @@
         btn.appendChild(preview);
         btn.appendChild(caption);
 
-        // Per-slide delete affordance (slides only). stopPropagation on
-        // mousedown/click so it never switches the active slide.
         if (spec.clickKind === "SlideThumbnailClicked") {
             const del = document.createElement("button");
             del.type = "button";
@@ -8500,14 +7375,12 @@
             wireThumbReorder(btn, preview, itemId);
         }
 
-        // Defer the scale to next frame so getBoundingClientRect on
-        // .thumb__preview is reliable even before the row is in the DOM.
         window.requestAnimationFrame(function () {
             applyThumbnailScale(preview, mount);
         });
 
         btn.addEventListener("click", function () {
-            // Clicking a thumbnail is an explicit slide-level selection.
+
             slideSelected = true;
             updateSlideFocusState();
             const msg = { kind: spec.clickKind };
@@ -8517,12 +7390,6 @@
         return btn;
     }
 
-    // wireThumbReorder
-    // Inputs: the .thumb button, its .thumb__preview (the drag handle), and
-    // the slide id. Output: side-effect; makes the preview draggable and (via
-    // ensureThumbRowDnd) the row a drop target. dragstart pins an explicit
-    // single-slide ghost so only the dragged slide follows the cursor.
-    // Dragging by the preview (not the button) leaves the caption editable.
     function wireThumbReorder(btn, preview, itemId) {
         preview.draggable = true;
         preview.addEventListener("dragstart", function (e) {
@@ -8545,11 +7412,6 @@
         ensureThumbRowDnd(document.getElementById("thumbnail-row"));
     }
 
-    // makeThumbDragImage
-    // Inputs: a slide id. Output: an off-screen 160×90 node showing only that
-    // slide, scaled synchronously (so setDragImage can snapshot it right away)
-    // — the caller removes it on dragend. Built from the cached slide HTML in
-    // its own shadow root, mirroring buildThumbnail.
     function makeThumbDragImage(itemId) {
         const w = 160;
         const h = 90;
@@ -8583,11 +7445,6 @@
         return ghost;
     }
 
-    // ensureThumbRowDnd
-    // Inputs: the thumbnail row. Output: side-effect; (re)appends the reusable
-    // insertion-line element — the per-render row.replaceChildren() wipes it,
-    // so it is restored on every build — and binds dragover / drop / dragleave
-    // once (guarded by dataset.dndBound) so listeners are never stacked.
     function ensureThumbRowDnd(row) {
         if (!row) {
             return;
@@ -8628,19 +7485,12 @@
         });
     }
 
-    // hideThumbDropLine — hide the insertion line if it exists.
     function hideThumbDropLine() {
         if (thumbDropLine) {
             thumbDropLine.style.display = "none";
         }
     }
 
-    // positionThumbDropLine
-    // Inputs: the dragover event and the row. Output: side-effect; snaps the
-    // accent line into the gap before the first slide thumbnail whose midpoint
-    // is right of the pointer (or after the last). Placement uses offsetLeft
-    // (content coordinates, scroll-independent) so it stays accurate however
-    // far the row is scrolled; the pointer test uses viewport rects.
     function positionThumbDropLine(event, row) {
         const thumbs = row.querySelectorAll(".thumb:not(.thumb--add)");
         let target = null;
@@ -8651,9 +7501,7 @@
                 break;
             }
         }
-        // Center the line in the 12px gap: 6px left of the target's left edge
-        // (the gap precedes the target), or 6px right of the last thumb's
-        // right edge for the trailing slot. The extra -1 centers the 2px line.
+
         let center = 0;
         if (target) {
             center = target.offsetLeft - 6;
@@ -8665,12 +7513,6 @@
         thumbDropLine.style.display = "block";
     }
 
-    // thumbDropIndex
-    // Inputs: the drop event, the thumbnail row, and the dragged slide id.
-    // Output: the target index in the FINAL slide_order — the count of OTHER
-    // slide thumbnails whose horizontal midpoint sits left of the pointer.
-    // This matches ReorderSlide's remove-then-insert semantics (the source is
-    // excluded from the count).
     function thumbDropIndex(event, rowEl, sourceId) {
         const thumbs = rowEl.querySelectorAll(".thumb:not(.thumb--add)");
         let idx = 0;
@@ -8687,13 +7529,6 @@
         return idx;
     }
 
-    // applyThumbnailScale
-    // Inputs: the preview frame (fixed thumbnail-px size), the mount
-    // element holding the shadow root.
-    // Output: side-effect; sets transform: scale(...) on the mount so
-    // a 1920×1080 slide fits inside the preview's actual pixel size.
-    // Re-reads the preview size at call time so future CSS tweaks
-    // (responsive width, zooming) keep working without code changes.
     function applyThumbnailScale(preview, mount) {
         if (!preview || !mount) {
             return;
@@ -8710,13 +7545,6 @@
         mount.style.transform = "scale(" + s + ")";
     }
 
-    // updateThumbnailHtml
-    // Inputs: a slide id, the latest HTML for that slide, the theme CSS.
-    // Output: side-effect; updates the in-memory cache and, if a
-    // matching .thumb is on screen, re-renders just that thumbnail's
-    // shadow root so its mini-preview reflects the new state.
-    // Dataflow: cache write -> find the .thumb__mount with the matching
-    // data-slide-id -> rewrite its shadow innerHTML -> re-apply scale.
     function updateThumbnailHtml(slideId, html, themeCss) {
         if (!slideId) {
             return;
@@ -8755,11 +7583,6 @@
         }
     }
 
-    // refreshThumbnailAssetVars
-    // Inputs: none (reads assetBlobCache).
-    // Output: side-effect; rewrites the .asset-vars <style> inside every
-    // thumbnail's shadow root so newly-imported images appear in the
-    // thumbnail previews without a full SlideListUpdate rebuild.
     function refreshThumbnailAssetVars() {
         const row = document.getElementById("thumbnail-row");
         if (!row) {
@@ -8779,11 +7602,6 @@
         }
     }
 
-    // highlightActiveThumbnail
-    // Inputs: the currently active slide id.
-    // Output: side-effect; sets aria-current="true" on the matching
-    // thumbnail and clears it elsewhere. Also scrolls the active
-    // thumbnail into view if it would otherwise be clipped.
     function highlightActiveThumbnail(slideId) {
         if (!slideId) {
             return;
@@ -8833,16 +7651,8 @@
         return String(value).replace(/(["\\])/g, "\\$1");
     }
 
-    // ---------- image drag-and-drop import ----------
-    // Accepted image MIME prefixes. We only handle still images for now;
-    // video/audio drops are ignored.
     const IMPORT_MAX_FILES = 32;
 
-    // clientToSlideCoords
-    // Inputs: a client x / y (window CSS pixels).
-    // Output: { x, y } in slide coordinates (the 1920×1080 space), or
-    // null when no slide is mounted. Uses the mounted .slide element's
-    // on-screen rect as the origin and divides by the viewport scale.
     function clientToSlideCoords(clientX, clientY) {
         if (!currentShadow) {
             return null;
@@ -8862,11 +7672,6 @@
         };
     }
 
-    // onViewportDragOver
-    // Inputs: a dragover DragEvent on the viewport container.
-    // Output: side-effect; preventDefault (required to allow a drop) and
-    // flag the viewport with a drop-active class when the drag carries
-    // files. Returning without preventDefault would reject the drop.
     function onViewportDragOver(e) {
         if (!dragCarriesFiles(e)) {
             return;
@@ -8882,8 +7687,7 @@
     }
 
     function onViewportDragLeave(e) {
-        // Only clear when the pointer truly left the container, not when
-        // moving between children.
+
         const container = document.getElementById("viewport-container");
         if (!container) {
             return;
@@ -8894,11 +7698,6 @@
         container.classList.remove("viewport--drop-active");
     }
 
-    // onViewportDrop
-    // Inputs: a drop DragEvent on the viewport container.
-    // Output: side-effect; for every image file in the transfer, reads
-    // its bytes, decodes natural dimensions, and posts an AssetImported
-    // event with the drop position mapped to slide coordinates.
     function onViewportDrop(e) {
         const container = document.getElementById("viewport-container");
         if (container) {
@@ -8923,10 +7722,6 @@
         }
     }
 
-    // dragCarriesFiles
-    // Inputs: a DragEvent.
-    // Output: true when the drag's dataTransfer advertises files. Used
-    // so we only intercept (and preventDefault) drags we can handle.
     function dragCarriesFiles(e) {
         if (!e.dataTransfer) {
             return false;
@@ -8943,14 +7738,6 @@
         return false;
     }
 
-    // importImageFile
-    // Inputs: a File (image/*), the slide-space drop position (or null).
-    // Output: side-effect; reads bytes → base64, decodes pixel
-    // dimensions, sends one AssetImported event. Asynchronous; failures
-    // are logged and dropped.
-    // Dataflow: FileReader → ArrayBuffer → base64 string in parallel
-    // with an Image() decode for natural width/height; once both are
-    // ready, dispatch.
     function importImageFile(file, slidePos, asSlideBackground, elementFill) {
         const reader = new FileReader();
         reader.onerror = function () {
@@ -8979,11 +7766,6 @@
         reader.readAsArrayBuffer(file);
     }
 
-    // decodeImageDimensions
-    // Inputs: a File, a callback receiving { width, height }.
-    // Output: side-effect; loads the file into an Image() to read its
-    // natural pixel size. On failure (e.g. SVG without intrinsic size)
-    // falls back to { 0, 0 } so the Rust side applies its default size.
     function decodeImageDimensions(file, cb) {
         const url = URL.createObjectURL(file);
         const img = new Image();
@@ -8999,10 +7781,6 @@
         img.src = url;
     }
 
-    // arrayBufferToBase64
-    // Inputs: an ArrayBuffer.
-    // Output: a standard-alphabet base64 string. Chunked so very large
-    // buffers don't blow the call-stack via String.fromCharCode.apply.
     function arrayBufferToBase64(buffer) {
         const bytes = new Uint8Array(buffer);
         const chunkSize = 0x8000;
@@ -9019,10 +7797,8 @@
         return window.btoa(binary);
     }
 
-    // ---------- bootstrap ----------
     document.addEventListener("DOMContentLoaded", function () {
-        // Wire mouse handlers on viewport / window so dragging continues
-        // beyond the viewport's bounding box.
+
         const viewport = document.getElementById("viewport-container");
         if (viewport) {
             viewport.addEventListener("mousedown", onMouseDown);
@@ -9031,8 +7807,7 @@
             viewport.addEventListener("dragleave", onViewportDragLeave);
             viewport.addEventListener("drop", onViewportDrop);
         }
-        // Focus-region tracking: a mousedown anywhere in a region focuses it
-        // (capture phase so it runs before the region's own handlers).
+
         const objectsPanel = document.getElementById("object-panel");
         if (objectsPanel) {
             objectsPanel.addEventListener(
@@ -9058,9 +7833,7 @@
                 "mousedown",
                 function (e) {
                     setFocusRegion("navigator");
-                    // A press on the strip's negative space (not on a thumbnail)
-                    // deselects: no slide highlight, and clear any element selection
-                    // so nothing is highlighted anywhere.
+
                     const onThumb =
                         e.target && e.target.closest && e.target.closest(".thumb");
                     if (!onThumb) {
@@ -9077,11 +7850,11 @@
                 true,
             );
         }
-        // Seed the initial ring on the default (preview) region.
+
         if (viewport) {
             viewport.classList.add("is-focused");
         }
-        // Zoom controls.
+
         const zoomOutBtn = document.getElementById("zoom-out");
         if (zoomOutBtn) {
             zoomOutBtn.addEventListener("click", function () {
@@ -9114,8 +7887,7 @@
         window.addEventListener("mousemove", onMouseMove);
         window.addEventListener("mouseup", onMouseUp);
         window.addEventListener("resize", function () {
-            // In fit mode the scale tracks the pane width (applyZoom also
-            // redraws rulers + guides).
+
             if (zoomMode === "fit") {
                 applyZoom();
             } else {
@@ -9129,8 +7901,7 @@
             positionDividers();
             refitThumbnails();
         });
-        // Suppress the window-level default drop behavior (which would
-        // navigate away to the dropped file) outside the viewport.
+
         window.addEventListener("dragover", function (e) {
             if (dragCarriesFiles(e)) {
                 e.preventDefault();
@@ -9159,8 +7930,7 @@
         wireAnimationsSection();
         wirePaneResizers();
         renderObjectPanel(null);
-        // Capture the canvas floor + place dividers after first layout (the
-        // window is at its default spawn size here).
+
         window.requestAnimationFrame(function () {
             captureCanvasMin();
             positionDividers();
@@ -9169,8 +7939,6 @@
         });
         window.__deck.send("Ready", null);
     });
-
-    // ---------- animations panel ----------
 
     const SLIDE_TRANSITIONS = [
         "None",
@@ -9206,10 +7974,6 @@
         property: "{ }",
     };
 
-    // animSend / animAdd / animUpdate / animRemove / animReplace
-    // Thin posters for the four animation IPC events. `animReplace` swaps an
-    // entry's effect (the UpdateAnimation event cannot change the effect, so a
-    // remove + add with the new catalog id is used; the entry re-appends).
     function animSend(kind, body) {
         body.kind = kind;
         window.__deck.send("Interaction", body);
@@ -9233,27 +7997,18 @@
     function animRemove(animId) {
         animSend("RemoveAnimationRequested", { animation_id: animId });
     }
-    // animReplace — swap an entry's effect. The effect cannot be patched in
-    // place, so remove + re-add with the new catalog id. elementId keeps the
-    // re-add on the right element (the slide controller edits any element, not
-    // just the selection).
+
     function animReplace(animId, catalogId, direction, elementId) {
         animRemove(animId);
         animAdd(catalogId, direction, elementId);
     }
 
-    // animDirectionOf
-    // Output: the direction token for a directional keyframe (the trailing
-    // top|bottom|left|right segment), else null.
     function animDirectionOf(entry) {
         const kf = entry && entry.keyframe;
         const m = kf && /-(top|bottom|left|right)$/.exec(kf);
         return m ? m[1] : null;
     }
 
-    // catalogForEntry
-    // Output: the catalog item backing an entry — by exact keyframe match, or
-    // by prefix for a directional effect, or the property item. May be null.
     function catalogForEntry(entry) {
         if (entry.category === "property") {
             return (
@@ -9283,7 +8038,6 @@
         );
     }
 
-    // animEffectLabel / animTriggerLabel / animEffectSummary — bar text.
     function animEffectLabel(entry) {
         const item = catalogForEntry(entry);
         return item ? item.label : entry.effect_id || "Effect";
@@ -9307,10 +8061,6 @@
         return animEffectLabel(entry) + (dir ? " (" + dir + ")" : "");
     }
 
-    // morphStateFromAttrs
-    // Inputs: element id.
-    // Output: {enabled, duration_ms, easing} read from the element's
-    // data-morph-* attributes. Returns defaults when attributes are absent.
     function morphStateFromAttrs(elId) {
         const el = currentShadow
             ? currentShadow.querySelector(
@@ -9326,11 +8076,6 @@
         return { enabled, duration_ms, easing };
     }
 
-    // renderMorphControl
-    // Inputs: element id.
-    // Output: a <div> with a checkbox, duration input, and easing select,
-    // showing the current morph transition state. Duration/easing are hidden
-    // unless the checkbox is checked.
     function renderMorphControl(elId) {
         const state = morphStateFromAttrs(elId);
         const wrapper = document.createElement("div");
@@ -9393,12 +8138,6 @@
         return wrapper;
     }
 
-    // refreshAnimationsSection
-    // Inputs: none (reads currentSelectionIds + slideAnimations).
-    // Output: side-effect; shows the panel only for a single selection and
-    // rebuilds the bar stack (one bar per entry of the selected element, in
-    // timeline order) plus the count badge. Also renders the morph control
-    // for the selected element.
     function refreshAnimationsSection() {
         const single = currentSelectionIds.length === 1;
         document.body.classList.toggle("has-single-selection", single);
@@ -9439,15 +8178,8 @@
         }
     }
 
-    // ---------- slide animation controller (styles pane) ----------
-    // Shows the WHOLE slide's timeline, grouped into state changes: a run of
-    // consecutive "with previous" entries plays together, so each group is one
-    // rounded box. Items are draggable to reorder; dropping near the bottom of
-    // an item joins that item's group ("with previous"), dropping higher makes
-    // it a separate next step ("after previous").
     let sacDragId = null;
 
-    // groupSlideAnimations — split the timeline into state-change groups.
     function groupSlideAnimations(list) {
         const groups = [];
         for (let i = 0; i < list.length; i++) {
@@ -9461,7 +8193,6 @@
         return groups;
     }
 
-    // renderSlideAnimations — rebuild #sac-groups from the slide timeline.
     function renderSlideAnimations() {
         const host = document.getElementById("sac-groups");
         if (!host) {
@@ -9486,8 +8217,6 @@
         }
     }
 
-    // buildSacItem — one timeline entry: a drag-handle head (element · effect ·
-    // trigger, expand, remove) plus the shared expanded editor body.
     function buildSacItem(entry) {
         const item = document.createElement("div");
         item.className = "sac-item";
@@ -9524,7 +8253,6 @@
         });
         head.append(icon, label, trig, chev, rm);
 
-        // Click anywhere on the head (except the remove button) toggles expand.
         head.addEventListener("click", function (e) {
             if (e.target.closest && e.target.closest("[data-sac-rm]")) {
                 return;
@@ -9533,9 +8261,6 @@
             renderSlideAnimations();
         });
 
-        // Drag handle AND drop target are the SAME element (the head), exactly
-        // like the object panel's rows. When they are split (handle = child,
-        // target = parent) WebKit does not deliver the drop event.
         head.addEventListener("dragstart", function (e) {
             sacDragId = entry.animation_id;
             if (e.dataTransfer) {
@@ -9560,9 +8285,6 @@
         return item;
     }
 
-    // onSacDragOver — choose intent by cursor height in the target: the bottom
-    // ~35% joins the target's group (with previous), higher makes it the next
-    // separate step (after previous). Mirrors the hint on the item.
     function onSacDragOver(e) {
         if (!sacDragId) {
             return;
@@ -9587,8 +8309,6 @@
         }
     }
 
-    // onSacDrop — reorder the dragged entry to just after the target and set its
-    // trigger from the drop zone, as one MoveAnimation (single undo).
     function onSacDrop(e) {
         if (!sacDragId) {
             return;
@@ -9602,8 +8322,7 @@
             return;
         }
         e.preventDefault();
-        // Insertion index is computed in the list WITHOUT the dragged entry
-        // (ReorderAnimation removes then inserts), placed right after the target.
+
         const ids = slideAnimations
             .map(function (a) {
                 return a.animation_id;
@@ -9643,8 +8362,6 @@
         { v: "end", t: "End" },
     ];
 
-    // groupFlexState — read the selected group's current flex props from its DOM
-    // data-attrs (set by the serializer). Returns null when not a single group.
     function groupFlexState() {
         if (currentSelectionIds.length !== 1) {
             return null;
@@ -9660,7 +8377,6 @@
         };
     }
 
-    // flexSelect — a labelled dropdown that posts SetGroupLayout on change.
     function flexSelect(label, opts, current, field) {
         const dd = makeDropdown({
             label: label,
@@ -9686,7 +8402,6 @@
         return animField(label, dd);
     }
 
-    // refreshGroupFlexSection — rebuild #flex-controls from the selected group.
     function refreshGroupFlexSection() {
         const host = document.getElementById("flex-controls");
         if (!host) {
@@ -9704,10 +8419,6 @@
         host.appendChild(flexSelect("Align", FLEX_ALIGNS, st.alignment, "alignment"));
     }
 
-    // buildAnimBar
-    // Inputs: a SlideAnimationEntry.
-    // Output: a collapsed-or-expanded bar element with its controls wired to
-    // the animation IPC events.
     function buildAnimBar(entry) {
         const bar = document.createElement("div");
         bar.className = "anim-bar";
@@ -9718,7 +8429,6 @@
         return bar;
     }
 
-    // buildAnimHead — the always-visible collapsed row.
     function buildAnimHead(entry) {
         const head = document.createElement("div");
         head.className = "anim-bar__head";
@@ -9754,7 +8464,6 @@
         return head;
     }
 
-    // buildAnimBody — the expanded controls (effect/properties/trigger/timing).
     function buildAnimBody(entry) {
         const body = document.createElement("div");
         body.className = "anim-bar__body";
@@ -9776,8 +8485,6 @@
         return body;
     }
 
-    // animField — a labelled control row wrapper. A div (not a <label>) so a
-    // dropdown-trigger button inside isn't double-toggled by label forwarding.
     function animField(labelText, control) {
         const row = document.createElement("div");
         row.className = "anim-bar__field";
@@ -9787,7 +8494,6 @@
         return row;
     }
 
-    // buildAnimEffectRow — swap the effect within its category (remove + add).
     function buildAnimEffectRow(entry) {
         const current = catalogForEntry(entry);
         const options = animationCatalog
@@ -9813,7 +8519,6 @@
         return animField("Effect", dd);
     }
 
-    // buildAnimDirectionRow — direction picker for a directional effect.
     function buildAnimDirectionRow(entry, dir) {
         const item = catalogForEntry(entry);
         const dd = makeDropdown({
@@ -9831,7 +8536,6 @@
         return animField("Direction", dd);
     }
 
-    // buildAnimTriggerRow — On click / With previous / After previous.
     function buildAnimTriggerRow(entry) {
         const dd = makeDropdown({
             label: "Trigger",
@@ -9846,7 +8550,6 @@
         return animField("Trigger", dd);
     }
 
-    // buildAnimTimingRow — duration + delay (ms), committed on change.
     function buildAnimTimingRow(entry) {
         const pair = document.createElement("div");
         pair.className = "anim-bar__pair";
@@ -9862,7 +8565,6 @@
         return wrap;
     }
 
-    // animNumberInput — a non-negative integer input firing `onCommit(int)`.
     function animNumberInput(value, onCommit) {
         const input = document.createElement("input");
         input.type = "number";
@@ -9875,7 +8577,6 @@
         return input;
     }
 
-    // buildAnimEasingRow — the 4 easing presets as a dropdown of CSS tokens.
     function buildAnimEasingRow(entry) {
         const dd = makeDropdown({
             label: "Easing",
@@ -9890,7 +8591,6 @@
         return animField("Easing", dd);
     }
 
-    // buildAnimIterationsRow — emphasis count, or ∞ toggle (Infinite).
     function buildAnimIterationsRow(entry) {
         const infinite = entry.iterations === "Infinite";
         const wrap = document.createElement("div");
@@ -9926,8 +8626,6 @@
         return outer;
     }
 
-    // buildAnimPropRows — the property → value editor for a Property entry.
-    // Any change re-collects every row into one UpdateAnimation{targets}.
     function buildAnimPropRows(entry) {
         const box = document.createElement("div");
         box.style.display = "flex";
@@ -9966,7 +8664,6 @@
         return box;
     }
 
-    // animPropRow — one property/value pair with a remove button.
     function animPropRow(target, commit) {
         const row = document.createElement("div");
         row.className = "anim-prop-row";
@@ -9990,11 +8687,6 @@
         return row;
     }
 
-    // wireMorphControl
-    // Inputs: element id.
-    // Output: side-effect; wires change handlers on the checkbox, duration,
-    // and easing inputs to dispatch SetMorphTransitionRequested and toggle
-    // row visibility.
     function wireMorphControl(elId) {
         const container = document.getElementById("morph-control-container");
         if (!container) {
@@ -10062,10 +8754,6 @@
         }
     }
 
-    // wireAnimationsSection
-    // Inputs: none (wires the static panel chrome once after load).
-    // Output: side-effect; wires the Add menu (built from the catalog), the
-    // Play preview button, and a document click-off that closes the menu.
     function wireAnimationsSection() {
         const addBtn = document.getElementById("anim-add-btn");
         const menu = document.getElementById("anim-add-menu");
@@ -10090,8 +8778,6 @@
         }
     }
 
-    // buildAnimAddMenu — fill the add dropdown from the catalog, grouped under
-    // category headers. Selecting an item appends it to the selected element.
     function buildAnimAddMenu(menu) {
         menu.replaceChildren();
         const cats = ["entrance", "emphasis", "exit", "property"];
@@ -10120,9 +8806,6 @@
         }
     }
 
-    // ---------- animations preview ----------
-
-    // animFindEl — locate an element in the editor's mounted slide shadow root.
     function animFindEl(id) {
         if (!currentShadow || !id) {
             return null;
@@ -10131,7 +8814,6 @@
         return currentShadow.querySelector('[data-element-id="' + safe + '"]');
     }
 
-    // animIterCount — iterations as a positive pacing count (Infinite → 1).
     function animIterCount(iters) {
         if (iters === "Infinite") {
             return 1;
@@ -10142,8 +8824,6 @@
         return 1;
     }
 
-    // animStepGroups — split the timeline into build steps: a new group opens
-    // at each OnClick entry (leading non-OnClick entries form the first group).
     function animStepGroups(entries) {
         const groups = [];
         let cur = null;
@@ -10157,8 +8837,6 @@
         return groups;
     }
 
-    // animPlayOne — play one entry on the editor canvas (keyframe or property
-    // transition), mirroring present.js playback. `effDelay` is the resolved ms.
     function animPlayOne(entry, effDelay) {
         const el = animFindEl(entry.element_id);
         if (!el) {
@@ -10203,8 +8881,6 @@
         el.addEventListener("animationend", onEnd);
     }
 
-    // animPlayGroup — play one build-step group with chained (after-previous)
-    // delays; returns the step-finish time in ms (the longest entry).
     function animPlayGroup(group) {
         let priorSum = 0;
         let finish = 0;
@@ -10222,11 +8898,6 @@
         return finish;
     }
 
-    // playAnimPreview
-    // Inputs: none (reads slideAnimations + currentShadow).
-    // Output: side-effect; previews the active slide's full build on the editor
-    // canvas (step 0 then auto-advance through every group), then restores the
-    // pre-preview inline styles. Re-entry is guarded by animPreviewActive.
     function playAnimPreview() {
         if (!currentShadow || animPreviewActive || slideAnimations.length === 0) {
             return;
@@ -10275,18 +8946,10 @@
         runNext();
     }
 
-    // ---------- toasts ----------
-    // The live toast stack, newest first. Each entry: { el, timer, detail,
-    // expanded, offClick, removed }. Capped at TOAST_MAX; a new toast beyond the
-    // cap force-dismisses the oldest.
     const toasts = [];
     const TOAST_MAX = 3;
     const TOAST_TTL_MS = 3000;
 
-    // showToast
-    // Inputs: a short message (bold) and an optional longer detail. Output:
-    // side-effect; drops a frosted toast in at the top of #toast-stack, starts
-    // a 3s auto-dismiss timer, and evicts the oldest beyond TOAST_MAX.
     function showToast(message, detail) {
         const stack = document.getElementById("toast-stack");
         if (!stack || !message) {
@@ -10321,10 +8984,6 @@
         }
     }
 
-    // onToastClick
-    // Inputs: a toast entry. Output: side-effect; expands to show the detail
-    // (cancelling the auto-dismiss + arming a click-off listener) when a detail
-    // exists and it is collapsed; otherwise dismisses.
     function onToastClick(entry) {
         if (!entry.detail || entry.expanded) {
             dismissToast(entry);
@@ -10350,15 +9009,12 @@
                 dismissToast(entry);
             }
         };
-        // Defer so the click that expanded it does not immediately dismiss.
+
         window.setTimeout(function () {
             document.addEventListener("click", entry.offClick, true);
         }, 0);
     }
 
-    // dismissToast
-    // Inputs: a toast entry. Output: side-effect; fades it out, removes it from
-    // the DOM + the stack, and clears its timer / click-off listener.
     function dismissToast(entry) {
         if (!entry || entry.removed) {
             return;
@@ -10384,13 +9040,6 @@
         }, 200);
     }
 
-    // wireLayoutEditorControls
-    // Inputs: none (reads the DOM after load).
-    // Output: side-effect; wires the mode toggle (Slides ⇄ Layouts) and the
-    // globals CSS textarea. The toggle flips to the opposite of the current
-    // mode and asks the Rust side to switch; the actual data-mode flip
-    // happens when the SetMode echo arrives. The textarea commits its value
-    // on blur via GlobalsCssEditRequested.
     function wireLayoutEditorControls() {
         const toggle = document.getElementById("mode-toggle");
         if (toggle) {
@@ -10405,8 +9054,7 @@
         const presentBtn = document.getElementById("present-btn");
         if (presentBtn) {
             presentBtn.addEventListener("click", function () {
-                // Mirrors the Cmd+Return accelerator: start presenting from the
-                // active slide. modifiers are irrelevant for a button click.
+
                 window.__deck.send("Interaction", {
                     kind: "KeyPressed",
                     key: "present",
@@ -10437,30 +9085,22 @@
         }
     }
 
-    // ---------- agent panel ----------
-
-    // Agent panel state.
     let agent_panel_open = false;
     let agent_current_stream_id = null;
     let agent_running = false;
-    // Last real agent selected (to revert after the "+ Add agent" sentinel).
+
     let agent_last_selection = "";
-    // Name to auto-select once the next AgentListUpdate arrives (set by the
-    // add-agent modal so the freshly added agent becomes current).
+
     let agent_pending_select = null;
-    // Sentinel option value that opens the add-agent modal.
+
     const AGENT_ADD_SENTINEL = "__add_agent__";
-    // Heartbeat timer for "Still working..." fallback.
+
     let activity_heartbeat_timer = null;
-    // Current activity phase (idle|starting|thinking|streaming|tool|awaiting_approval|error).
+
     let current_activity_phase = "idle";
-    // Whether the thinking area is collapsed.
+
     let thinking_collapsed = true;
 
-    // init_agent_panel
-    // Inputs: root HTMLElement. Output: side-effect; wires toggle, send, stop,
-    // permission buttons; registers receive handlers for AgentPanelStateUpdate,
-    // AgentStream, AgentTool, AgentPermission.
     function init_agent_panel(root) {
         if (!root) {
             return;
@@ -10533,9 +9173,6 @@
         });
     }
 
-    // send_agent_prompt
-    // Inputs: text string. Output: side-effect; posts AgentPromptSubmitted,
-    // clears input, appends a user row to the log.
     function send_agent_prompt(text) {
         if (!text || text.length === 0) {
             return;
@@ -10557,9 +9194,6 @@
         }
     }
 
-    // populate_agent_select
-    // Inputs: object { agents: string[] }. Output: side-effect; rebuilds the
-    // dropdown options, preserving the current selection when still present.
     function populate_agent_select(payload) {
         if (!payload || !Array.isArray(payload.agents)) {
             return;
@@ -10593,11 +9227,6 @@
         agent_last_selection = chosen;
     }
 
-    // open_add_agent_modal
-    // Output: side-effect; builds a modal over a backdrop collecting a new
-    // agent's name, command, and (whitespace-separated) args. Save posts
-    // AgentAddRequested and marks the name pending-select; Cancel/backdrop
-    // dismiss without change.
     function open_add_agent_modal() {
         if (document.querySelector("#agent-modal")) {
             return;
@@ -10656,10 +9285,6 @@
         }
     }
 
-    // append_stream_chunk
-    // Inputs: object { role, text, final_chunk }. Output: side-effect;
-    // appends or patches the in-progress agent row, closing it if final_chunk.
-    // Calls note_activity() to keep heartbeat alive.
     function append_stream_chunk(chunk) {
         if (!chunk || typeof chunk !== "object") {
             return;
@@ -10687,9 +9312,6 @@
         note_activity();
     }
 
-    // show_permission_ask
-    // Inputs: object { request_id, slide_id, summary }. Output: side-effect;
-    // clones template, renders, wires approve/deny buttons.
     function show_permission_ask(ask) {
         if (!ask || typeof ask !== "object") {
             return;
@@ -10732,9 +9354,6 @@
         log.scrollTop = log.scrollHeight;
     }
 
-    // set_panel_state
-    // Inputs: object { running, error }. Output: side-effect; disables input
-    // while running, shows error text.
     function set_panel_state(state) {
         if (!state || typeof state !== "object") {
             return;
@@ -10766,10 +9385,6 @@
         }
     }
 
-    // note_activity
-    // Inputs: none. Output: side-effect; resets the heartbeat timer. Called
-    // whenever activity is detected (activity updates, thoughts, tool updates,
-    // stream chunks) to keep the "Still working..." timeout alive.
     function note_activity() {
         if (activity_heartbeat_timer) {
             clearTimeout(activity_heartbeat_timer);
@@ -10784,10 +9399,6 @@
         }
     }
 
-    // set_activity
-    // Inputs: object { phase, label }. Output: side-effect; manages the status
-    // row visibility, spinner state, thinking area collapse, and heartbeat.
-    // phase in "idle"|"starting"|"thinking"|"streaming"|"tool"|"awaiting_approval"|"error".
     function set_activity(payload) {
         if (!payload || typeof payload !== "object") {
             return;
@@ -10850,10 +9461,6 @@
         }
     }
 
-    // finalize_tool_rows
-    // Inputs: a terminal status ("completed" | "failed"). Output: side-effect;
-    // any tool row still marked pending/in_progress (agent never sent a
-    // completion) is forced to the terminal status so its spinner stops.
     function finalize_tool_rows(status) {
         const rows = document.querySelectorAll("#agent-log .agent__tool-row");
         rows.forEach(function (row) {
@@ -10864,9 +9471,6 @@
         });
     }
 
-    // append_thought
-    // Inputs: object { text }. Output: side-effect; shows thinking area,
-    // appends text fragment to the body, scrolls to bottom.
     function append_thought(payload) {
         if (!payload || typeof payload !== "object") {
             return;
@@ -10888,10 +9492,6 @@
         note_activity();
     }
 
-    // upsert_tool_row
-    // Inputs: object { id, title, status }. Output: side-effect; finds or
-    // creates a tool row in the log, sets title and data-status. Scrolls log.
-    // status in "pending"|"in_progress"|"completed"|"failed".
     function upsert_tool_row(payload) {
         if (!payload || typeof payload !== "object") {
             return;
@@ -10921,9 +9521,6 @@
         note_activity();
     }
 
-    // toggle_left_layout
-    // Inputs: "agent" | "objects". Output: side-effect; flips data-agent
-    // and .panel--collapsed between the two panes.
     function toggle_left_layout(expand) {
         if (expand !== "agent" && expand !== "objects") {
             return;
@@ -10943,28 +9540,11 @@
         }
     }
 
-    // matchUndoRedoShortcut
-    // Inputs: a KeyboardEvent.
-    // Output: one of "undo", "redo", or null. Detects the canonical undo /
-    // redo accelerators across platforms: Cmd+Z / Ctrl+Z for undo;
-    // Cmd+Shift+Z / Ctrl+Shift+Z / Cmd+Y / Ctrl+Y for redo. Returns null
-    // when the event does not match either.
-    // Dataflow: lowercase the key, check meta-or-ctrl, branch on shift +
-    // the specific letter. Pure function; no IPC, no DOM.
-    // matchGridToggleShortcut
-    // Inputs: a KeyboardEvent. Output: true for Cmd/Ctrl + ' (apostrophe),
-    // the pixel-grid toggle accelerator. Pure; no DOM, no IPC.
     function matchGridToggleShortcut(e) {
         const meta = !!(e.metaKey || e.ctrlKey);
         return meta && !e.shiftKey && e.key === "'";
     }
 
-    // updateSlideFocusState
-    // Inputs: none (reads slideSelected). Output: side-effect; sets
-    // data-slide-focus on the thumbnail row. True only when the slide is
-    // explicitly selected (thumbnail click) — CSS then shows the accent border
-    // on the current thumbnail. Negative-space clicks clear the flag, so
-    // nothing is highlighted.
     function updateSlideFocusState() {
         const row = document.getElementById("thumbnail-row");
         if (row) {
@@ -10972,10 +9552,6 @@
         }
     }
 
-    // setFocusRegion
-    // Inputs: "objects" | "preview" | "navigator". Output: side-effect; updates
-    // focusRegion and moves the faint .is-focused ring to that pane. No-op when
-    // unchanged or unknown.
     function setFocusRegion(region) {
         if (!FOCUS_CONTAINERS[region] || region === focusRegion) {
             return;
@@ -10992,10 +9568,6 @@
         }
     }
 
-    // setGridEnabled
-    // Inputs: a boolean. Output: side-effect; updates module state and the
-    // toolbar button's pressed styling. Single source both the shortcut and
-    // the button call so UI and state never drift.
     function setGridEnabled(on) {
         gridEnabled = !!on;
         const btn = document.getElementById("grid-toggle");
@@ -11005,9 +9577,6 @@
         }
     }
 
-    // matchClipboardShortcut
-    // Inputs: a KeyboardEvent. Output: "copy" | "cut" | "paste" for
-    // Cmd/Ctrl + C / X / V (no Shift), else null. Pure; no DOM, no IPC.
     function matchClipboardShortcut(e) {
         const meta = !!(e.metaKey || e.ctrlKey);
         if (!meta || e.shiftKey) {
@@ -11044,15 +9613,6 @@
         return null;
     }
 
-    // matchFileShortcut
-    // Inputs: a KeyboardEvent.
-    // Output: one of "new_deck", "open_deck", "save_deck", "save_as_deck",
-    // or null. Stage 7 File-menu accelerators: Cmd/Ctrl+N (New), +O (Open),
-    // +S (Save), +Shift+S (Save As). Sibling of matchUndoRedoShortcut and
-    // structured the same way so future accelerator groups can follow the
-    // pattern.
-    // Dataflow: bail unless Cmd/Ctrl is held; lowercase the key; branch
-    // on the specific letter and on the Shift state for Save vs Save As.
     function matchFileShortcut(e) {
         const meta = !!(e.metaKey || e.ctrlKey);
         if (!meta) {
@@ -11080,23 +9640,11 @@
         return null;
     }
 
-    // matchPresentShortcut
-    // Inputs: a KeyboardEvent.
-    // Output: true when the event is the Present accelerator (Cmd+Return /
-    // Ctrl+Return, no Shift). Starts presentation from the active slide. The
-    // Shift variant is reserved for a future "from the beginning".
     function matchPresentShortcut(e) {
         const meta = !!(e.metaKey || e.ctrlKey);
         return meta && !e.shiftKey && e.key === "Enter";
     }
 
-    // matchAddSlideShortcut
-    // Inputs: a KeyboardEvent.
-    // Output: true when the event is the New-Slide accelerator
-    // (Cmd+Shift+N / Ctrl+Shift+N), false otherwise. Distinct from the
-    // File "New deck" accelerator (Cmd/Ctrl+N, no Shift) handled by
-    // matchFileShortcut, so the two never collide.
-    // Dataflow: require Cmd/Ctrl AND Shift; lowercase the key; match "n".
     function matchAddSlideShortcut(e) {
         const meta = !!(e.metaKey || e.ctrlKey);
         if (!meta || !e.shiftKey) {
@@ -11106,12 +9654,6 @@
         return key === "n";
     }
 
-    // sendSyntheticKey
-    // Inputs: a logical key name ("undo" / "redo" / ...), the original
-    // KeyboardEvent (for its modifiers).
-    // Output: side-effect; posts an Interaction(KeyPressed) IPC envelope
-    // with the synthetic key name. The Rust interpreter pattern-matches on
-    // the synthetic name rather than re-decoding modifier combinations.
     function sendSyntheticKey(syntheticKey, e) {
         window.__deck.send("Interaction", {
             kind: "KeyPressed",
@@ -11120,9 +9662,6 @@
         });
     }
 
-    // clickAddButton: trigger a toolbar add button by selector, so keyboard
-    // shortcuts reuse the existing click wiring (InsertElementRequested / the
-    // image file picker). No-op if the button is absent.
     function clickAddButton(selector) {
         const b = document.querySelector(selector);
         if (b) {
@@ -11130,13 +9669,6 @@
         }
     }
 
-    // isEditableFocus
-    // Inputs: none (reads document.activeElement).
-    // Output: true when the focused element is a text-editing control —
-    // <input> of a text-y type, <textarea>, or anything with the
-    // contenteditable attribute set. Used to suppress global hotkey
-    // forwarding so the inspector and rename inputs receive their
-    // keystrokes normally.
     function isEditableFocus() {
         const el = document.activeElement;
         if (!el) {
@@ -11147,8 +9679,7 @@
             return true;
         }
         if (tag === "INPUT") {
-            // Non-text input types (button, checkbox, range...) should
-            // not be treated as editable for our purposes.
+
             const type = (el.type || "text").toLowerCase();
             const nonText = [
                 "button",
@@ -11169,24 +9700,8 @@
         return false;
     }
 
-    // Keys whose default behavior is dangerous inside a WKWebView /
-    // WebView2 host (history navigation on Backspace, tab focus
-    // hijacking, etc.) so we always preventDefault them, even when we
-    // are about to forward them as Interaction events. Keys NOT in this
-    // set are left to bubble: the native key path is now safe because the
-    // app installs an empty NSApp main menu (see src/main.rs), so wry's
-    // keyDown forwarding no longer null-derefs on unhandled keys.
     const ALWAYS_PREVENT_DEFAULT_KEYS = new Set(["Backspace", "Delete", "Tab"]);
 
-    // Keyboard interactions: forwarded for the Stage 4 debug shortcut, the
-    // Stage 6 undo/redo accelerators, the Stage 7 file accelerators, the
-    // Stage 9 delete shortcut, and any future hot-keys. Each shortcut
-    // branch fires first and preventDefault()s so the OS-level browser/
-    // webview default (e.g. Cmd+S "save page", Backspace "navigate
-    // back") does not also run. While an editable element has focus we
-    // suppress unmodified key forwarding so the user can type freely;
-    // accelerator-keyed shortcuts (Cmd/Ctrl-…) still fire so that
-    // Save / Undo / Redo remain available everywhere.
     document.addEventListener("keydown", function (e) {
         if (cropState) {
             if (e.key === "Enter") {
@@ -11207,7 +9722,7 @@
             updateSelectionOverlay();
             return;
         }
-        // Delete the selected guide (before the element-delete path forwards it).
+
         if (
             selectedGuideId !== null &&
             !isEditableFocus() &&
@@ -11217,7 +9732,7 @@
             deleteGuide(selectedGuideId);
             return;
         }
-        // Cmd/Ctrl+R toggles rulers (preventDefault: the host would reload).
+
         if (
             (e.metaKey || e.ctrlKey) &&
             !e.shiftKey &&
@@ -11229,7 +9744,7 @@
             toggleRulers();
             return;
         }
-        // Zoom: Cmd/Ctrl with +/- steps by 10%, Cmd/Ctrl+0 fits to pane.
+
         if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
             const k = typeof e.key === "string" ? e.key : "";
             if (k === "=" || k === "+" || e.code === "NumpadAdd") {
@@ -11248,7 +9763,7 @@
                 return;
             }
         }
-        // Tool shortcuts: V = select, H = hand (no modifiers, not while typing).
+
         if (
             !isEditableFocus() &&
             !e.metaKey &&
@@ -11268,10 +9783,7 @@
                 return;
             }
         }
-        // Add-element shortcuts (not while typing). They click the matching
-        // toolbar button so behavior — including the image file picker — is
-        // identical to a click. T text · ⇧S shape · ⇧I image · ⇧C code ·
-        // ⇧T table · ⌘G group.
+
         if (!isEditableFocus() && !e.altKey && typeof e.key === "string") {
             const lk = e.key.toLowerCase();
             if ((e.metaKey || e.ctrlKey) && !e.shiftKey && lk === "g") {
@@ -11335,11 +9847,10 @@
             return;
         }
         if (isEditableFocus()) {
-            // Let the focused control handle its own keystroke. We do
-            // not preventDefault — inputs need their default behavior.
+
             return;
         }
-        // Cmd+Shift+G / Ctrl+Shift+G — group the current multi-selection.
+
         if (
             (e.metaKey || e.ctrlKey) &&
             e.shiftKey &&
@@ -11355,8 +9866,7 @@
             }
             return;
         }
-        // Element/slide clipboard accelerators. Placed AFTER the editable
-        // bail so Cmd+C/V inside a text edit or input keeps native behavior.
+
         const clip = matchClipboardShortcut(e);
         if (clip) {
             e.preventDefault();
@@ -11369,8 +9879,7 @@
             }
             return;
         }
-        // Delete in the navigator removes the active slide; elsewhere it falls
-        // through to the element-delete path below.
+
         if (
             (e.key === "Delete" || e.key === "Backspace") &&
             focusRegion === "navigator" &&
@@ -11383,10 +9892,7 @@
             });
             return;
         }
-        // Arrow keys (not while typing): nudge the current element selection by
-        // 1px, or — with nothing selected and the canvas/navigator focused —
-        // step the active slide left/right. Decided here (like the clipboard
-        // scope) since the JS side owns focus region + selection.
+
         const ARROW_DELTA = {
             ArrowLeft: [-1, 0],
             ArrowRight: [1, 0],

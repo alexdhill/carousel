@@ -1,19 +1,3 @@
-// Command history (undo / redo stacks).
-//
-// SPEC §9.6 — two bounded VecDeque stacks of HistoryEntry. Each entry holds
-// the inverse Box<dyn Command> for the operation it represents, a stable
-// label for UI display, and a millisecond timestamp for telemetry. Pushing
-// onto the undo stack drops the oldest entry once `max_depth` is reached
-// and clears the redo stack (conventional: any new edit invalidates the
-// redo path). Pushing onto the redo stack inside `undo` does the inverse:
-// undo can re-trigger a depth trim too.
-//
-// CommandHistory does not own the deck. The dispatcher passes a &mut Deck
-// reference into `undo` / `redo` so this struct stays free of lifetime
-// tangles. Both methods return an UndoOutput carrying the patches the
-// dispatcher must enqueue, the slides whose persistence state changed,
-// and the operation's label.
-
 use crate::commands::{Command, CommandError, CommandOutput};
 use crate::deck::{CanvasTarget, Deck, SlideId};
 use crate::ipc::Patch;
@@ -22,11 +6,6 @@ use tracing::debug;
 
 pub const DEFAULT_HISTORY_DEPTH: usize = 100;
 
-// HistoryEntry
-// One slot on either stack. `inverse` is what gets applied when the entry
-// is popped; `label` and `timestamp` travel alongside for UI and debug
-// overlays. The struct is intentionally Debug-only — equality on
-// Box<dyn Command> is not meaningful.
 #[derive(Debug)]
 pub struct HistoryEntry {
     pub inverse: Box<dyn Command>,
@@ -34,13 +13,6 @@ pub struct HistoryEntry {
     pub timestamp: u64,
 }
 
-// UndoOutput
-// What `undo` and `redo` return on success. `patches` feed the dispatcher's
-// patch buffer; `dirty_slides` join the deck's dirty-tracking set; `label`
-// is propagated for debug overlays. `affects_object_tree` / `requires_remount`
-// (Stage 9) are captured from the inverse command BEFORE apply so the
-// dispatcher can decide whether to rebroadcast the object tree and/or
-// remount the active slide after the inverse has run.
 #[derive(Debug)]
 pub struct UndoOutput {
     pub patches: Vec<Patch>,
@@ -58,10 +30,6 @@ pub struct UndoOutput {
     pub warnings: Vec<String>,
 }
 
-// CommandHistory
-// Two bounded stacks. The back of `undo_stack` is the next inverse to apply
-// on undo; the back of `redo_stack` is the next inverse-of-inverse (= the
-// original command) to apply on redo. Both stacks share `max_depth`.
 #[derive(Debug)]
 pub struct CommandHistory {
     undo_stack: VecDeque<HistoryEntry>,
@@ -70,12 +38,6 @@ pub struct CommandHistory {
 }
 
 impl CommandHistory {
-    // new
-    // Inputs: max_depth (capacity of each stack).
-    // Output: an empty CommandHistory.
-    // Errors: asserts max_depth > 0.
-    // Dataflow: pure constructor; pre-allocates VecDeque capacity to
-    // avoid intermediate growth as the stacks fill.
     pub fn new(max_depth: usize) -> Self {
         assert!(max_depth > 0, "CommandHistory: max_depth must be positive");
         Self {
@@ -113,14 +75,6 @@ impl CommandHistory {
         self.redo_stack.back().map(|e| e.label)
     }
 
-    // push
-    // Inputs: an inverse Box<dyn Command> and a stable label.
-    // Output: side-effect; appends a HistoryEntry to the undo stack,
-    // trims the oldest entry if past max_depth, then clears the redo stack.
-    // Errors: asserts the label is non-empty.
-    // Dataflow: build entry with now_millis() -> push_back -> trim -> clear
-    // redo. Trim uses a bounded while loop (cannot run more than once per
-    // push since at most one element was added).
     pub fn push(&mut self, inverse: Box<dyn Command>, label: &'static str) {
         assert!(!label.is_empty(), "CommandHistory::push: label is empty");
         self.undo_stack.push_back(HistoryEntry {
@@ -133,15 +87,6 @@ impl CommandHistory {
         debug!(label, depth = self.undo_stack.len(), "history push");
     }
 
-    // undo
-    // Inputs: &mut Deck for the inverse to mutate.
-    // Output: Ok(Some(UndoOutput)) when an entry was popped and applied;
-    // Ok(None) when the undo stack was empty (no-op).
-    // Errors: any CommandError from the inverse's apply (entry is consumed
-    // even on failure — Stage 6 accepts this risk per ROADMAP §6 note).
-    // Dataflow: pop newest undo entry -> apply against deck -> push the
-    // resulting inverse onto the redo stack (with depth trim) -> assemble
-    // the UndoOutput from the apply's patches/dirty.
     pub fn undo(&mut self, deck: &mut Deck) -> Result<Option<UndoOutput>, CommandError> {
         assert!(self.max_depth > 0, "history misconfigured: zero max_depth");
         let entry: HistoryEntry = match self.undo_stack.pop_back() {
@@ -189,13 +134,6 @@ impl CommandHistory {
         }))
     }
 
-    // redo
-    // Inputs: &mut Deck.
-    // Output: Ok(Some(UndoOutput)) when an entry was popped and applied;
-    // Ok(None) when the redo stack was empty.
-    // Errors: any CommandError from the redo entry's apply.
-    // Dataflow: symmetric with undo — pop newest redo entry, apply, push
-    // the resulting inverse onto the undo stack (with depth trim), wrap.
     pub fn redo(&mut self, deck: &mut Deck) -> Result<Option<UndoOutput>, CommandError> {
         assert!(self.max_depth > 0, "history misconfigured: zero max_depth");
         let entry: HistoryEntry = match self.redo_stack.pop_back() {
@@ -243,9 +181,6 @@ impl CommandHistory {
         }))
     }
 
-    // clear
-    // Inputs: self.
-    // Output: side-effect; both stacks become empty.
     pub fn clear(&mut self) {
         self.undo_stack.clear();
         self.redo_stack.clear();
@@ -253,22 +188,11 @@ impl CommandHistory {
 }
 
 impl Default for CommandHistory {
-    // default
-    // Inputs: none.
-    // Output: a CommandHistory with DEFAULT_HISTORY_DEPTH capacity.
     fn default() -> Self {
         Self::new(DEFAULT_HISTORY_DEPTH)
     }
 }
 
-// trim_to_depth
-// Inputs: &mut VecDeque<HistoryEntry>, the capacity ceiling.
-// Output: side-effect; drops oldest entries until len <= max_depth.
-// Dataflow: the loop is bounded by the current length of the deque — at
-// most one element can have been added by a single push, so this runs at
-// most once in practice; the upper bound `max_depth + 1` is the
-// belt-and-braces safety cap required by the project's code-structure
-// rules (loops must have a fixed upper bound).
 fn trim_to_depth(stack: &mut VecDeque<HistoryEntry>, max_depth: usize) {
     assert!(max_depth > 0, "trim_to_depth: max_depth must be positive");
     let mut iter: usize = 0;
@@ -280,10 +204,6 @@ fn trim_to_depth(stack: &mut VecDeque<HistoryEntry>, max_depth: usize) {
     assert!(stack.len() <= max_depth, "history depth invariant broken");
 }
 
-// now_millis
-// Inputs: none. Reads SystemTime::now().
-// Output: milliseconds since UNIX epoch as u64. Returns 0 if the system
-// clock predates UNIX epoch (impossible in practice; defensive default).
 fn now_millis() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -354,13 +274,13 @@ mod tests {
     fn push_extends_undo_and_clears_redo() {
         let mut h = CommandHistory::new(4);
         let (mut deck, sid, eid) = fresh_deck_first_child();
-        // First push.
+
         let out = move_cmd(&sid, &eid, 1.0, 2.0).apply(&mut deck).unwrap();
         h.push(out.inverse, "Move Element");
-        // Undo, populating redo.
+
         h.undo(&mut deck).unwrap();
         assert!(h.can_redo());
-        // Second push must clear redo.
+
         let out2 = move_cmd(&sid, &eid, 3.0, 4.0).apply(&mut deck).unwrap();
         h.push(out2.inverse, "Move Element");
         assert!(h.can_undo());
@@ -517,9 +437,7 @@ mod tests {
         let (mut deck, sid, eid) = fresh_deck_first_child();
         let out = move_cmd(&sid, &eid, 9.0, 9.0).apply(&mut deck).unwrap();
         h.push(out.inverse, "Move Element");
-        // Internal: peek by reading undo_len and that push didn't panic.
-        // We cannot reach into the entry's timestamp without exposing it,
-        // but `now_millis` returns >0 in practice; assert via length.
+
         assert_eq!(h.undo_len(), 1);
     }
 }

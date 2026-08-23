@@ -1,26 +1,8 @@
-// SetGeometryProperty command.
-//
-// Stage 8 — Property Inspector. Writes one geometry field at a time (x, y,
-// width, height, rotation, opacity), emits the matching SetStyle patch,
-// and produces an inverse SetGeometryProperty that restores the prior
-// value. Z-order is intentionally NOT a writable geometry property because
-// the serializer derives z-index from sibling position (Stage 8 §17 note).
-//
-// Compared with MoveElement (which always writes x AND y together), this
-// command is purpose-built for the inspector's per-input edit model:
-// "the user typed a new value into the width input" → one
-// SetGeometryProperty(Width, ...). MoveElement remains the right tool for
-// drag-end (atomic x+y update).
-
 use crate::commands::{Command, CommandError, CommandOutput, resolve_canvas_mut};
 use crate::deck::style::Geometry;
 use crate::deck::{Canvas, CanvasTarget, ElementId, SlideId};
 use crate::ipc::Patch;
 
-// GeometryProperty
-// Tag identifying which scalar field of Geometry a SetGeometryProperty
-// command will mutate. Kept as an enum (not a string) so callers cannot
-// pass an unknown property name and the matcher is exhaustive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GeometryProperty {
     X,
@@ -32,10 +14,6 @@ pub enum GeometryProperty {
 }
 
 impl GeometryProperty {
-    // css_property
-    // Inputs: self.
-    // Output: the CSS property name a SetStyle patch must carry to mirror
-    // a write of this geometry field in the DOM.
     pub fn css_property(&self) -> &'static str {
         match self {
             Self::X => "left",
@@ -47,13 +25,6 @@ impl GeometryProperty {
         }
     }
 
-    // from_inspector_key
-    // Inputs: a string the inspector posts in the PropertyChanged event
-    // ("x", "y", "width", "height", "rotation", "opacity").
-    // Output: Some(GeometryProperty) on a known key, None otherwise.
-    // Dataflow: pure lookup; the interpret layer uses this to decide
-    // whether a PropertyChanged routes to SetGeometryProperty or to
-    // SetInlineStyle.
     pub fn from_inspector_key(key: &str) -> Option<Self> {
         match key {
             "x" => Some(Self::X),
@@ -76,14 +47,6 @@ pub struct SetGeometryProperty {
 }
 
 impl Command for SetGeometryProperty {
-    // apply
-    // Inputs: &self, &mut Deck.
-    // Output: CommandOutput with one SetStyle patch (CSS property derived
-    // from self.property), an inverse SetGeometryProperty carrying the
-    // prior value, and the slide marked dirty.
-    // Errors: SlideNotFound, ElementNotFound.
-    // Dataflow: locate slide -> locate element -> snapshot prior scalar
-    // -> overwrite -> invalidate index -> build patch + inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.target.id().is_empty(),
@@ -140,9 +103,6 @@ impl Command for SetGeometryProperty {
     }
 }
 
-// read_field
-// Inputs: geometry, which scalar to read.
-// Output: the current f64 value for that field.
 fn read_field(g: &Geometry, p: GeometryProperty) -> f64 {
     match p {
         GeometryProperty::X => g.x,
@@ -154,9 +114,6 @@ fn read_field(g: &Geometry, p: GeometryProperty) -> f64 {
     }
 }
 
-// write_field
-// Inputs: geometry, which scalar to update, the new value.
-// Output: side-effect; overwrites the named field.
 fn write_field(g: &mut Geometry, p: GeometryProperty, v: f64) {
     match p {
         GeometryProperty::X => g.x = v,
@@ -168,11 +125,6 @@ fn write_field(g: &mut Geometry, p: GeometryProperty, v: f64) {
     }
 }
 
-// format_css_value
-// Inputs: which property, the value.
-// Output: the CSS value string the SetStyle patch will carry. Position
-// and size go in px; rotation becomes `rotate(<v>rad)` so the parser's
-// existing transform rules work; opacity is a bare number.
 fn format_css_value(p: GeometryProperty, v: f64) -> String {
     match p {
         GeometryProperty::X
@@ -230,7 +182,7 @@ mod tests {
             .geometry
             .clone();
         assert_eq!(after.width, 500.0);
-        // Everything else untouched.
+
         assert_eq!(after.x, before.x);
         assert_eq!(after.y, before.y);
         assert_eq!(after.height, before.height);

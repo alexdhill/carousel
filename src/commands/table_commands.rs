@@ -1,27 +1,9 @@
-// Table commands.
-//
-// All table edits — structural (insert/delete row/column, header counts) and
-// content (cell text, multi-cell styling) — mutate the TableData carried by an
-// Embed-less Table element. Each command snapshots the prior TableData and
-// returns a SetTableData inverse that restores it verbatim, so undo is uniform
-// regardless of which mutation ran. Every command re-serializes the whole
-// element into a single ReplaceElement patch (tables are small; fine-grained
-// cell patching is not worth the complexity).
-
 use crate::commands::{Command, CommandError, CommandOutput, resolve_canvas_mut};
 use crate::deck::element::{ElementContent, RichText, TableCell, TableData};
 use crate::deck::{Canvas, CanvasTarget, ElementId};
 use crate::html::serialize::serialize_element;
 use crate::ipc::Patch;
 
-// mutate_table
-// Inputs: deck, the canvas target, the table element id, a command label, and
-// a mutation closure over the element's TableData.
-// Output: a CommandOutput whose patch is a ReplaceElement carrying the
-// re-serialized element and whose inverse is a SetTableData restoring the prior
-// grid.
-// Errors: SlideNotFound/ElementNotFound (target/element absent) or
-// InvalidOperation (element is not a Table).
 fn mutate_table<F>(
     deck: &mut crate::deck::Deck,
     target: &CanvasTarget,
@@ -69,8 +51,6 @@ where
     })
 }
 
-// normalize_grid — force cells to exactly rows×columns (pad with defaults,
-// truncate overflow). Keeps the TableData invariant after a structural edit.
 fn normalize_grid(td: &mut TableData) {
     td.cells.truncate(td.rows);
     while td.cells.len() < td.rows {
@@ -93,8 +73,6 @@ fn default_cell() -> TableCell {
     }
 }
 
-// SetTableData — replace the whole grid (the universal inverse vehicle). Not
-// surfaced to the UI directly; produced as the inverse of every table command.
 #[derive(Debug, Clone)]
 pub struct SetTableData {
     pub target: CanvasTarget,
@@ -118,8 +96,6 @@ impl Command for SetTableData {
     }
 }
 
-// InsertTableRow — insert a blank row at `at` (clamped to rows). Header rows
-// shift down when the insert lands inside the header band.
 #[derive(Debug, Clone)]
 pub struct InsertTableRow {
     pub target: CanvasTarget,
@@ -150,7 +126,6 @@ impl Command for InsertTableRow {
     }
 }
 
-// DeleteTableRow — remove the row at `at`. Refuses to delete the last row.
 #[derive(Debug, Clone)]
 pub struct DeleteTableRow {
     pub target: CanvasTarget,
@@ -185,7 +160,6 @@ impl Command for DeleteTableRow {
     }
 }
 
-// InsertTableColumn — insert a blank column at `at` (clamped to columns).
 #[derive(Debug, Clone)]
 pub struct InsertTableColumn {
     pub target: CanvasTarget,
@@ -217,7 +191,6 @@ impl Command for InsertTableColumn {
     }
 }
 
-// DeleteTableColumn — remove the column at `at`. Refuses to delete the last.
 #[derive(Debug, Clone)]
 pub struct DeleteTableColumn {
     pub target: CanvasTarget,
@@ -256,8 +229,6 @@ impl Command for DeleteTableColumn {
     }
 }
 
-// SetTableHeaderRows / SetTableHeaderColumns — set the header band size
-// (clamped to the grid dimension).
 #[derive(Debug, Clone)]
 pub struct SetTableHeaderRows {
     pub target: CanvasTarget,
@@ -304,8 +275,6 @@ impl Command for SetTableHeaderColumns {
     }
 }
 
-// SetCellText — replace one cell's plain text. Out-of-range coordinates are a
-// no-op mutation (still undoable as a self-restore).
 #[derive(Debug, Clone)]
 pub struct SetCellText {
     pub target: CanvasTarget,
@@ -333,9 +302,6 @@ impl Command for SetCellText {
     }
 }
 
-// SetCellStyles — write one CSS property into every listed cell's
-// style_overrides (empty value removes it). This is the multi-cell styling
-// path: the inspector routes a PropertyChanged here when a cell set is active.
 #[derive(Debug, Clone)]
 pub struct SetCellStyles {
     pub target: CanvasTarget,

@@ -1,23 +1,9 @@
-// Font system access.
-//
-// Wraps font-kit so the rest of the app deals in plain strings + bytes:
-//   - `enumerate_families` lists the installed font families for the styles
-//     pane dropdown (sent to the webview as a FontList).
-//   - `load_face` + `sniff_format` load a concrete (family, weight, style)
-//     face and identify its container format so HTML export can bundle the
-//     bytes behind an @font-face.
-// Generic CSS family keywords (sans-serif, system-ui, …) are not real faces
-// and are filtered out before any font-kit lookup.
-
 use font_kit::family_name::FamilyName;
 use font_kit::handle::Handle;
 use font_kit::properties::{Properties, Style, Weight};
 use font_kit::source::SystemSource;
 use tracing::warn;
 
-// FontFormat
-// The container formats we recognise from a face's leading magic bytes, with
-// the matching file extension and CSS `format()` token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FontFormat {
     Ttf,
@@ -27,8 +13,6 @@ pub enum FontFormat {
 }
 
 impl FontFormat {
-    // ext / css
-    // Output: the on-disk extension and the CSS `src: ... format("…")` token.
     pub fn ext(self) -> &'static str {
         match self {
             FontFormat::Ttf => "ttf",
@@ -48,10 +32,6 @@ impl FontFormat {
     }
 }
 
-// enumerate_families
-// Inputs: none. Output: the installed font family names, de-duplicated and
-// sorted. Errors are logged and yield an empty list (the dropdown then just
-// offers free text). Control flow: query SystemSource, sort, dedup.
 pub fn enumerate_families() -> Vec<String> {
     let source = SystemSource::new();
     let mut families: Vec<String> = match source.all_families() {
@@ -66,10 +46,6 @@ pub fn enumerate_families() -> Vec<String> {
     families
 }
 
-// is_generic_family
-// Inputs: a family name. Output: true when it is a CSS generic keyword (or a
-// non-family CSS keyword) that has no concrete face to bundle. Comparison is
-// case-insensitive and ignores surrounding quotes/whitespace.
 pub fn is_generic_family(name: &str) -> bool {
     const GENERIC: [&str; 14] = [
         "sans-serif",
@@ -95,9 +71,6 @@ pub fn is_generic_family(name: &str) -> bool {
     GENERIC.contains(&n.as_str())
 }
 
-// font_slug
-// Inputs: a family name. Output: a filesystem-safe lowercase slug (non
-// alphanumeric runs collapse to single dashes) for the bundled file name.
 pub fn font_slug(name: &str) -> String {
     let mut out: String = String::with_capacity(name.len());
     let mut last_dash: bool = false;
@@ -113,9 +86,6 @@ pub fn font_slug(name: &str) -> String {
     out.trim_matches('-').to_string()
 }
 
-// sniff_format
-// Inputs: the leading bytes of a font file. Output: the recognised
-// FontFormat, or None for an unknown container.
 pub fn sniff_format(bytes: &[u8]) -> Option<FontFormat> {
     if bytes.len() < 4 {
         return None;
@@ -129,11 +99,6 @@ pub fn sniff_format(bytes: &[u8]) -> Option<FontFormat> {
     }
 }
 
-// load_face
-// Inputs: a family name, a numeric weight (100..900), and whether the face is
-// italic. Output: the best-matching installed face's raw bytes, or None when
-// no match loads. Control flow: build font-kit Properties, select the best
-// match, load it, copy out the underlying file bytes.
 pub fn load_face(family: &str, weight: u16, italic: bool) -> Option<Vec<u8>> {
     assert!(!family.is_empty(), "load_face: empty family");
     let source = SystemSource::new();

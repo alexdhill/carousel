@@ -1,21 +1,11 @@
-// PDF export: build a single static print-HTML document — one page per
-// (slide, step) rendered at that step's snapped reveal — for the macOS webview
-// print-to-PDF path. This module is pure (string in/out); the rendering lives
-// in the macOS print integration.
 use crate::deck::Deck;
 use crate::deck::animation::step_count;
 use crate::html::serialize::{ANIMATION_KEYFRAMES_CSS, serialize_slide_themed};
 use crate::present::reveal::snap_reveal;
 use base64::Engine;
 
-// Reduced render scale: pages are ~2/3 of the deck pixels so AppKit rasterizes
-// at print DPI rather than full 1920-px bitmaps.
 const PDF_PAGE_SCALE: f64 = 2.0 / 3.0;
 
-// pdf_asset_vars
-// Inputs: the asset registry. Output: a :root { --asset-<id>: url(data:…) }
-// block inlining each asset as a base64 data URI (the print doc is transient,
-// so assets cannot be file references).
 fn pdf_asset_vars(reg: &crate::bundle::assets::AssetRegistry) -> String {
     let mut s = String::from(":root {\n");
     for entry in &reg.assets {
@@ -31,11 +21,6 @@ fn pdf_asset_vars(reg: &crate::bundle::assets::AssetRegistry) -> String {
     s
 }
 
-// PageRect
-// A print page that must be rasterized for fidelity: its 0-based page index
-// plus the page's pixel rect (origin 0,0 within its own @page; the deck size
-// scaled by PDF_PAGE_SCALE). The renderer screenshots this rect and splices the
-// image back into the page.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PageRect {
     pub index: usize,
@@ -45,13 +30,8 @@ pub struct PageRect {
     pub height: f64,
 }
 
-// The CSS properties that force a page to raster: each is a compositing /
-// readback effect a vector PDF cannot represent.
 const RASTER_TRIGGERS: [&str; 3] = ["backdrop-filter", "mix-blend-mode", "isolation"];
 
-// node_uses_trigger
-// Output: true when this element or any descendant carries a raster-trigger
-// property in its inline_styles (key or value).
 fn node_uses_trigger(node: &crate::deck::element::ElementNode) -> bool {
     for (k, v) in &node.inline_styles {
         if RASTER_TRIGGERS
@@ -64,10 +44,6 @@ fn node_uses_trigger(node: &crate::deck::element::ElementNode) -> bool {
     node.children.iter().any(node_uses_trigger)
 }
 
-// slide_needs_raster
-// Inputs: a slide, the theme globals CSS. Output: true when any element's
-// inline styles or the globals contain a raster-trigger property. The globals
-// apply to every slide, so a trigger there flags all pages.
 fn slide_needs_raster(slide: &crate::deck::slide::SlideNode, globals: &str) -> bool {
     if RASTER_TRIGGERS.iter().any(|t| globals.contains(t)) {
         return true;
@@ -75,11 +51,6 @@ fn slide_needs_raster(slide: &crate::deck::slide::SlideNode, globals: &str) -> b
     node_uses_trigger(&slide.root)
 }
 
-// raster_page_rects
-// Inputs: the deck. Output: one PageRect per print page that must raster, in
-// page order. Page count and order mirror build_pdf_print_html: one page per
-// (slide, step). The pixel rect is the deck dimensions scaled by
-// PDF_PAGE_SCALE.
 pub fn raster_page_rects(deck: &Deck) -> Vec<PageRect> {
     assert!(
         deck.slide_order.len() == deck.slides.len() || deck.slides.is_empty(),
@@ -110,13 +81,6 @@ pub fn raster_page_rects(deck: &Deck) -> Vec<PageRect> {
     out
 }
 
-// build_pdf_print_html
-// Inputs: the deck. Output: a single static HTML document with one `.print-page`
-// per (slide, step), the slide rendered at `snap_reveal(step)` (hidden elements
-// faded to opacity:0), the theme/globals/keyframes CSS with `:host` rewritten to
-// `:root` (the pages are light-DOM, not shadow roots), assets inlined as data
-// URIs, and `@page` pagination sized to the deck. A load script posts
-// `print-ready` so the renderer knows when to print.
 pub fn build_pdf_print_html(deck: &Deck) -> String {
     let w: u32 = deck.manifest.dimensions.width;
     let h: u32 = deck.manifest.dimensions.height;
@@ -142,8 +106,7 @@ pub fn build_pdf_print_html(deck: &Deck) -> String {
             min_element_size: 0.0,
         };
         let html: String = serialize_slide_themed(slide, fill.as_deref(), img.as_deref(), &opts);
-        // Pages whose slide uses a compositing-only effect carry a marker so the
-        // Chromium renderer screenshots and splices them (see raster_page_rects).
+
         let needs_raster: bool = slide_needs_raster(slide, &deck.theme.globals_css);
         let mut step: usize = 0;
         while step < n {
@@ -167,12 +130,6 @@ pub fn build_pdf_print_html(deck: &Deck) -> String {
         }
     }
 
-    // Render pages at a physical, reduced size (≈2/3 of the deck pixels) so
-    // AppKit rasterizes filter/shadow layers at print DPI rather than at giant
-    // 1920-px-wide bitmaps. The slide content is fixed at the deck's pixel size,
-    // so a wrapper TRANSFORMS it down to fit the page. The transform lives on
-    // `.slide-scale` (no clip) while the clips live on `.print-page`/`.slide`, so
-    // the transform+overflow combo that breaks backdrop-filter is avoided.
     let scale: f64 = PDF_PAGE_SCALE;
     let page_in_w: f64 = w as f64 * scale / 96.0;
     let page_in_h: f64 = h as f64 * scale / 96.0;
@@ -181,7 +138,6 @@ pub fn build_pdf_print_html(deck: &Deck) -> String {
     format!(
         "<!doctype html><html><head><meta charset=\"utf-8\"><style>\n\
 {theme}\n{globals}\n{keyframes}\n{asset_vars}\n\
-/* Force background images/colors to print — WebKit drops them otherwise. */\n\
 * {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}\n\
 @page {{ size: {page_in_w:.3}in {page_in_h:.3}in; margin: 0; }}\n\
 html, body {{ margin: 0; padding: 0; }}\n\
@@ -259,13 +215,12 @@ mod tests {
         assert_eq!(html.matches("class=\"print-page\"").count(), total_steps);
         let w = deck.manifest.dimensions.width;
         let h = deck.manifest.dimensions.height;
-        // Pages are sized physically (inches) at 2/3 scale so AppKit rasterizes
-        // at print DPI instead of giant 1920-px bitmaps.
+
         let page_in_w = w as f64 * (2.0 / 3.0) / 96.0;
         assert!(html.contains(&format!("size: {page_in_w:.3}in")));
         assert!(html.contains("class=\"slide-scale\""));
         let _ = h;
-        // Theme :host tokens were rewritten to :root for the light-DOM doc.
+
         assert!(html.contains(":root"));
         assert!(!html.contains(":host"));
     }
@@ -273,7 +228,7 @@ mod tests {
     #[test]
     fn hidden_elements_get_a_page_scoped_opacity_rule_and_assets_inline() {
         let mut deck = Deck::sample();
-        // An image asset is inlined as a data URI.
+
         deck.assets.insert_blob(
             vec![1, 2, 3, 4],
             "logo.png".to_string(),

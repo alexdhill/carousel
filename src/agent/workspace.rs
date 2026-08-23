@@ -1,10 +1,3 @@
-// On-disk agent workspace: the live deck materialized as real files.
-// claude-code-acp-rs (and every native-tool agent) reads/writes the real
-// filesystem, never the ACP client fs methods, so the deck is written out as
-// `deck/index.md` + `deck/slides/slideN.html` under a temp dir used as the
-// agent cwd. Agent edits land on those files; collect_changes ingests them
-// back into the Deck at turn end.
-
 use crate::agent::vfs::{parse_slide_write, render_index};
 use crate::deck::Deck;
 use crate::deck::element::ElementNode;
@@ -17,12 +10,6 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use tracing::warn;
 
-// SlideChange
-// One slide file the agent touched this turn. `slide_ref` is the positional
-// reference from the filename (e.g. "slide4"), resolved to a real slide id by
-// the caller. `is_new` is true when the file did not exist at materialization,
-// i.e. the agent created a new slide (append) rather than editing an existing
-// one.
 #[derive(Debug, Clone)]
 pub struct SlideChange {
     pub slide_ref: String,
@@ -31,21 +18,12 @@ pub struct SlideChange {
     pub skipped: usize,
 }
 
-// Workspace
-// Owns a temp dir (auto-removed on drop) holding the materialized deck, and a
-// map of slide filename -> last content this process wrote or ingested. The
-// map is the change baseline: a file whose content diverges from its baseline
-// is an agent edit; a slide file absent from the map is an agent-created slide.
 pub struct Workspace {
     dir: TempDir,
     known: HashMap<String, String>,
 }
 
 impl Workspace {
-    // create
-    // Input: the live deck. Output: a Workspace with the deck written out under
-    // a fresh temp dir. Errors: io failures creating the dir or files.
-    // Control flow: make temp dir, delegate to write_all.
     pub fn create(deck: &Deck) -> io::Result<Workspace> {
         assert!(!deck.slides.is_empty(), "cannot materialize an empty deck");
         let dir: TempDir = tempfile::Builder::new()
@@ -59,16 +37,10 @@ impl Workspace {
         Ok(ws)
     }
 
-    // path
-    // Input: &self. Output: the workspace root, used as the agent cwd.
     pub fn path(&self) -> &Path {
         self.dir.path()
     }
 
-    // write_all
-    // Input: &mut self, the live deck. Output: Ok after writing index.md and one
-    // slideN.html per slide, resetting the change baseline. Errors: io failures.
-    // Control flow: ensure deck/slides exists, write index, loop slide_order.
     pub fn write_all(&mut self, deck: &Deck) -> io::Result<()> {
         assert!(!deck.slides.is_empty(), "cannot materialize an empty deck");
         let slides_dir: PathBuf = self.dir.path().join("deck").join("slides");
@@ -90,13 +62,6 @@ impl Workspace {
         Ok(())
     }
 
-    // collect_changes
-    // Input: &mut self. Output: one SlideChange per slide file the agent edited
-    // (baseline diverged) or created (file absent from baseline), each parsed
-    // cleanly; the baseline is advanced for every accepted change. Errors: none
-    // (unreadable or unparseable files are skipped, leaving the baseline stale to
-    // retry). Control flow: diff the known files for edits, then scan the slides
-    // dir for new files in ascending positional order.
     pub fn collect_changes(&mut self) -> Vec<SlideChange> {
         let slides_dir: PathBuf = self.dir.path().join("deck").join("slides");
         let mut out: Vec<SlideChange> = Vec::new();
@@ -109,10 +74,6 @@ impl Workspace {
         out
     }
 
-    // __ingest_file
-    // Input: &mut self, the slides dir, a filename, whether the file is new, and
-    // the output sink. Output: none; on a clean parse pushes a SlideChange and
-    // advances the baseline, else logs and leaves the baseline untouched.
     fn __ingest_file(
         &mut self,
         slides_dir: &Path,
@@ -140,10 +101,6 @@ impl Workspace {
         }
     }
 
-    // __edited_names
-    // Input: &self, the slides dir. Output: baseline filenames whose on-disk
-    // content now differs from the baseline. Errors: unreadable files are
-    // treated as unchanged (skipped).
     fn __edited_names(&self, slides_dir: &Path) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         for (name, baseline) in self.known.iter() {
@@ -155,11 +112,6 @@ impl Workspace {
         out
     }
 
-    // __new_names
-    // Input: &self, the slides dir. Output: slideN.html files present on disk but
-    // absent from the baseline (agent-created), sorted ascending by N so multiple
-    // new slides append in the order the agent numbered them. Errors: an
-    // unreadable dir yields an empty list.
     fn __new_names(&self, slides_dir: &Path) -> Vec<String> {
         let entries = match fs::read_dir(slides_dir) {
             Ok(e) => e,
@@ -180,12 +132,6 @@ impl Workspace {
     }
 }
 
-// __format_reference
-// Input: the live deck. Output: deck/format.md — the list of image assets the
-// agent may reference in an image element's `data-asset-id` (assets whose
-// media_type starts with "image/"), or a note that none exist. The element
-// markup schema itself is injected into the agent's prompt context, not here.
-// Control flow: append a bullet per image asset.
 fn __format_reference(deck: &Deck) -> String {
     let mut out: String = String::from(
         "# Image assets\n\nUse one of these ids in an image element's \
@@ -205,9 +151,6 @@ fn __format_reference(deck: &Deck) -> String {
     out
 }
 
-// __slide_file_number
-// Input: a filename. Output: Some(N) when it is exactly "slideN.html" with N a
-// positive integer, else None. Used to identify and order agent-created slides.
 fn __slide_file_number(name: &str) -> Option<u32> {
     let digits: &str = name.strip_prefix("slide")?.strip_suffix(".html")?;
     if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {

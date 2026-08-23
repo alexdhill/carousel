@@ -1,15 +1,3 @@
-// SetGlobalsCss command.
-//
-// Stage 11 — layout editor. Replaces the deck-wide globals CSS blob
-// (`theme.globals_css`), the raw stylesheet injected into every shadow root
-// (animations, custom properties, etc.). Its inverse restores the prior
-// blob. Undoable in the layout history stack.
-//
-// It produces no DOM patches; instead it reports `affects_globals() == true`
-// so the editor re-mounts the active canvas (the shadow root re-injects the
-// new CSS). The theme is persisted state, so `manifest_dirty` is set to flag
-// that a save is needed.
-
 use crate::commands::{Command, CommandError, CommandOutput};
 
 #[derive(Debug, Clone)]
@@ -18,12 +6,6 @@ pub struct SetGlobalsCss {
 }
 
 impl Command for SetGlobalsCss {
-    // apply
-    // Inputs: &self, &mut Deck.
-    // Output: CommandOutput with no patches, manifest_dirty=true, and an
-    // inverse SetGlobalsCss carrying the prior blob.
-    // Errors: none — any string is a valid globals blob (trusted input).
-    // Dataflow: snapshot prior globals_css -> overwrite -> build inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         let prior: String = deck.theme.globals_css.clone();
         deck.theme.globals_css = self.new_css.clone();

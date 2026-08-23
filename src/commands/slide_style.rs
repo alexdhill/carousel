@@ -1,21 +1,8 @@
-// Slide-level metadata commands for the inspector's Slide box.
-//
-// When nothing is selected, the inspector targets the active slide. These three
-// commands back its controls:
-//   - SetSlideBackground — per-slide background (renders; lives on the SlideNode
-//     metadata, synced to the manifest like the animation timeline).
-//   - SetSlideNotes      — inline speaker notes (manifest chrome; does not render).
-//   - SetSlideLayout      — which saved layout the slide references (tag only until
-//     the deferred layout-binding feature re-flows content).
-// All are slide-targeted, self-inverse, set manifest_dirty, and report
-// affects_slide_meta so the editor rebroadcasts SlideInspectorUpdate.
-
 use crate::commands::{Command, CommandError, CommandOutput};
 use crate::deck::element::ElementContent;
 use crate::deck::{CanvasTarget, ElementNode, SlideId};
 use std::collections::{HashMap, HashSet};
 
-// SetSlideBackground
 #[derive(Debug, Clone)]
 pub struct SetSlideBackground {
     pub slide_id: SlideId,
@@ -23,12 +10,6 @@ pub struct SetSlideBackground {
 }
 
 impl Command for SetSlideBackground {
-    // apply
-    // Inputs: &self, &mut Deck.
-    // Output: CommandOutput; sets the SlideNode metadata background, marks the
-    // slide dirty, requires a remount (the section style changes), and returns
-    // the inverse carrying the prior value.
-    // Errors: SlideNotFound when no slide matches slide_id.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.slide_id.is_empty(),
@@ -66,9 +47,6 @@ impl Command for SetSlideBackground {
     }
 }
 
-// SetSlideBackgroundImage — per-slide background image (drawn over the fill).
-// Same shape as SetSlideBackground: SlideNode-metadata authoritative, renders,
-// self-inverse, remounts, rebroadcasts the Slide box.
 #[derive(Debug, Clone)]
 pub struct SetSlideBackgroundImage {
     pub slide_id: SlideId,
@@ -113,9 +91,6 @@ impl Command for SetSlideBackgroundImage {
     }
 }
 
-// SetSlideTransition — per-slide outgoing presentation transition.
-// Presentation-only: it never renders, so NO remount. Slide-meta authoritative,
-// self-inverse, manifest-dirty, rebroadcasts the Slide box.
 #[derive(Debug, Clone)]
 pub struct SetSlideTransition {
     pub slide_id: SlideId,
@@ -123,12 +98,6 @@ pub struct SetSlideTransition {
 }
 
 impl Command for SetSlideTransition {
-    // apply
-    // Inputs: &self, &mut Deck.
-    // Output: CommandOutput; sets the SlideNode metadata transition, marks the
-    // slide dirty + manifest dirty, returns the inverse carrying the prior value.
-    // No patches/remount — transitions affect presentation playback only.
-    // Errors: SlideNotFound when no slide matches slide_id.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.slide_id.is_empty(),
@@ -162,7 +131,6 @@ impl Command for SetSlideTransition {
     }
 }
 
-// SetSlideNotes
 #[derive(Debug, Clone)]
 pub struct SetSlideNotes {
     pub slide_id: SlideId,
@@ -170,11 +138,6 @@ pub struct SetSlideNotes {
 }
 
 impl Command for SetSlideNotes {
-    // apply
-    // Inputs: &self, &mut Deck.
-    // Output: CommandOutput; sets the manifest entry's notes (no remount — notes
-    // do not render), returns the inverse with the prior value.
-    // Errors: SlideNotFound when no manifest entry matches slide_id.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(!self.slide_id.is_empty(), "SetSlideNotes: empty slide_id");
         let entry = deck
@@ -207,39 +170,18 @@ impl Command for SetSlideNotes {
     }
 }
 
-// SetSlideLayout
 #[derive(Debug, Clone)]
 pub struct SetSlideLayout {
     pub slide_id: SlideId,
     pub new_layout_id: String,
-    // Undo payload: the exact slide root to restore. None on a forward
-    // (user-driven) apply — the slide is re-stamped from the chosen layout's
-    // template elements. Some(_) only when this command is an inverse.
+
     pub restore_root: Option<ElementNode>,
 }
 
 impl Command for SetSlideLayout {
-    // apply
-    // Inputs: &self, &mut Deck.
-    // Output: CommandOutput; retags the slide + manifest entry with the new
-    // layout id and stamps that layout's template elements on top of the slide's
-    // existing content (the layout's elements are appended, not replaced, so the
-    // user's prior edits survive). Each stamped subtree gets fresh element ids so
-    // re-applying the same layout never collides. The layout's text styles ride
-    // along baked inline on those elements; its background inherits via
-    // Deck::effective_slide_bg. Requires a remount. The returned inverse carries
-    // the prior layout id and the prior root so undo restores both.
-    // Errors: SlideNotFound (missing slide).
-    // Note: the layout id is NOT validated against the theme — slides may
-    // legitimately reference ids absent from the current theme (validating would
-    // break undo). A forward apply whose layout id is unknown to the theme
-    // retags only and leaves the root untouched. The inspector's Layout picker
-    // constrains forward choices to real layouts.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(!self.slide_id.is_empty(), "SetSlideLayout: empty slide_id");
-        // Forward apply: fetch the chosen layout's slot children (placeholder-
-        // seeded, ids preserved) before the mutable slide borrow. Inverse apply
-        // (restore_root set) skips this and restores the snapshot verbatim.
+
         let new_slots: Vec<ElementNode> = if self.restore_root.is_none() {
             deck.theme
                 .layouts
@@ -297,18 +239,6 @@ impl Command for SetSlideLayout {
     }
 }
 
-// remap_layout_children
-// Inputs: the slide's current children and the new layout's placeholder-seeded
-// slot children.
-// Output: the reflowed child list. For each new slot: if the old slide had a
-// touched (edited) layout element with the same id, emit the new slot (its
-// geometry / style / preset) carrying the user's content, cleared of the
-// placeholder flag; otherwise emit the fresh placeholder slot. Then keep every
-// user-added element and every touched overflow layout element (a touched slot
-// absent from the new layout). Untouched placeholders with no new-layout slot
-// are dropped.
-// Control flow: one map build, one pass over slots, one pass over old children —
-// no recursion, bounds are the two input lengths.
 fn remap_layout_children(old: Vec<ElementNode>, new_slots: Vec<ElementNode>) -> Vec<ElementNode> {
     let touched: HashMap<String, ElementContent> = old
         .iter()
@@ -325,8 +255,6 @@ fn remap_layout_children(old: Vec<ElementNode>, new_slots: Vec<ElementNode>) -> 
         result.push(slot);
     }
     for el in old {
-        // Keep user-added elements, and touched overflow layout elements the new
-        // layout has no slot for. Untouched placeholders and consumed slots drop.
         let overflow: bool = el.is_layout_element() && !el.placeholder && !new_ids.contains(&el.id);
         if !el.is_layout_element() || overflow {
             result.push(el);
@@ -399,7 +327,7 @@ mod tests {
         assert_eq!(deck.slides[&sid].metadata.transition, Some(t));
         assert!(deck.manifest_dirty);
         assert!(cmd.affects_slide_meta());
-        assert!(!cmd.requires_remount()); // presentation-only, never re-renders
+        assert!(!cmd.requires_remount());
         out.inverse.apply(&mut deck).unwrap();
         assert_eq!(deck.slides[&sid].metadata.transition, None);
     }
@@ -430,7 +358,7 @@ mod tests {
     #[test]
     fn layout_sets_both_slide_and_manifest_and_inverts() {
         let (mut deck, sid) = sample();
-        // The default theme seeds a "blank" layout; the sample slide uses "title".
+
         let out = SetSlideLayout {
             slide_id: sid.clone(),
             new_layout_id: "blank".into(),
@@ -457,11 +385,10 @@ mod tests {
         use crate::commands::SetTextContent;
         use crate::deck::ElementContent;
         use crate::deck::templates::{light_theme, new_deck};
-        // A blank one-slide light deck; slide seeded with "title" (title +
-        // subtitle placeholders).
+
         let mut deck = new_deck(light_theme(), "title");
         let sid = deck.slide_order[0].clone();
-        // Edit the title so it becomes touched content.
+
         SetTextContent {
             target: CanvasTarget::Slide(sid.clone()),
             element_id: "layout_text_title".into(),
@@ -478,8 +405,7 @@ mod tests {
         .unwrap();
         assert_eq!(deck.slides[&sid].layout_id, "hero");
         let kids = &deck.slides[&sid].root.children;
-        // hero slots: title (carrying edited content, no longer placeholder),
-        // body + shape (fresh). Untouched subtitle dropped.
+
         let title = kids.iter().find(|c| c.id == "layout_text_title").unwrap();
         assert!(!title.placeholder, "edited title is not a placeholder");
         match &title.content {
@@ -495,7 +421,7 @@ mod tests {
             !kids.iter().any(|c| c.id == "layout_text_subtitle"),
             "untouched subtitle dropped"
         );
-        // Undo restores the prior title layout + content verbatim.
+
         out.inverse.apply(&mut deck).unwrap();
         assert_eq!(deck.slides[&sid].layout_id, "title");
         assert!(
@@ -511,8 +437,7 @@ mod tests {
     fn layout_change_keeps_added_and_overflow_elements() {
         use crate::commands::SetTextContent;
         use crate::deck::templates::{light_theme, new_deck};
-        // title deck, edit subtitle so it is a touched layout element that "hero"
-        // has no slot for (overflow), and add a user element.
+
         let mut deck = new_deck(light_theme(), "title");
         let sid = deck.slide_order[0].clone();
         SetTextContent {
@@ -522,7 +447,7 @@ mod tests {
         }
         .apply(&mut deck)
         .unwrap();
-        // A user-added element (ULID id, not a layout slot).
+
         deck.slides
             .get_mut(&sid)
             .unwrap()

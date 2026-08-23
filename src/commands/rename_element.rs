@@ -1,15 +1,3 @@
-// RenameElement command.
-//
-// Stage 9 — Object Panel. Writes the target element's `name` field (the
-// human-readable label shown by the object panel) and emits a matching
-// SetAttribute / RemoveAttribute patch so the DOM's `data-name` attribute
-// reflects the model.
-//
-// `new_name = None` clears the name back to the default — the object
-// panel falls back to the element id when `name` is empty, so a "cleared"
-// element shows its id again. Inverse is symmetric: setting None inverses
-// to the previous name (or to None when none was set).
-
 use crate::commands::{Command, CommandError, CommandOutput, resolve_canvas_mut};
 use crate::deck::{Canvas, CanvasTarget, ElementId, SlideId};
 use crate::ipc::Patch;
@@ -22,15 +10,6 @@ pub struct RenameElement {
 }
 
 impl Command for RenameElement {
-    // apply
-    // Inputs: &self, &mut Deck.
-    // Output: CommandOutput with one SetAttribute (when new_name is Some)
-    // or RemoveAttribute (when new_name is None) patch on `data-name`,
-    // an inverse RenameElement carrying the prior name, the slide marked
-    // dirty.
-    // Errors: SlideNotFound, ElementNotFound.
-    // Dataflow: locate element -> snapshot prior name -> overwrite ->
-    // invalidate index -> build patch + inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.target.id().is_empty(),
@@ -46,8 +25,7 @@ impl Command for RenameElement {
             .ok_or_else(|| CommandError::ElementNotFound(self.element_id.clone()))?;
 
         let prior: Option<String> = element.name.clone();
-        // Normalise empty strings to None so the panel's default-label
-        // fallback fires.
+
         let normalised: Option<String> = match &self.new_name {
             Some(s) if !s.trim().is_empty() => Some(s.clone()),
             _ => None,

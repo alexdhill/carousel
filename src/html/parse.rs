@@ -1,21 +1,4 @@
-// HTML parser.
-
-// Stage 3 scaffolding: parse_* is exercised in tests but the binary path
-// only serializes today. Stage 4 commands will call parse_element on
-// inbound interactions.
 #![allow(dead_code)]
-
-//
-// Uses `kuchikiki` (an html5ever-backed DOM) to parse fragments produced by
-// the serializer. The round-trip contract is:
-//   parse_element(serialize_element(node)) == node
-// for any consistent ElementNode whose content variant is supported by the
-// serializer/parser pair. Stage 3 supports Text, Image, Shape, Group, and
-// Embed in full. Table and Media round-trip only their data-* attributes
-// (the inner table grid is a Stage 5+ concern).
-//
-// kuchikiki normalizes whitespace per HTML5; we emit compact HTML so no
-// whitespace text nodes appear between siblings inside a Group.
 
 use crate::deck::element::*;
 use crate::deck::ids::new_element_id;
@@ -47,12 +30,6 @@ pub enum ParseError {
     Serialization,
 }
 
-// parse_element
-// Inputs: an HTML fragment containing a single top-level element with
-// `data-element-id` and `data-element-type` attributes.
-// Output: the reconstructed ElementNode.
-// Errors: missing required attributes, unknown element type, or
-// internal serialization failure when reading Embed inner HTML.
 pub fn parse_element(html: &str) -> Result<ElementNode, ParseError> {
     assert!(!html.is_empty(), "parse_element received empty input");
     let doc: NodeRef = kuchikiki::parse_html().one(html);
@@ -60,12 +37,6 @@ pub fn parse_element(html: &str) -> Result<ElementNode, ParseError> {
     parse_node(&first)
 }
 
-// parse_slide_fragment
-// Inputs: an HTML fragment whose root is <section class="slide" …>.
-// Output: a SlideNode with `root` set to a Group containing the parsed
-// children of <div class="slide__content">.
-// Errors: missing section, missing slide id, missing content div, or any
-// per-element parse error.
 pub fn parse_slide_fragment(html: &str) -> Result<SlideNode, ParseError> {
     assert!(
         !html.is_empty(),
@@ -116,10 +87,6 @@ pub fn parse_slide_fragment(html: &str) -> Result<SlideNode, ParseError> {
     Ok(SlideNode::new(slide_id, layout_id, root))
 }
 
-// find_first_payload_element
-// Inputs: any NodeRef.
-// Output: the first descendant element node carrying `data-element-id`.
-// Dataflow: pre-order DFS via kuchikiki's descendants iterator.
 fn find_first_payload_element(root: &NodeRef) -> Option<NodeRef> {
     for desc in root.descendants() {
         if let Some(ed) = desc.as_element() {
@@ -132,11 +99,6 @@ fn find_first_payload_element(root: &NodeRef) -> Option<NodeRef> {
     None
 }
 
-// parse_node
-// Inputs: a NodeRef pointing to a DOM element.
-// Output: the ElementNode it encodes.
-// Dataflow: read attributes -> resolve element_type -> dispatch to a
-// per-type content/style parser -> assemble ElementNode.
 fn parse_node(node: &NodeRef) -> Result<ElementNode, ParseError> {
     let ed = node.as_element().ok_or(ParseError::NoElement)?;
     let attrs = ed.attributes.borrow();
@@ -190,10 +152,6 @@ fn parse_node(node: &NodeRef) -> Result<ElementNode, ParseError> {
         },
     )?;
 
-    // Stage 8: leftover CSS declarations (anything the typed style
-    // parsers did not consume) land in inline_styles so the inspector's
-    // custom-CSS workflow can read and edit them, and so save/load
-    // round-trips preserve them.
     let inline_styles: BTreeMap<String, String> = extract_inline_styles(&style_decls, element_type);
 
     let result = ElementNode {
@@ -224,11 +182,6 @@ struct ParsedTypedInputs {
     shape_d: Option<String>,
 }
 
-// parse_typed_payload
-// Inputs: element_type, parsed style declarations, the source node, and the
-// data-* fields extracted by parse_node.
-// Output: (style, content, children) tuple — the variant trio for the node.
-// Dataflow: dispatch on element_type; only Group recurses into children.
 fn parse_typed_payload(
     element_type: ElementType,
     style_decls: &BTreeMap<String, String>,
@@ -299,17 +252,6 @@ fn parse_typed_payload(
     }
 }
 
-// parse_table
-// Inputs: the table wrapper element node (data-element-type="table").
-// Output: the TableData grid reconstructed from the inner `<table>`. Header
-// counts come from the table's data-* attrs; dimensions from data-rows /
-// data-columns (falling back to the parsed shape). Each cell's inline style
-// becomes its style_overrides and its text node its content. The grid is
-// normalized to a rows×columns rectangle so the model invariant holds even if
-// the HTML was hand-edited. A missing/empty `<table>` yields an empty grid.
-// Control flow: locate <table> -> read header/dim attrs -> select every <tr>
-// (html5ever wraps them in <tbody>, so a descendant select is used) -> read
-// each row's <td>/<th> direct children -> normalize to a rectangle.
 fn parse_table(node: &NodeRef) -> TableData {
     let table_ref = match node.select_first("table") {
         Ok(t) => t,
@@ -339,7 +281,6 @@ fn parse_table(node: &NodeRef) -> TableData {
     }
 }
 
-// read_table_attrs — header counts + optional declared dimensions.
 fn read_table_attrs(table_node: &NodeRef) -> (usize, usize, Option<usize>, Option<usize>) {
     let ed = match table_node.as_element() {
         Some(e) => e,
@@ -355,7 +296,6 @@ fn read_table_attrs(table_node: &NodeRef) -> (usize, usize, Option<usize>, Optio
     )
 }
 
-// parse_table_row — the <td>/<th> direct children of one <tr> as cells.
 fn parse_table_row(tr_node: &NodeRef) -> Vec<TableCell> {
     let mut row: Vec<TableCell> = Vec::new();
     for child in tr_node.children() {
@@ -381,8 +321,6 @@ fn parse_table_row(tr_node: &NodeRef) -> Vec<TableCell> {
     row
 }
 
-// normalize_grid — force `cells` to exactly rows×columns (pad with default
-// cells, truncate overflow) so the TableData invariant always holds.
 fn normalize_grid(cells: &mut Vec<Vec<TableCell>>, rows: usize, columns: usize) {
     cells.truncate(rows);
     while cells.len() < rows {
@@ -428,18 +366,10 @@ fn is_known_attr(key: &str) -> bool {
             | "data-flex-align"
             | "data-flex-scale"
             | "class"
-            // data-anim-ids is a derived targeting tag emitted by the
-            // serializer from the slide timeline; consume (drop) it on read
-            // so it never accumulates in element.attributes (the manifest is
-            // authoritative for animations, not the HTML).
             | "data-anim-ids"
     )
 }
 
-// parse_element_children
-// Inputs: a NodeRef whose children may include elements and text nodes.
-// Output: parsed ElementNodes for every direct element child; text and
-// comment nodes are silently skipped.
 fn parse_element_children(parent: &NodeRef) -> Result<Vec<ElementNode>, ParseError> {
     let mut out: Vec<ElementNode> = Vec::new();
     for child in parent.children() {
@@ -450,14 +380,6 @@ fn parse_element_children(parent: &NodeRef) -> Result<Vec<ElementNode>, ParseErr
     Ok(out)
 }
 
-// parse_slide_children_lenient
-// Inputs: HTML for a slide the agent wrote back — a full `section.slide` (its
-// `div.slide__content` children are the elements), or bare element tags.
-// Output: (parsed children, count skipped). Unlike parse_slide_fragment this
-// never fails: a child that does not parse (bad/missing data-* attributes) is
-// dropped and counted, so one malformed element never discards the whole slide.
-// Control flow: locate the content container (slide__content, else body, else
-// the document), then parse each direct child element, tallying failures.
 pub fn parse_slide_children_lenient(html: &str) -> (Vec<ElementNode>, usize) {
     use kuchikiki::traits::*;
     assert!(
@@ -505,12 +427,6 @@ fn serialize_inner_html(node: &NodeRef) -> Result<String, ParseError> {
     String::from_utf8(buf).map_err(|_| ParseError::Serialization)
 }
 
-// parse_style_decls
-// Inputs: a CSS declaration list ("k:v;k:v;").
-// Output: a BTreeMap from property name to value, with both sides trimmed.
-// Limitation: splits on `;` and the first `:`. Complex values containing
-// `;` (data URLs) or unbalanced parens are not supported; Stage 3 only
-// uses simple values.
 fn parse_style_decls(s: &str) -> BTreeMap<String, String> {
     let mut out: BTreeMap<String, String> = BTreeMap::new();
     for decl in s.split(';') {
@@ -536,20 +452,11 @@ fn parse_geometry(map: &BTreeMap<String, String>) -> Geometry {
             .get("opacity")
             .and_then(|s| s.parse::<f64>().ok())
             .unwrap_or(1.0),
-        // z-index is intentionally NOT round-tripped into z_order. The
-        // serializer assigns z-index from sibling position, so the value
-        // stored in the manifest carries no authoritative information.
-        // Parsed elements always start with z_order = 0.
+
         z_order: 0,
     }
 }
 
-// known_style_keys
-// Inputs: the element type.
-// Output: the set of CSS property names the typed-style parsers consume
-// for elements of that type. Anything in the parsed declarations map that
-// is NOT in this set lands in the node's `inline_styles` so the inspector
-// can show and edit it (and so save/load round-trips preserve it).
 fn known_style_keys(element_type: ElementType) -> &'static [&'static str] {
     const GEOMETRY: &[&str] = &[
         "left",
@@ -572,21 +479,11 @@ fn known_style_keys(element_type: ElementType) -> &'static [&'static str] {
         "letter-spacing",
     ];
     match element_type {
-        ElementType::Text => {
-            // Both arrays are static; allocating a join would force
-            // heap usage on every parse. Stage 8 callers always
-            // iterate, so a const slice covering both arrays is
-            // generated at the call site below instead.
-            TEXT_KEYS
-        }
+        ElementType::Text => TEXT_KEYS,
         _ => GEOMETRY,
     }
 }
 
-// TEXT_KEYS
-// Static concatenation of GEOMETRY + TEXT_EXTRA in known_style_keys().
-// Kept as a single const so `known_style_keys` can return a &'static
-// slice without runtime allocation.
 const TEXT_KEYS: &[&str] = &[
     "left",
     "top",
@@ -606,11 +503,6 @@ const TEXT_KEYS: &[&str] = &[
     "letter-spacing",
 ];
 
-// extract_inline_styles
-// Inputs: the parsed declaration map, the element's type.
-// Output: a map of declarations the typed parsers did not consume.
-// Dataflow: filter style_decls by membership in known_style_keys; copy
-// everything else (preserves alphabetic order via BTreeMap).
 fn extract_inline_styles(
     style_decls: &BTreeMap<String, String>,
     element_type: ElementType,
@@ -669,7 +561,7 @@ fn parse_scale(s: &str) -> f64 {
 }
 fn scale_regex() -> &'static Regex {
     static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    // Pattern is a compile-time constant; it cannot fail to compile.
+
     #[allow(clippy::unwrap_used)]
     RE.get_or_init(|| Regex::new(r"scale\(\s*([0-9.]+)\s*\)").unwrap())
 }
@@ -767,7 +659,6 @@ fn extract_theme_var(s: &str) -> Option<String> {
 fn theme_var_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        // The pattern is a compile-time literal; compilation cannot fail.
         #[allow(clippy::unwrap_used)]
         Regex::new(r"^\s*var\(\s*--theme-([a-zA-Z0-9_\-]+)\s*\)\s*$").unwrap()
     })
@@ -789,8 +680,6 @@ mod tests {
     use crate::html::serialize::{serialize_element, serialize_slide};
     use proptest::prelude::*;
 
-    // ---------- unit tests: known-input/known-output ("red-black") ----------
-
     #[test]
     fn group_roundtrips_flex_props_and_scale() {
         use crate::deck::builders::group_element;
@@ -807,7 +696,7 @@ mod tests {
         });
         let html = crate::html::serialize::serialize_element(&g);
         let back = parse_element(&html).unwrap();
-        // The scale transform/origin are model-owned, not free CSS.
+
         assert!(!back.inline_styles.contains_key("transform-origin"));
         assert!(!back.inline_styles.contains_key("transform"));
         match back.style {
@@ -826,16 +715,12 @@ mod tests {
         let html = r#"<div data-element-id="el_a" data-element-type="text"
                           data-anim-ids="anim_1 anim_2">hi</div>"#;
         let node = parse_element(html).unwrap();
-        // The derived targeting tag must NOT be swept into the catch-all
-        // attributes map, or it would accumulate across save/load cycles.
+
         assert!(!node.attributes.contains_key("data-anim-ids"));
     }
 
     #[test]
     fn anim_tag_does_not_accumulate_through_html_round_trip() {
-        // A slide HTML carrying data-anim-ids, parsed back, has no animation
-        // state in the element tree (the manifest is authoritative), so a
-        // re-serialization of that parsed slide emits no tag.
         let html = r#"<section class="slide" data-slide-id="s" data-layout="t" data-root-id="rt"><div class="slide__content"><div data-element-id="el_a" data-element-type="text" data-anim-ids="anim_1">hi</div></div></section>"#;
         let slide = parse_slide_fragment(html).unwrap();
         assert!(slide.animations.is_empty());
@@ -869,8 +754,6 @@ mod tests {
 
     #[test]
     fn parse_missing_id_returns_error() {
-        // No data-element-id anywhere — find_first_payload_element returns
-        // None, so this surfaces as NoElement.
         let html = r#"<div data-element-type="text"></div>"#;
         let result = parse_element(html);
         assert!(matches!(result, Err(ParseError::NoElement)));
@@ -921,7 +804,6 @@ mod tests {
 
     #[test]
     fn parse_handles_amp_and_lt_in_text() {
-        // Serialized escape sequences -> parsed as the original characters.
         let html = r#"<div data-element-id="a" data-element-type="text"
                           style="font-family:Inter;font-size:24px;color:#000;"
                           >a &amp; b &lt; c</div>"#;
@@ -978,8 +860,6 @@ mod tests {
         let err = parse_slide_fragment(html).unwrap_err();
         assert_eq!(err, ParseError::MissingSlideRoot);
     }
-
-    // ---------- low-level helper unit tests ----------
 
     #[test]
     fn parse_style_decls_basic_split() {
@@ -1056,8 +936,6 @@ mod tests {
         assert_eq!(extract_theme_var("var(--other-thing)"), None);
     }
 
-    // ---------- single-element round-trip ----------
-
     #[test]
     fn roundtrip_default_text_element() {
         let n = text_element("el_a", "Hello");
@@ -1098,11 +976,6 @@ mod tests {
 
     #[test]
     fn roundtrip_image_element_with_background_inline_styles() {
-        // Mirrors what build_image_element_from_asset produces: an image
-        // element carrying object-fit:cover via background-* shortcuts
-        // and a var(--asset-…) reference. Both the AssetRef content and
-        // the inline styles must survive a serialize → parse cycle so
-        // save / load preserves dropped images.
         let mut n = image_element("im_a", "asset_deadbeef");
         n.inline_styles.insert(
             "background-image".into(),
@@ -1190,7 +1063,7 @@ mod tests {
         };
         let n = table_element("tbl", td.clone());
         let html = serialize_element(&n);
-        // Header row emits <th>, body emits <td>.
+
         assert!(html.contains("<th"));
         assert!(html.contains("<td"));
         let back = parse_element(&html).unwrap();
@@ -1218,8 +1091,7 @@ mod tests {
             header_rows: 0,
             header_columns: 0,
         };
-        // TableCell::default has colspan/rowspan 0; the parser normalizes to 1,
-        // so build the expected grid with explicit spans of 1.
+
         let expected_cells: Vec<Vec<TableCell>> = (0..2)
             .map(|_| (0..3).map(|_| sample_cell("", &[])).collect())
             .collect();
@@ -1268,10 +1140,6 @@ mod tests {
 
     #[test]
     fn parse_drops_z_index_from_geometry() {
-        // Even when an HTML fragment carries a z-index declaration (e.g.
-        // produced by the new slide serializer), parsing it back must
-        // not store anything in z_order — the field is no longer
-        // round-tripped through CSS.
         let html = r#"<div data-element-id="a" data-element-type="text"
             style="left:10px;top:20px;width:0px;height:0px;z-index:7;
                    font-family:Arial;font-size:14px;color:#000">hi</div>"#;
@@ -1296,7 +1164,7 @@ mod tests {
             back.inline_styles.get("border-radius").map(String::as_str),
             Some("12px")
         );
-        // Typed-style keys do NOT leak into inline_styles.
+
         assert!(!back.inline_styles.contains_key("color"));
         assert!(!back.inline_styles.contains_key("font-family"));
     }
@@ -1325,8 +1193,6 @@ mod tests {
         let back = parse_element(&html).unwrap();
         assert_eq!(back, n);
     }
-
-    // ---------- proptest strategies ----------
 
     fn arb_geometry() -> impl Strategy<Value = Geometry> {
         (-1000i32..1000, -1000i32..1000, 1i32..2000, 1i32..2000).prop_map(|(x, y, w, h)| Geometry {
@@ -1382,9 +1248,6 @@ mod tests {
             })
     }
 
-    // arb_safe_text: ASCII text including the escape-relevant chars `&<>`
-    // but no leading/trailing whitespace and no newlines (HTML5 would
-    // normalize those).
     fn arb_safe_text() -> impl Strategy<Value = String> {
         "[A-Za-z0-9 &<>]{0,40}".prop_map(|s| s.trim().to_string())
     }
@@ -1442,9 +1305,6 @@ mod tests {
     }
 
     fn arb_element_tree() -> impl Strategy<Value = ElementNode> {
-        // prop_recursive: leaves are simple elements; inner nodes are Groups
-        // that bundle up to 4 children. Depth capped at 3 to keep test sizes
-        // tractable.
         arb_leaf_element().prop_recursive(3, 16, 4, |inner| {
             (arb_element_id(), prop::collection::vec(inner, 0..4))
                 .prop_map(|(id, kids)| group_element(id, kids))

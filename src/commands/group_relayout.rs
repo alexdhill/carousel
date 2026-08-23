@@ -1,7 +1,3 @@
-// relayout_patches — relayout an element's ancestor groups and emit the DOM
-// patches (left/top/width/height SetStyle) for every node whose geometry
-// changed, so the editor reflects shrink-wrap without a full remount.
-
 use crate::deck::canvas::find_element;
 use crate::deck::element::ElementNode;
 use crate::deck::group_layout::relayout_ancestors;
@@ -9,8 +5,6 @@ use crate::deck::style::Geometry;
 use crate::ipc::Patch;
 use std::collections::BTreeMap;
 
-// snapshot_geom — map of id → geometry for `node` and all descendants.
-// Iterative, fixed ceiling.
 fn snapshot_geom(node: &ElementNode) -> BTreeMap<String, Geometry> {
     const MAX_NODES: usize = 1_000_000;
     let mut out: BTreeMap<String, Geometry> = BTreeMap::new();
@@ -27,8 +21,6 @@ fn snapshot_geom(node: &ElementNode) -> BTreeMap<String, Geometry> {
     out
 }
 
-// geom_patches — for a node, diff its subtree geometry against `before` and emit
-// SetStyle left/top/width/height patches for changed nodes.
 fn geom_patches(node: &ElementNode, before: &BTreeMap<String, Geometry>) -> Vec<Patch> {
     const MAX_NODES: usize = 1_000_000;
     let mut out: Vec<Patch> = Vec::new();
@@ -66,11 +58,6 @@ fn set_style(id: &str, prop: &str, v: f64) -> Patch {
     }
 }
 
-// relayout_patches
-// Inputs: root (mutated), the edited element id.
-// Output: SetStyle patches for every node whose geometry changed after
-// relayouting the element's ancestor groups. Empty when the element has no
-// group ancestor or nothing changed.
 pub fn relayout_patches(root: &mut ElementNode, element_id: &str) -> Vec<Patch> {
     let anchor: String = match find_element(root, element_id) {
         Some(_) => element_id.to_string(),
@@ -111,11 +98,10 @@ mod tests {
             distribution: GroupDistribution::SpaceBetween,
             ..Default::default()
         });
-        // The flex group sits under a structural root (the slide root is never
-        // a user flex group); relayout against that root.
+
         let mut root = group_element("root", vec![g]);
         let patches = relayout_patches(&mut root, "a");
-        // c moved 50 -> 40, so at least one SetStyle left patch for c exists.
+
         let has_c_left = patches.iter().any(|p| {
             matches!(p,
             Patch::SetStyle { element_id, property, value }

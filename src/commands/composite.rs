@@ -1,18 +1,3 @@
-// CompositeCommand.
-//
-// SPEC §9.5 — bundles multiple sub-commands into one logical operation so
-// that a transaction commit (or any caller assembling a batched edit) can
-// push exactly one history entry. `apply` runs each sub-command in order,
-// concatenates their patches and dirty-slide lists, and constructs an
-// inverse that is itself a CompositeCommand whose sub-commands are the
-// per-step inverses **in reversed order** — so undoing unwinds the
-// sequence latest-first.
-//
-// Failure semantics: the first sub-command error propagates and aborts the
-// composite. Sub-commands that applied before the failure are NOT rolled
-// back automatically; Stage 6 accepts this risk for drag-style transactions
-// where partial failure is implausible (per ROADMAP §6 debugging note).
-
 use crate::commands::{Command, CommandError, CommandOutput};
 use crate::deck::{CanvasTarget, Deck};
 use crate::ipc::Patch;
@@ -24,11 +9,6 @@ pub struct CompositeCommand {
 }
 
 impl CompositeCommand {
-    // new
-    // Inputs: a Vec of sub-commands, a stable label.
-    // Output: a CompositeCommand instance.
-    // Errors: asserts non-empty commands and non-empty label.
-    // Dataflow: pure constructor.
     pub fn new(commands: Vec<Box<dyn Command>>, label: &'static str) -> Self {
         assert!(!label.is_empty(), "CompositeCommand: label is empty");
         assert!(
@@ -48,17 +28,6 @@ impl CompositeCommand {
 }
 
 impl Command for CompositeCommand {
-    // apply
-    // Inputs: &self, &mut Deck.
-    // Output: CommandOutput whose patches and dirty_slides concatenate
-    // those of every sub-command in dispatch order; manifest_dirty is the
-    // logical-or of sub-commands'. The inverse is a CompositeCommand whose
-    // sub-commands are the per-step inverses in reversed order.
-    // Errors: first sub-command failure aborts and propagates; earlier
-    // sub-commands remain applied (see module-level doc).
-    // Dataflow: iterate sub-commands with a bounded counter -> for each,
-    // apply against deck and collect (patches, dirty, inverse) -> reverse
-    // inverses -> assemble output.
     fn apply(&self, deck: &mut Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.commands.is_empty(),
@@ -113,10 +82,6 @@ impl Command for CompositeCommand {
         self.commands.iter().any(|c| c.affects_slide_list())
     }
 
-    // Propagate the remaining rebroadcast flags so a bundled edit (e.g. a
-    // drag that reorders + retriggers an animation) still tells the editor to
-    // resync the relevant pane. Omitting these silently drops the refresh —
-    // the model changes but the UI never updates.
     fn affects_layout_list(&self) -> bool {
         self.commands.iter().any(|c| c.affects_layout_list())
     }
@@ -205,9 +170,9 @@ mod tests {
         assert_eq!(geo_a.y, 200.0);
         assert_eq!(geo_b.x, 300.0);
         assert_eq!(geo_b.y, 400.0);
-        // Each MoveElement produces two patches (left + top), so 4 total.
+
         assert_eq!(out.patches.len(), 4);
-        // Dirty targets aggregated.
+
         assert_eq!(out.dirty_targets.len(), 2);
         assert!(
             out.dirty_targets
@@ -318,8 +283,7 @@ mod tests {
             })],
             "Move Animation",
         );
-        // ReorderAnimation reports affects_animations; the composite must too,
-        // else react_to_outcome never rebroadcasts the timeline.
+
         assert!(cc.affects_animations());
     }
 

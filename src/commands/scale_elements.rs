@@ -1,16 +1,3 @@
-// SetElementsTransform command.
-//
-// Multi-select proportional scale (and the move-all path could reuse it, but
-// drag uses a CompositeCommand of MoveElement). Carries an ABSOLUTE target
-// state per element — geometry plus optional text font-size and optional group
-// scale — and applies them in one mutation. `apply` captures the prior state
-// of every touched field into the inverse (another SetElementsTransform), so
-// undo/redo round-trips exactly in a single step.
-//
-// The interpret layer (app.rs) computes the target states from a scale factor
-// and anchor by reading current geometry/font/scale; this command is the
-// dumb, undoable writer.
-
 use crate::commands::{Command, CommandError, CommandOutput, resolve_canvas_mut};
 use crate::deck::element::ElementStyle;
 use crate::deck::style::Length;
@@ -25,9 +12,9 @@ pub struct ElementTransform {
     pub y: f64,
     pub width: f64,
     pub height: f64,
-    // Set only for text elements (absolute px); None leaves the font as-is.
+
     pub font_size_px: Option<f64>,
-    // Set only for groups (absolute uniform scale); None leaves it as-is.
+
     pub group_scale: Option<f64>,
 }
 
@@ -38,12 +25,6 @@ pub struct SetElementsTransform {
 }
 
 impl Command for SetElementsTransform {
-    // apply
-    // Inputs: &self, &mut Deck.
-    // Output: CommandOutput with no patches (requires_remount re-renders the
-    // canvas), an inverse SetElementsTransform carrying the captured prior
-    // state of each element, and the canvas marked dirty.
-    // Errors: SlideNotFound / ElementNotFound (a missing id aborts).
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.target.id().is_empty(),
@@ -124,7 +105,7 @@ mod tests {
     #[test]
     fn scales_geometry_and_text_font_size_and_inverts() {
         let (mut deck, sid, eid) = fixture();
-        // Make the element a known size + font.
+
         {
             let el = deck
                 .slides
@@ -144,7 +125,7 @@ mod tests {
             deck.slides[&sid].find_element(&eid).unwrap().style,
             ElementStyle::Text(_)
         );
-        // Scale 2x about anchor (0,0): pos and size double; font 20 → 40.
+
         let item = ElementTransform {
             id: eid.clone(),
             x: 200.0,

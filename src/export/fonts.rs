@@ -1,27 +1,9 @@
-// Export font bundling.
-//
-// Scans a deck for the concrete (family, weight, italic) faces its text
-// actually uses, loads each from the system via the `fonts` module, and emits
-// the @font-face CSS + font files that make an exported HTML deck render the
-// same on a machine that lacks those fonts. Theme font refs
-// (var(--theme-*-family)) are resolved against the theme's CSS variable
-// definitions; generic family keywords are skipped.
-
 use crate::deck::{Deck, ElementNode, ElementStyle, FontRef, FontStyle, TextStyle};
 use crate::fonts::{font_slug, is_generic_family, load_face, sniff_format};
 use std::collections::{BTreeMap, BTreeSet};
 
-// UsedFace
-// One concrete face the deck references: family name, numeric weight, italic.
 type UsedFace = (String, u16, bool);
 
-// build_font_faces
-// Inputs: the deck. Output: (css, files) where `css` is the concatenated
-// @font-face rules and `files` are the (relative-path, bytes) font files to
-// add to the export bundle. Faces that cannot be loaded or whose container is
-// unrecognised are skipped (the export falls back to the viewer's system
-// font). Control flow: resolve theme family vars, collect used faces, load +
-// sniff each, build one rule + file per success.
 pub fn build_font_faces(deck: &Deck) -> (String, Vec<(String, Vec<u8>)>) {
     let vars: BTreeMap<String, String> = collect_family_vars(deck);
     let faces: BTreeSet<UsedFace> = collect_used_faces(deck, &vars);
@@ -50,9 +32,6 @@ pub fn build_font_faces(deck: &Deck) -> (String, Vec<(String, Vec<u8>)>) {
     (css, files)
 }
 
-// font_face_rule
-// Inputs: family, weight, italic flag, the relative font path, the CSS format
-// token. Output: one @font-face rule string.
 fn font_face_rule(family: &str, weight: u16, italic: bool, path: &str, fmt: &str) -> String {
     let style: &str = if italic { "italic" } else { "normal" };
     format!(
@@ -62,10 +41,6 @@ src:url(\"{}\") format(\"{}\");}}\n",
     )
 }
 
-// collect_family_vars
-// Inputs: the deck. Output: a map of CSS custom-property name (without the
-// leading `--`) to its value, for every theme variable whose name contains
-// "family". Scans both theme_css and globals_css.
 fn collect_family_vars(deck: &Deck) -> BTreeMap<String, String> {
     let mut out: BTreeMap<String, String> = BTreeMap::new();
     parse_family_vars(&deck.theme.theme_css, &mut out);
@@ -73,10 +48,6 @@ fn collect_family_vars(deck: &Deck) -> BTreeMap<String, String> {
     out
 }
 
-// parse_family_vars
-// Inputs: a CSS string and the accumulator map. Output: side-effect; inserts
-// every `--<name-with-family>: <value>;` declaration found. Hand-parsed (no
-// regex dependency on this path) by scanning for "--" then ":" then ";".
 fn parse_family_vars(css: &str, out: &mut BTreeMap<String, String>) {
     for raw in css.split(';') {
         let decl: &str = raw.trim();
@@ -99,9 +70,6 @@ fn parse_family_vars(css: &str, out: &mut BTreeMap<String, String>) {
     }
 }
 
-// collect_used_faces
-// Inputs: the deck and the resolved theme family vars. Output: the distinct set
-// of concrete faces used across every slide and layout root.
 fn collect_used_faces(deck: &Deck, vars: &BTreeMap<String, String>) -> BTreeSet<UsedFace> {
     let mut out: BTreeSet<UsedFace> = BTreeSet::new();
     for slide in deck.slides.values() {
@@ -113,9 +81,6 @@ fn collect_used_faces(deck: &Deck, vars: &BTreeMap<String, String>) -> BTreeSet<
     out
 }
 
-// walk_element
-// Inputs: an element node, the family vars, the accumulator. Output:
-// side-effect; adds this element's used faces (if any) then recurses children.
 fn walk_element(node: &ElementNode, vars: &BTreeMap<String, String>, out: &mut BTreeSet<UsedFace>) {
     let family_value: Option<String> = effective_family(node);
     if let Some(value) = family_value {
@@ -130,10 +95,6 @@ fn walk_element(node: &ElementNode, vars: &BTreeMap<String, String>, out: &mut B
     }
 }
 
-// effective_family / effective_weight / effective_italic
-// The element's effective typography: an inline override wins, else the typed
-// TextStyle (for text elements), else a sensible default. Non-text elements
-// contribute only when they carry an inline font-family.
 fn effective_family(node: &ElementNode) -> Option<String> {
     if let Some(v) = node.inline_styles.get("font-family") {
         return Some(v.clone());
@@ -166,9 +127,6 @@ fn effective_italic(node: &ElementNode) -> bool {
     false
 }
 
-// font_ref_css
-// Mirrors the serializer: a theme font ref becomes var(--theme-<key>) (with
-// underscores hyphenated), a literal is its stack verbatim.
 fn font_ref_css(ts: &TextStyle) -> String {
     match &ts.font_family {
         FontRef::Theme(k) => format!("var(--theme-{})", k.replace('_', "-")),
@@ -176,10 +134,6 @@ fn font_ref_css(ts: &TextStyle) -> String {
     }
 }
 
-// concrete_families
-// Inputs: a font-family value (a stack, or a var(--…) reference) and the theme
-// vars. Output: the concrete, bundle-worthy family names — generics dropped,
-// theme vars resolved to their stack first. Quotes/whitespace stripped.
 fn concrete_families(value: &str, vars: &BTreeMap<String, String>) -> Vec<String> {
     let stack: String = match resolve_var(value.trim(), vars) {
         Some(s) => s,
@@ -198,9 +152,6 @@ fn concrete_families(value: &str, vars: &BTreeMap<String, String>) -> Vec<String
     out
 }
 
-// resolve_var
-// Inputs: a value and the var map. Output: the variable's value when the input
-// is exactly `var(--name)`, else None.
 fn resolve_var(value: &str, vars: &BTreeMap<String, String>) -> Option<String> {
     let inner: &str = value.strip_prefix("var(")?.strip_suffix(')')?;
     let name: &str = inner.trim().strip_prefix("--")?;
@@ -257,13 +208,10 @@ mod tests {
 
     #[test]
     fn collect_used_faces_resolves_inline_and_theme() {
-        // Sample deck's text elements use theme fonts; an exported deck should
-        // surface at least one concrete face (the theme stack's first family).
         let deck = Deck::sample();
         let v = collect_family_vars(&deck);
         let faces = collect_used_faces(&deck, &v);
-        // Either the sample uses concrete theme families or none — both are
-        // valid; assert the scan runs and yields a well-formed set.
+
         for (family, weight, _italic) in &faces {
             assert!(!family.is_empty());
             assert!(*weight >= 1 && *weight <= 1000);

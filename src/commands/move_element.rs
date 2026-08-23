@@ -1,13 +1,3 @@
-// MoveElement command.
-//
-// SPEC §9.2 — the canonical rollback-data example. Mutates an element's
-// (x, y) geometry, emits SetStyle patches for left/top, and constructs an
-// inverse MoveElement carrying the prior position as its new_position.
-//
-// `previous_position` is unused on the request form (None) and populated
-// on the inverse for debuggability — it documents what the inverse will
-// restore to without having to consult the deck.
-
 use crate::commands::{Command, CommandError, CommandOutput, resolve_canvas_mut};
 use crate::deck::{Canvas, CanvasTarget, ElementId, SlideId};
 use crate::ipc::{Patch, Point};
@@ -21,13 +11,6 @@ pub struct MoveElement {
 }
 
 impl Command for MoveElement {
-    // apply
-    // Inputs: &self, &mut Deck.
-    // Output: CommandOutput with two SetStyle patches (left, top), an
-    // inverse MoveElement, and the target canvas as dirty.
-    // Errors: SlideNotFound / LayoutNotFound, ElementNotFound.
-    // Dataflow: resolve canvas -> locate element -> snapshot prior (x,y)
-    // -> write new geometry -> invalidate index -> build patches/inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.target.id().is_empty(),
@@ -129,10 +112,10 @@ mod tests {
             previous_position: None,
         };
         let out = cmd.apply(&mut deck).unwrap();
-        // Group "cg" width tracks the new span (SpaceBetween pins ends) -> > 100.
+
         let g = deck.slides[&sid].find_element("cg").unwrap();
         assert!(g.geometry.width >= 200.0);
-        // Patches include a width SetStyle for the group.
+
         assert!(out.patches.iter().any(|p| matches!(p,
             Patch::SetStyle { element_id, property, .. } if element_id == "cg" && property == "width")));
     }
@@ -159,7 +142,7 @@ mod tests {
             .clone();
         assert_eq!(after.x, 500.0);
         assert_eq!(after.y, 300.0);
-        // Width/height/opacity/rotation/z_order untouched.
+
         assert_eq!(after.width, before.width);
         assert_eq!(after.height, before.height);
         assert_eq!(after.opacity, before.opacity);
@@ -242,9 +225,7 @@ mod tests {
             previous_position: None,
         };
         let out = cmd.apply(&mut deck).unwrap();
-        // We cannot downcast Box<dyn Command>, but we can re-apply the
-        // inverse and verify it lands at the original position — covered
-        // above. Here we instead confirm two consecutive applies cancel.
+
         out.inverse.apply(&mut deck).unwrap();
     }
 
@@ -258,9 +239,9 @@ mod tests {
             previous_position: None,
         };
         let first = cmd.apply(&mut deck).unwrap();
-        // Apply inverse: back to original.
+
         let second = first.inverse.apply(&mut deck).unwrap();
-        // Apply inverse of inverse: back to new_position.
+
         second.inverse.apply(&mut deck).unwrap();
         let geo = deck.slides[&sid]
             .find_element(&eid)
@@ -337,9 +318,6 @@ mod tests {
 
     #[test]
     fn move_targets_a_layout_canvas() {
-        // The default theme seeds a "blank" layout with an empty root; add a
-        // child so there is an element to move, then move it via a Layout
-        // target and confirm the layout (not any slide) was mutated.
         let mut deck = Deck::sample();
         let layout = deck.theme.layouts.get_mut("blank").unwrap();
         layout

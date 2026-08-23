@@ -75,21 +75,36 @@ jobs:
                   arch="${target%%-*}"          # aarch64 or x86_64
                   app="Carousel.app"
 
-                  # Icon: build an iconset then an .icns.
-                  mkdir -p Carousel.iconset
-                  for s in 16 32 64 128 256 512; do
-                    sips -z "$s" "$s" packaging/icon.png --out "Carousel.iconset/icon_${s}x${s}.png" >/dev/null
-                    d=$((s * 2))
-                    sips -z "$d" "$d" packaging/icon.png --out "Carousel.iconset/icon_${s}x${s}@2x.png" >/dev/null
-                  done
-                  iconutil -c icns Carousel.iconset -o Carousel.icns
-
                   # App bundle.
                   mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
                   cp "target/$target/release/Carousel" "$app/Contents/MacOS/Carousel"
                   chmod +x "$app/Contents/MacOS/Carousel"
                   cp packaging/macos/Info.plist "$app/Contents/Info.plist"
-                  cp Carousel.icns "$app/Contents/Resources/Carousel.icns"
+
+                  if [ "$arch" = "aarch64" ]; then
+                    # Apple Silicon: compile the Icon Composer .icon (Assets.car + .icns)
+                    # so macOS 26 renders the layered/liquid-glass icon.
+                    xcrun actool --output-format human-readable-text --notices --warnings \
+                      --app-icon CarouselMacOS \
+                      --output-partial-info-plist "$RUNNER_TEMP/icon.plist" \
+                      --target-device mac --platform macosx \
+                      --minimum-deployment-target 26.0 \
+                      --compile "$app/Contents/Resources" \
+                      packaging/icon/CarouselMacOS.icon
+                    /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile CarouselMacOS" "$app/Contents/Info.plist"
+                    /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string CarouselMacOS" "$app/Contents/Info.plist"
+                    test -f "$app/Contents/Resources/Assets.car"
+                    test -f "$app/Contents/Resources/CarouselMacOS.icns"
+                  else
+                    # Intel: build an iconset from the flat PNG, then an .icns.
+                    mkdir -p Carousel.iconset
+                    for s in 16 32 64 128 256 512; do
+                      sips -z "$s" "$s" packaging/icon/CarouselIcon.png --out "Carousel.iconset/icon_${s}x${s}.png" >/dev/null
+                      d=$((s * 2))
+                      sips -z "$d" "$d" packaging/icon/CarouselIcon.png --out "Carousel.iconset/icon_${s}x${s}@2x.png" >/dev/null
+                    done
+                    iconutil -c icns Carousel.iconset -o "$app/Contents/Resources/Carousel.icns"
+                  fi
 
                   # Sign (only when the cert secret is present).
                   if [ -n "${MACOS_CERT_P12:-}" ]; then
@@ -144,7 +159,7 @@ jobs:
                   if (-not $ok) { throw "nsis install failed after 5 attempts" }
                   $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
 
-                  magick packaging/icon.png -define icon:auto-resize=256,128,64,48,32,16 packaging/nsis/Carousel.ico
+                  magick packaging/icon/CarouselIcon.png -define icon:auto-resize=256,128,64,48,32,16 packaging/nsis/Carousel.ico
                   Copy-Item "target/${{ matrix.target }}/release/Carousel.exe" packaging/nsis/Carousel.exe
                   $ver = "${{ github.ref_name }}".TrimStart("v")
                   & $makensis "/DVERSION=$ver" packaging/nsis/carousel.nsi
@@ -163,7 +178,7 @@ jobs:
                   install -Dm644 packaging/linux/carousel.desktop "$pkg/usr/share/applications/carousel.desktop"
                   install -Dm644 packaging/linux/carousel-deck.xml "$pkg/usr/share/mime/packages/carousel-deck.xml"
                   mkdir -p "$pkg/usr/share/icons/hicolor/256x256/apps"
-                  convert packaging/icon.png -resize 256x256 "$pkg/usr/share/icons/hicolor/256x256/apps/carousel.png"
+                  convert packaging/icon/CarouselIcon.png -resize 256x256 "$pkg/usr/share/icons/hicolor/256x256/apps/carousel.png"
                   install -Dm755 packaging/linux/deb/postinst "$pkg/DEBIAN/postinst"
                   install -Dm755 packaging/linux/deb/postrm "$pkg/DEBIAN/postrm"
                   sed "s/@VERSION@/${ver}/" packaging/linux/deb/control > "$pkg/DEBIAN/control"

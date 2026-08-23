@@ -1,31 +1,10 @@
-// HTML serializer.
-
 #![allow(dead_code)]
-
-//
-// Walks an `ElementNode` depth-first and writes a compact HTML fragment.
-// Compact = no whitespace between tags or around text content; this avoids
-// whitespace text nodes drifting in during round-trips through the parser.
-//
-// Tag policy: every element serializes as `<div>` for Stage 3. The element
-// type lives in `data-element-type`, so semantic tag information is not
-// needed for re-rendering. Layout-driven tag choice (h1/p) is a Stage 5
-// concern when layouts compose with slides.
-//
-// Attribute order: alphabetic, via BTreeMap. Determinism matters for
-// content-hashing slides on save (Stage 7) and for clean diffs in version
-// control.
 
 use crate::deck::element::{ElementContent, ElementNode, ElementStyle};
 use crate::deck::slide::SlideNode;
 use crate::deck::style::*;
 use std::collections::BTreeMap;
 
-// ANIMATION_KEYFRAMES_CSS
-// The immutable built-in @keyframes library injected into every shadow root
-// (viewport mount + thumbnails) alongside theme_css / globals_css. Inert
-// until a playback runtime exists; users cannot delete these (custom
-// @keyframes live in the editable theme.globals_css instead).
 pub const ANIMATION_KEYFRAMES_CSS: &str = r#"
 @keyframes appear { from { opacity: 0; } to { opacity: 1; } }
 @keyframes disappear { from { opacity: 1; } to { opacity: 0; } }
@@ -51,76 +30,32 @@ pub const ANIMATION_KEYFRAMES_CSS: &str = r#"
 [data-element-type="table"] > table { width: 100%; height: 100%; border-collapse: collapse; table-layout: fixed; }
 [data-element-type="table"] th, [data-element-type="table"] td { border: 1px solid var(--theme-muted, #bbb); padding: 6px 10px; text-align: left; vertical-align: top; color: inherit; font: inherit; overflow: hidden; }
 [data-element-type="table"] th { font-weight: 600; background: color-mix(in srgb, var(--theme-foreground, #000) 8%, transparent); }
-/* Scope compositing (mix-blend-mode, backdrop-filter, isolation) to the slide
-   so it blends against the slide's own backdrop, not whatever page the slide is
-   mounted on. Without this an element's blend reaches the page background, which
-   differs between the light canvas and the black presentation body — the same
-   element then renders differently in each. Isolating here (the inert base
-   injected into every shadow root: canvas, present, thumbnails, export) makes
-   all surfaces render identically. */
 .slide { isolation: isolate; }
-/* Slides are never transparent: a white floor under any theme/inline fill.
-   :where() keeps this at zero specificity so a theme's `.slide { background }`
-   rule and a per-slide inline fill both still override it; it only shows
-   through when nothing else sets a slide background. */
 :where(.slide) { background: #fff; }
-/* Untouched layout placeholders read as click-to-edit. This base is injected
-   into every shadow root, but playback (present/export/pdf/thumbnail) omits
-   placeholder elements entirely, so the rule only ever shows in the editor. */
 [data-placeholder="true"] { opacity: 0.45; }
 "#;
 
-// AnimMap: element id → its animation entry ids (in timeline order). Built
-// from `SlideNode.animations` and threaded through the writers so each
-// animated element gets a `data-anim-ids` targeting tag (a forward-looking
-// hook for a future runtime; inert now, dropped by the parser on read).
 type AnimMap<'a> = BTreeMap<&'a str, Vec<&'a str>>;
 
-// RenderCtx
-// Per-render values substituted into text tokens: the slide's 1-based number,
-// the deck's slide count, and today's date (YYYY-MM-DD). Passed as
-// Option<&RenderCtx> through the serializer — None on the persisted bundle path
-// (no substitution), Some on display mounts (editor / present / export / thumb).
 pub struct RenderCtx {
     pub number: usize,
     pub count: usize,
     pub date: String,
 }
 
-// RenderOpts
-// Bundles the per-render knobs threaded through the serializer: the optional
-// token context (`ctx`) and whether untouched layout placeholders are omitted
-// (`hide_placeholders`). Playback surfaces (present / export / pdf / thumbnail)
-// set `hide_placeholders = true`; editor surfaces set it false and keep the
-// placeholders (emitting `data-placeholder="true"` for styling). The persisted
-// bundle path uses the default (no ctx, placeholders kept) so nothing is lost.
 #[derive(Default)]
 pub struct RenderOpts {
     pub ctx: Option<RenderCtx>,
     pub hide_placeholders: bool,
-    // Detail floor for scaled-down renders (thumbnails/previews): elements whose
-    // larger side, in slide units, is below this are omitted — invisible at
-    // thumbnail scale, so skipping them cuts DOM for no visible loss. Groups drop
-    // their whole subtree. 0.0 (default) renders everything, so full-size mounts
-    // are unaffected.
+
     pub min_element_size: f64,
 }
 
-// below_min_size
-// Output: true when the node is smaller than the render's detail floor and must
-// be skipped. False whenever the floor is disabled (<= 0.0), so full renders
-// keep every element.
 fn below_min_size(node: &ElementNode, opts: &RenderOpts) -> bool {
     opts.min_element_size > 0.0
         && node.geometry.width.max(node.geometry.height) < opts.min_element_size
 }
 
-// resolve_tokens
-// Inputs: raw text and a render context.
-// Output: the text with every known ${…} token replaced by its context value;
-// unknown or unclosed tokens are copied verbatim.
-// Control flow: single left-to-right scan bounded by the input length; on `${`
-// it reads to the next `}` and maps the name, else copies the byte.
 pub fn resolve_tokens(raw: &str, ctx: &RenderCtx) -> String {
     assert!(
         raw.len() < usize::MAX,
@@ -165,10 +100,6 @@ pub fn resolve_tokens(raw: &str, ctx: &RenderCtx) -> String {
     out
 }
 
-// civil_from_days
-// Inputs: days since the Unix epoch (1970-01-01 = 0).
-// Output: the (year, month, day) civil date. Branch-free algorithm (Hinnant),
-// no recursion, constant work.
 fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let z: i64 = days + 719_468;
     let era: i64 = if z >= 0 { z } else { z - 146_096 } / 146_097;
@@ -186,9 +117,6 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
-// today_ymd
-// Output: today's date as a YYYY-MM-DD string in UTC. Clock-before-epoch
-// collapses to day 0 rather than erroring — display text must never panic.
 pub fn today_ymd() -> String {
     let secs: u64 = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -198,46 +126,22 @@ pub fn today_ymd() -> String {
     format!("{:04}-{:02}-{:02}", y, m, d)
 }
 
-// serialize_element
-// Inputs: a reference to a tree-rooted ElementNode.
-// Output: an HTML fragment string containing exactly one top-level element.
-// Dataflow: allocates a String buffer and walks the tree. The top-level
-// element receives no z-index — z-index is only meaningful relative to
-// siblings, and a standalone element has none.
 pub fn serialize_element(node: &ElementNode) -> String {
     assert!(
         node.is_consistent(),
         "cannot serialize inconsistent element"
     );
     let mut out: String = String::new();
-    // Standalone elements (e.g. InsertElement patches) have no slide-level
-    // animation context, so they carry no targeting tag; the element picks
-    // one up on the next full slide mount.
+
     let anim: AnimMap = AnimMap::new();
     write_node(node, None, &anim, &RenderOpts::default(), &mut out);
     out
 }
 
-// serialize_slide
-// Inputs: a SlideNode whose root is a Group.
-// Output: an HTML fragment of the form
-//   <section class="slide" data-slide-id="…" data-layout="…"
-//            data-root-id="…">
-//     <div class="slide__content">…children…</div>
-//   </section>
-// `data-root-id` preserves the slide's root element id across round-trips
-// so SlideNode comparison stays exact. Each child of the slide's root
-// group receives a z-index equal to its sibling index — z is therefore
-// app-determined by tree position, not by any stored z_order field.
 pub fn serialize_slide(slide: &SlideNode) -> String {
     serialize_slide_themed(slide, None, None, &RenderOpts::default())
 }
 
-// serialize_slide_themed
-// As serialize_slide, but `fb_fill` / `fb_img` are fallback background values
-// (typically the slide's layout) used when the slide's own metadata leaves the
-// matching field empty. This is the layout→slide background inheritance: the
-// slide's own value always wins; the fallback fills only the gaps.
 pub fn serialize_slide_themed(
     slide: &SlideNode,
     fb_fill: Option<&str>,
@@ -248,7 +152,7 @@ pub fn serialize_slide_themed(
         slide.root.is_consistent(),
         "slide root must satisfy the element-triple invariant"
     );
-    // Build the element → animation-ids map (timeline order) for the tag.
+
     let mut anim: AnimMap = AnimMap::new();
     for e in &slide.animations {
         anim.entry(e.element_id.as_str())
@@ -263,12 +167,7 @@ pub fn serialize_slide_themed(
     out.push_str("\" data-root-id=\"");
     out.push_str(&escape_attr(&slide.root.id));
     out.push('"');
-    // Per-slide background overrides the theme's .slide background via an inline
-    // style (inline beats the class rule). Omitted when None so the slide
-    // inherits the theme background.
-    // Fill first (background shorthand), then the image as a longhand over it
-    // so the picture draws on top of the fill colour. cover/center give the
-    // expected full-bleed slide background.
+
     let bg_fill: Option<&str> = slide
         .metadata
         .background
@@ -311,13 +210,6 @@ pub fn serialize_slide_themed(
     out
 }
 
-// write_node
-// Inputs: a node, an optional sibling z-index (None when the node is the
-// top-level of a serialize_element call; Some(i) when it sits inside a
-// parent's children list), an out buffer.
-// Output: side-effect; appends `<div …>content</div>` to out.
-// Dataflow: attributes (with computed z-index in the style attr) →
-// content → recurse for groups, threading per-child sibling indices.
 fn write_node(
     node: &ElementNode,
     sibling_index: Option<i32>,
@@ -332,11 +224,6 @@ fn write_node(
     out.push_str("</div>");
 }
 
-// write_attributes
-// Inputs: node, optional sibling index for the z-index decl, out buffer.
-// Output: side-effect; appends ` k="v"` pairs in BTreeMap (alphabetic)
-// order. Model-owned attributes overwrite user-supplied ones of the same
-// key so the parser can rely on canonical key names.
 fn write_attributes(
     node: &ElementNode,
     sibling_index: Option<i32>,
@@ -359,8 +246,7 @@ fn write_attributes(
     if let Some(v) = &node.placeholder_fill {
         attrs.insert("data-placeholder-fill".into(), v.clone());
     }
-    // Animation targeting tag (derived from the slide timeline; dropped by
-    // the parser on read so it never accumulates).
+
     if let Some(ids) = anim.get(node.id.as_str()) {
         attrs.insert("data-anim-ids".into(), ids.join(" "));
     }
@@ -385,18 +271,12 @@ fn write_attributes(
         out.push_str(&escape_attr(raw));
         out.push('"');
     }
-    // Untouched layout placeholder: tag it so the editor can style it as
-    // click-to-edit. Reaching here means the element is being rendered (playback
-    // skips placeholders before write_node), so no mode check is needed.
+
     if node.placeholder {
         out.push_str(" data-placeholder=\"true\"");
     }
 }
 
-// add_content_attrs
-// Inputs: node, attribute accumulator.
-// Output: side-effect; injects content-specific data-* attributes the
-// parser uses to reconstruct the content variant for non-Text types.
 fn add_content_attrs(node: &ElementNode, attrs: &mut BTreeMap<String, String>) {
     use crate::deck::element::ShapeGeometry as SG;
     match &node.content {
@@ -464,12 +344,6 @@ fn group_align_token(a: crate::deck::style::GroupAlignment) -> &'static str {
     }
 }
 
-// write_content
-// Inputs: node, out buffer.
-// Output: side-effect; appends inner content for the variant.
-// Text → escaped plain text; Group → recursive children threaded with
-// per-child sibling indices for z-index; Embed → raw HTML; other variants
-// emit nothing (content sits in data-* attributes).
 fn write_content(node: &ElementNode, anim: &AnimMap, opts: &RenderOpts, out: &mut String) {
     match &node.content {
         ElementContent::Text(rt) => match &opts.ctx {
@@ -493,13 +367,6 @@ fn write_content(node: &ElementNode, anim: &AnimMap, opts: &RenderOpts, out: &mu
     }
 }
 
-// write_table
-// Inputs: the TableData grid, out buffer.
-// Output: side-effect; appends a `<table>` carrying the grid dimensions and
-// header counts as data-* attributes, then one `<tr>` per row. Cells in the
-// header row/column range emit `<th>`, the rest `<td>`; each cell writes its
-// style_overrides as an inline style and its escaped plain text. The grid is
-// clamped to rows×columns so a malformed model still serializes a rectangle.
 fn write_table(td: &crate::deck::element::TableData, opts: &RenderOpts, out: &mut String) {
     out.push_str("<table data-rows=\"");
     out.push_str(&td.rows.to_string());
@@ -545,19 +412,12 @@ fn write_table(td: &crate::deck::element::TableData, opts: &RenderOpts, out: &mu
     out.push_str("</table>");
 }
 
-// build_style
-// Inputs: node, optional sibling index for the computed z-index.
-// Output: CSS declarations for this element as one string.
-// Order: geometry first → type-specific style → sibling z-index (when
-// present) → inline_styles entries (alphabetic). User-entered CSS lands
-// last so it wins under last-declaration CSS rules.
 fn build_style(node: &ElementNode, sibling_index: Option<i32>) -> String {
     let mut s: String = String::new();
     write_geom(&node.geometry, &mut s);
     if let ElementStyle::Group(gs) = &node.style
         && gs.scale != 1.0
     {
-        // Compose with rotation if present; scale grows from the top-left.
         let rot: String = if node.geometry.rotation != 0.0 {
             format!("rotate({}rad) ", node.geometry.rotation)
         } else {
@@ -589,10 +449,6 @@ fn write_geom(g: &Geometry, out: &mut String) {
     if g.opacity != 1.0 {
         decl(out, "opacity", &format!("{}", g.opacity));
     }
-    // Note: g.z_order is no longer emitted. The serializer assigns
-    // z-index from each element's position in its parent's children
-    // vector instead, so z-order stays "app-determined" by tree
-    // arrangement rather than by a user-editable field.
 }
 
 fn write_text_style(ts: &TextStyle, out: &mut String) {
@@ -645,11 +501,6 @@ fn font_ref_css(f: &FontRef) -> String {
     }
 }
 
-// escape_attr
-// Inputs: an attribute value string.
-// Output: HTML-attribute-safe encoding. Doubles-quoted attributes need
-// only `&` and `"` escaped; `<` and `>` are safe inside attribute values
-// per HTML5 but we escape them anyway against context confusion.
 fn escape_attr(s: &str) -> String {
     let mut out: String = String::with_capacity(s.len());
     for ch in s.chars() {
@@ -664,9 +515,6 @@ fn escape_attr(s: &str) -> String {
     out
 }
 
-// escape_text
-// Inputs: a text-content string.
-// Output: HTML-text-safe encoding. Escapes `&`, `<`, `>`.
 fn escape_text(s: &str) -> String {
     let mut out: String = String::with_capacity(s.len());
     for ch in s.chars() {
@@ -690,7 +538,7 @@ mod tests {
     #[test]
     fn slide_background_emitted_on_section_only_when_set() {
         let mut slide = SlideNode::new("s".into(), "title".into(), group_element("rt", vec![]));
-        // None → no inline background on the section.
+
         assert!(!serialize_slide(&slide).contains("background:"));
         slide.metadata.background = Some("#101820".into());
         let html = serialize_slide(&slide);
@@ -717,7 +565,7 @@ mod tests {
         ));
         let html = serialize_slide(&slide);
         assert!(html.contains(r#"data-anim-ids="anim_1""#));
-        // el_b has no animation → exactly one tag in the whole slide.
+
         assert_eq!(html.matches("data-anim-ids").count(), 1);
     }
 
@@ -877,15 +725,11 @@ mod tests {
 
     #[test]
     fn base_css_isolates_slide_for_consistent_blend_modes() {
-        // Compositing props must blend against the slide, not the host page,
-        // so canvas / present / export render identically. See the rule comment.
         assert!(ANIMATION_KEYFRAMES_CSS.contains(".slide { isolation: isolate; }"));
     }
 
     #[test]
     fn base_css_gives_slides_a_white_floor_overridable_by_theme() {
-        // Zero-specificity so theme `.slide` rules / inline fills win; only the
-        // floor when nothing else sets a background — slides are never transparent.
         assert!(ANIMATION_KEYFRAMES_CSS.contains(":where(.slide) { background: #fff; }"));
     }
 
@@ -934,7 +778,7 @@ mod tests {
             !html.contains(r#"data-element-id="tiny""#),
             "small element dropped"
         );
-        // Default (0.0) keeps everything.
+
         let all = serialize_slide(&slide);
         assert!(
             all.contains(r#"data-element-id="tiny""#),
@@ -950,8 +794,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // ---------- Stage 8 ----------
-
     #[test]
     fn inline_styles_appear_after_typed_properties() {
         let mut n = text_element("a", "x");
@@ -963,7 +805,7 @@ mod tests {
         let style_start = html.find("style=\"").expect("style attr present") + 7;
         let style_end = html[style_start..].find('"').expect("end quote") + style_start;
         let style = &html[style_start..style_end];
-        // The typed `color` comes before any inline_styles entry.
+
         let color_pos = style.find("color:").expect("typed color present");
         let bg_pos = style.find("background-color:").expect("inline bg present");
         let border_pos = style.find("border:").expect("inline border present");
@@ -993,8 +835,7 @@ mod tests {
     fn group_children_get_per_child_z_index() {
         let group = group_element("g", vec![text_element("c0", "a"), text_element("c1", "b")]);
         let html = serialize_element(&group);
-        // The group itself is the top-level element → no z-index.
-        // Its children carry z-index 0 and 1.
+
         assert!(html.contains("z-index:0"));
         assert!(html.contains("z-index:1"));
     }
@@ -1003,7 +844,7 @@ mod tests {
     fn z_order_field_is_no_longer_emitted_as_css() {
         let mut n = text_element("a", "x");
         n.geometry.z_order = 999;
-        // Standalone serialization: no parent context → no z-index.
+
         let html = serialize_element(&n);
         assert!(!html.contains("z-index:999"));
     }

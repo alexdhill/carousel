@@ -1,16 +1,3 @@
-// SetInlineStyle / RemoveInlineStyle commands.
-//
-// Stage 8 — Property Inspector. SetInlineStyle writes one CSS declaration
-// into the target element's `inline_styles` map and emits a matching
-// SetStyle patch. RemoveInlineStyle is the inverse op for keys that did
-// not exist before the set; it deletes the key and emits a RemoveStyle
-// patch.
-//
-// Together they cover everything the typed geometry/text fields don't
-// own: fill, border, border-radius, box-shadow, and any custom CSS the
-// inspector's key:value entry produces. Theme references are not
-// resolved at this layer — the value string is what hits the DOM.
-
 use crate::commands::{Command, CommandError, CommandOutput, resolve_canvas_mut};
 use crate::deck::{Canvas, CanvasTarget, ElementId, SlideId};
 use crate::ipc::Patch;
@@ -24,15 +11,6 @@ pub struct SetInlineStyle {
 }
 
 impl Command for SetInlineStyle {
-    // apply
-    // Inputs: &self, &mut Deck.
-    // Output: CommandOutput with one SetStyle patch and an inverse that
-    // restores the prior key state — either SetInlineStyle (when the key
-    // existed) or RemoveInlineStyle (when it did not). Slide marked dirty.
-    // Errors: SlideNotFound, ElementNotFound, InvalidOperation on empty
-    // property name.
-    // Dataflow: locate element -> snapshot prior value -> overwrite the
-    // inline_styles entry -> invalidate index -> build patch + inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.target.id().is_empty(),
@@ -100,16 +78,6 @@ pub struct RemoveInlineStyle {
 }
 
 impl Command for RemoveInlineStyle {
-    // apply
-    // Inputs: &self, &mut Deck.
-    // Output: CommandOutput with one RemoveStyle patch and a
-    // SetInlineStyle inverse carrying the deleted value. If the key was
-    // absent the apply succeeds as a no-op (no patch, no-op inverse) so
-    // the inspector's "clear field" gesture is idempotent.
-    // Errors: SlideNotFound, ElementNotFound, InvalidOperation on empty
-    // property.
-    // Dataflow: locate element -> remove the entry -> invalidate index
-    // -> build patch + inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.target.id().is_empty(),
@@ -170,10 +138,6 @@ impl Command for RemoveInlineStyle {
     }
 
     fn undoable(&self) -> bool {
-        // Clearing an absent key is a no-op; it would create an empty
-        // history entry. The dispatcher pushes inverses unconditionally,
-        // so we always claim undoable=true and let the patch-buffer
-        // coalescer handle no-op cases.
         true
     }
 }
@@ -243,7 +207,7 @@ mod tests {
     #[test]
     fn set_inverse_when_key_was_present_restores_prior() {
         let (mut deck, sid, eid) = fixture();
-        // Seed an existing inline style.
+
         deck.slides
             .get_mut(&sid)
             .unwrap()

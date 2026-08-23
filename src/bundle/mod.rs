@@ -1,23 +1,3 @@
-// Bundle I/O.
-//
-// SPEC §3 + §6.3–6.4. Decks are persisted as `.slidedeck` ZIP archives with
-// the layout fixed in §3.2: manifest.json at the root, slide HTML fragments
-// under slides/, theme files under theme/, an asset registry under
-// assets/, and per-slide thumbnails under thumbnails/.
-//
-// This module exposes:
-//   - ManifestData / SlideEntry / Dimensions / ThemeRef / Metadata
-//     (§3.3 schema as Rust structs)
-//   - AssetRegistry (§3.4) — minimal pass-through implementation, kept
-//     here because no asset-import commands exist yet
-//   - BundleReader / BundleWriter — typed ZIP I/O with atomic write semantics
-//   - SerializedDeck + Deck::serialize_for_save / load_from_serialized —
-//     the bridge between the in-memory tree and the bundle's file contents
-//   - IoThread — a background worker that handles save / load off the main
-//     thread, returning typed responses via mpsc
-//
-// Quicksave (§6.5) is intentionally deferred per the Stage 7 scope note.
-
 #![allow(dead_code, unused_imports)]
 
 pub mod assets;
@@ -41,9 +21,6 @@ pub use writer::BundleWriter;
 
 use std::path::PathBuf;
 
-// BundleError
-// Tagged errors for every step of bundle I/O. Each variant pinpoints the
-// failure layer so the UI layer can surface a precise message.
 #[derive(Debug, thiserror::Error)]
 pub enum BundleError {
     #[error("io: {0}")]

@@ -1,12 +1,3 @@
-// SetTextContent command.
-//
-// SPEC §9.3 (element style and content). Replaces a Text element's
-// content with a new RichText value. Stage 3's RichText is a plain-text
-// wrapper, so the emitted patch is `SetText` (rather than the more
-// general SetInnerHtml the spec mentions for fully rich content). When
-// RichText gains spans in a later stage, this command can switch to
-// SetInnerHtml + a serializer for the inline run sequence.
-
 use crate::commands::{Command, CommandError, CommandOutput, resolve_canvas_mut};
 use crate::deck::element::{ElementContent, RichText};
 use crate::deck::{Canvas, CanvasTarget, ElementId, SlideId};
@@ -20,16 +11,6 @@ pub struct SetTextContent {
 }
 
 impl Command for SetTextContent {
-    // apply
-    // Inputs: &self, &mut Deck.
-    // Output: CommandOutput with one SetText patch and an inverse
-    // SetTextContent carrying the prior RichText.
-    // Errors:
-    //   SlideNotFound       — slide_id absent
-    //   ElementNotFound     — element_id absent
-    //   InvalidOperation    — element is not a Text element
-    // Dataflow: locate slide -> locate element -> assert it carries Text
-    // content -> snapshot prior -> overwrite -> build patch + inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.target.id().is_empty(),
@@ -141,7 +122,7 @@ mod tests {
     #[test]
     fn set_text_clears_placeholder_flag() {
         let (mut deck, sid, eid) = fresh_deck_first_text_child();
-        // Force the target into placeholder state, then edit it.
+
         if let Some(canvas) = deck.canvas_mut(&CanvasTarget::Slide(sid.clone()))
             && let Some(el) = canvas.find_element_mut(&eid)
         {
@@ -234,7 +215,6 @@ mod tests {
 
     #[test]
     fn set_text_errors_on_non_text_element() {
-        // Construct a deck whose first child is an image.
         let mut deck = Deck::sample();
         let sid: SlideId = deck.slide_order[0].clone();
         let slide = deck.slides.get_mut(&sid).unwrap();

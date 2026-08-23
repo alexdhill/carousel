@@ -1,30 +1,7 @@
-// Layout-lifecycle commands: InsertLayout, RemoveLayout, SetLayoutName.
-//
-// Stage 11 — layout editor. These are the theme-level analogues of the
-// slide-lifecycle commands: rather than touching the active slide, they
-// change the set, order, and names of reusable layout templates stored in
-// `theme.layouts` + `theme.layout_order`.
-//
-// They produce no DOM patches; instead each reports
-// `affects_layout_list() == true` so the editor rebroadcasts the layouts
-// list. The theme is part of the deck's persisted state, so they set
-// `manifest_dirty` to flag that a save is needed (the bundle writer emits
-// the theme artifacts on save).
-//
-// InsertLayout and RemoveLayout are mutual inverses:
-//   - InsertLayout.apply -> inverse RemoveLayout
-//   - RemoveLayout.apply -> inverse InsertLayout (carrying the captured
-//                           layout node + original position so undo restores
-//                           the layout verbatim, edits and all).
-
 use crate::commands::{Command, CommandError, CommandOutput};
 use crate::deck::layout::LayoutNode;
 use crate::deck::{CanvasTarget, LayoutId};
 
-// InsertLayout
-// Inserts a fully-formed layout at `position` in layout_order (and the
-// layouts map). `position` is clamped to the current length, so an
-// out-of-range index appends.
 #[derive(Debug, Clone)]
 pub struct InsertLayout {
     pub position: usize,
@@ -32,14 +9,6 @@ pub struct InsertLayout {
 }
 
 impl Command for InsertLayout {
-    // apply
-    // Inputs: &self, &mut Deck.
-    // Output: CommandOutput with no patches, the layout marked dirty,
-    // manifest_dirty=true, and an inverse RemoveLayout keyed on the
-    // inserted layout's id.
-    // Errors: Conflict if a layout with the same id already exists.
-    // Dataflow: guard duplicate id -> clamp position -> insert into
-    // theme.layouts + theme.layout_order -> build inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         let layout_id: LayoutId = self.layout.id.clone();
         assert!(!layout_id.is_empty(), "InsertLayout: layout id is empty");
@@ -75,26 +44,12 @@ impl Command for InsertLayout {
     }
 }
 
-// RemoveLayout
-// Removes the layout with `layout_id` from theme.layouts + layout_order.
-// Refuses to remove the theme's last layout (a theme must always hold at
-// least one). Its inverse is an InsertLayout carrying the removed node at
-// its original position so undo restores it exactly.
 #[derive(Debug, Clone)]
 pub struct RemoveLayout {
     pub layout_id: LayoutId,
 }
 
 impl Command for RemoveLayout {
-    // apply
-    // Inputs: &self, &mut Deck.
-    // Output: CommandOutput with no patches, manifest_dirty=true, and an
-    // inverse InsertLayout carrying the removed layout + original position.
-    // Errors:
-    //   LayoutNotFound   — layout_id absent.
-    //   InvalidOperation — attempting to remove the theme's last layout.
-    // Dataflow: guard last-layout -> find order position -> remove from
-    // layout_order + layouts -> build inverse with the captured node.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.layout_id.is_empty(),
@@ -144,10 +99,6 @@ impl Command for RemoveLayout {
     }
 }
 
-// SetLayoutName
-// Updates a layout's display `name`. The id (map key + on-disk filename)
-// is immutable here; only the human-readable label changes. Its inverse
-// restores the prior name.
 #[derive(Debug, Clone)]
 pub struct SetLayoutName {
     pub layout_id: LayoutId,
@@ -155,14 +106,6 @@ pub struct SetLayoutName {
 }
 
 impl Command for SetLayoutName {
-    // apply
-    // Inputs: &self, &mut Deck.
-    // Output: CommandOutput with no patches, the layout marked dirty,
-    // manifest_dirty=true, and an inverse SetLayoutName carrying the prior
-    // name.
-    // Errors: LayoutNotFound when the id is absent.
-    // Dataflow: locate layout -> snapshot prior name -> overwrite -> build
-    // inverse.
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.layout_id.is_empty(),
@@ -199,12 +142,6 @@ impl Command for SetLayoutName {
     }
 }
 
-// SetLayoutBackground / SetLayoutBackgroundImage
-// Theme-level background for a layout. Slides built on the layout inherit
-// these when their own field is empty (Deck::effective_slide_bg). Mirrors the
-// slide background commands: self-inverse, remounts the layout canvas, and
-// reports affects_layout_list so the layout thumbnail re-renders. The theme is
-// persisted state, so manifest_dirty flags a save.
 #[derive(Debug, Clone)]
 pub struct SetLayoutBackground {
     pub layout_id: LayoutId,
@@ -397,7 +334,7 @@ mod tests {
     #[test]
     fn insert_layout_rejects_duplicate_id() {
         let mut deck = Deck::default();
-        // "blank" is the seeded default layout.
+
         let cmd = InsertLayout {
             position: 0,
             layout: blank_layout("blank", "Dup"),

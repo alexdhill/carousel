@@ -1,23 +1,13 @@
-// Agent configuration and cross-thread event types.
-
 pub mod acp;
 pub mod vfs;
 pub mod workspace;
 
-// AgentConfig
-// Spawnable agent binary with command and arguments.
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
     pub command: String,
     pub args: Vec<String>,
 }
 
-// AgentEvent
-// Worker→main-thread boundary events. Activity events (SessionReady, Thought,
-// ToolStatus) surface the ACP handshake and reasoning/tool progress. FsRead,
-// FsWrite, and PermissionRequest carry a JSON-RPC request_id so the main thread
-// can post a reply back to the agent; other variants are terminal signals
-// (stream end, error, etc.).
 #[derive(Debug)]
 pub enum AgentEvent {
     SessionReady,
@@ -54,12 +44,6 @@ pub enum AgentEvent {
     },
 }
 
-// from_named
-// Input: a Config reference and the display name of a configured agent.
-// Output: Some(AgentConfig) when an agent with a non-empty command carries
-// that name, else None (unknown name or blank command).
-// Dataflow: look the agent up by name via config::find_agent, then wrap its
-// command and args into an AgentConfig for spawn use.
 pub fn from_named(cfg: &crate::config::Config, name: &str) -> Option<AgentConfig> {
     assert!(!name.is_empty(), "from_named called with empty name");
     let def = crate::config::find_agent(cfg, name)?;

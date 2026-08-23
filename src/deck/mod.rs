@@ -1,11 +1,4 @@
-// Deck — the in-memory tree.
-
 #![allow(dead_code, unused_imports)]
-
-//
-// Owns the theme, the slide map, the canonical slide order, and the
-// dirty-tracking sets. Stage 3 builds a `sample()` deck in code; Stage 7
-// will replace that with bundle I/O.
 
 pub mod anim_catalog;
 pub mod animation;
@@ -49,11 +42,6 @@ pub use style::{
 };
 pub use theme::ThemeData;
 
-// CanvasTarget
-// Identifies which editable surface an element command operates on: a slide
-// (in `deck.slides`) or a layout template (in `deck.theme.layouts`).
-// Resolved to a `&dyn Canvas` by `Deck::canvas[_mut]`. Element commands carry
-// one of these in place of the old `slide_id` field.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CanvasTarget {
     Slide(SlideId),
@@ -61,10 +49,6 @@ pub enum CanvasTarget {
 }
 
 impl CanvasTarget {
-    // id
-    // Inputs: self.
-    // Output: the inner slide / layout id as a &str. Lets callers assert a
-    // non-empty target id without matching the variant.
     pub fn id(&self) -> &str {
         match self {
             CanvasTarget::Slide(id) => id,
@@ -73,17 +57,6 @@ impl CanvasTarget {
     }
 }
 
-// Deck
-// Top-level deck state. `slides` is a BTreeMap for deterministic
-// serialization order; display order lives in `slide_order` because ULIDs
-// sort by creation time, which rarely matches user intent.
-//
-// Stage 7 adds three persistence fields:
-//   - manifest:    the parsed manifest.json (deck id, metadata, dims, theme ref,
-//                  slide entries). Mirrors slide_order for serialization.
-//   - assets:      the asset registry — minimal Stage 7 implementation.
-//   - bundle_path: where this deck lives on disk. `None` means "never saved
-//                  yet"; Save falls through to Save-As when None.
 #[derive(Clone, Debug, Default)]
 pub struct Deck {
     pub manifest: ManifestData,
@@ -97,12 +70,6 @@ pub struct Deck {
 }
 
 impl Deck {
-    // effective_slide_bg
-    // Inputs: a slide.
-    // Output: (fill, image) background values the slide should render with —
-    // the slide's own metadata, falling back to its layout's background for
-    // any field the slide leaves empty (layout→slide theme inheritance).
-    // Errors: none; a missing/empty layout simply yields no fallback.
     pub fn effective_slide_bg(&self, slide: &SlideNode) -> (Option<String>, Option<String>) {
         let layout: Option<&crate::deck::layout::LayoutNode> =
             self.theme.layouts.get(&slide.layout_id);
@@ -123,12 +90,6 @@ impl Deck {
         (fill, img)
     }
 
-    // inherited_guides
-    // Inputs: a slide.
-    // Output: the guides of the layout the slide is built on (read-only
-    // reference guides shown beneath the slide's own editable guides). Empty
-    // when the slide's layout is missing. The slide's own guides are
-    // `slide.guides`; this returns only the inherited set.
     pub fn inherited_guides(&self, slide: &SlideNode) -> Vec<crate::deck::guide::Guide> {
         match self.theme.layouts.get(&slide.layout_id) {
             Some(layout) => layout.guides.clone(),
@@ -136,14 +97,6 @@ impl Deck {
         }
     }
 
-    // new_blank
-    // Inputs: none.
-    // Output: a fresh deck with one empty slide (the ROADMAP definition of
-    // "File → New creates an empty deck (one blank slide)"). The manifest
-    // is regenerated with a fresh deck id and one matching slide entry.
-    // Dataflow: build an empty Group as the slide root, wrap it in a
-    // SlideNode under a freshly-minted slide id, then build the
-    // single-entry manifest pointing at it.
     pub fn new_blank() -> Self {
         use builders::group_element;
         let slide_id: SlideId = new_slide_id();
@@ -183,15 +136,6 @@ impl Deck {
         }
     }
 
-    // sample
-    // Inputs: none.
-    // Output: a Deck containing a single slide with three demonstration
-    // elements (title, subtitle, body paragraph), plus a manifest entry
-    // pointing at the slide's canonical bundle path so save/load round
-    // trips the sample deck verbatim.
-    // Dataflow: build the elements via builders, wrap them in a Group
-    // root, wrap that in a SlideNode, register it under a stable id;
-    // synthesise the manifest's slides[] from slide_order.
     pub fn sample() -> Self {
         use builders::{group_element, text_element_styled};
 
@@ -290,20 +234,11 @@ impl Deck {
         }
     }
 
-    // active_slide
-    // Inputs: self.
-    // Output: a reference to the first slide in canonical order, if any.
     pub fn active_slide(&self) -> Option<&SlideNode> {
         let first: &SlideId = self.slide_order.first()?;
         self.slides.get(first)
     }
 
-    // canvas
-    // Inputs: a CanvasTarget.
-    // Output: an immutable `&dyn Canvas` for that surface, or None if the
-    // referenced slide / layout does not exist.
-    // Dataflow: resolves Slide(id) into `self.slides` and Layout(id) into
-    // `self.theme.layouts`, erasing the concrete type to the shared trait.
     pub fn canvas(&self, target: &CanvasTarget) -> Option<&dyn Canvas> {
         match target {
             CanvasTarget::Slide(id) => self.slides.get(id).map(|s| s as &dyn Canvas),
@@ -311,12 +246,6 @@ impl Deck {
         }
     }
 
-    // canvas_mut
-    // Inputs: a CanvasTarget.
-    // Output: a mutable `&mut dyn Canvas` for that surface, or None if the
-    // referenced slide / layout does not exist.
-    // Dataflow: mirror of `canvas`, used by element commands to mutate the
-    // active editable surface regardless of whether it is a slide or layout.
     pub fn canvas_mut(&mut self, target: &CanvasTarget) -> Option<&mut dyn Canvas> {
         match target {
             CanvasTarget::Slide(id) => self.slides.get_mut(id).map(|s| s as &mut dyn Canvas),
@@ -326,10 +255,6 @@ impl Deck {
         }
     }
 
-    // has_unsaved_changes
-    // Inputs: &self.
-    // Output: true when any slide, the manifest, or any layout is dirty; the
-    // save flags cleared on IoResponse::Saved. Drives the title's unsaved dot.
     pub fn has_unsaved_changes(&self) -> bool {
         !self.dirty_slides.is_empty()
             || self.manifest_dirty
@@ -426,11 +351,10 @@ mod tests {
 
     #[test]
     fn canvas_mut_resolves_blank_layout_target() {
-        // The default theme (carried by Deck::default) seeds a "blank" layout.
         let mut d = Deck::default();
         let target = CanvasTarget::Layout("blank".into());
         let canvas = d.canvas_mut(&target).expect("layout canvas resolves");
-        // The layout root is "el_layout_root"; find it via the shared trait.
+
         assert!(canvas.find_element("el_layout_root").is_some());
     }
 

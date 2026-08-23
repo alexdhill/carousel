@@ -1,10 +1,3 @@
-// Chromium binary resolution + headless render driver.
-//
-// Export resolves a browser in three stages: a saved config path, a probe of
-// standard system install locations, then (handled by the caller) a dialog to
-// locate or download one. This module owns resolution + validation; the
-// render driver and downloader are added in later tasks.
-
 use crate::config;
 use crate::export::pdf::PageRect;
 use base64::Engine;
@@ -15,9 +8,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-// system_chrome_candidates
-// Output: the standard Chrome/Edge/Chromium binary locations for this OS, most
-// preferred first. Existence is not checked here (the resolver filters).
 #[cfg(target_os = "macos")]
 pub fn system_chrome_candidates() -> Vec<PathBuf> {
     vec![
@@ -49,15 +39,11 @@ pub fn system_chrome_candidates() -> Vec<PathBuf> {
     ]
 }
 
-// is_valid_chrome
-// Inputs: a candidate binary path. Output: true when the file exists and
-// `<path> --version` exits successfully within 5s. Used to validate both
-// system probes and user-picked paths.
 pub fn is_valid_chrome(path: &Path) -> bool {
     if !path.exists() {
         return false;
     }
-    // `--version` is a fast, side-effect-free probe supported by Chrome/Edge.
+
     let child = Command::new(path).arg("--version").spawn();
     let mut child = match child {
         Ok(c) => c,
@@ -79,13 +65,6 @@ pub fn is_valid_chrome(path: &Path) -> bool {
     }
 }
 
-// normalize_chrome_path
-// Inputs: a user-picked path (from the Locate file dialog). Output: an
-// executable path. On macOS the picker returns a `.app` bundle *directory*,
-// which cannot be exec'd — resolve it to Contents/MacOS/<executable>, preferring
-// the binary whose name matches the bundle stem (e.g. "Google Chrome.app" ->
-// "Google Chrome"; some bundles hold several binaries) and falling back to the
-// first regular file there. Non-bundle paths and all other OSes pass through.
 #[cfg(target_os = "macos")]
 pub fn normalize_chrome_path(picked: PathBuf) -> PathBuf {
     if picked.extension().and_then(|e| e.to_str()) != Some("app") {
@@ -114,18 +93,12 @@ pub fn normalize_chrome_path(picked: PathBuf) -> PathBuf {
     picked
 }
 
-// Resolved
-// The outcome of automatic resolution: a usable binary, or a signal that the
-// caller must drive the locate/download dialog.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Resolved {
     Found(PathBuf),
     NeedsUser,
 }
 
-// resolve_from_config_or_system
-// Output: Found(path) when the saved config path or a system candidate
-// validates (the config is updated when a system probe wins), else NeedsUser.
 pub fn resolve_from_config_or_system() -> Resolved {
     let mut cfg: config::Config = config::load();
     if let Some(p) = cfg.chrome_path.clone()
@@ -143,7 +116,6 @@ pub fn resolve_from_config_or_system() -> Resolved {
     Resolved::NeedsUser
 }
 
-// RenderError — a stage-tagged failure from the Chromium render pipeline.
 #[derive(Debug)]
 pub enum RenderError {
     Launch(String),
@@ -164,7 +136,6 @@ impl std::fmt::Display for RenderError {
 }
 impl std::error::Error for RenderError {}
 
-// pdf_print_options — full-bleed, backgrounds on, CSS @page honored.
 fn pdf_print_options() -> PrintToPdfOptions {
     PrintToPdfOptions {
         display_header_footer: Some(false),
@@ -178,10 +149,6 @@ fn pdf_print_options() -> PrintToPdfOptions {
     }
 }
 
-// splice_raster_page
-// Screenshot one .print-page by its data-raster-page index, then replace that
-// page's inner HTML with a full-bleed <img> of the capture so the final print
-// pass embeds the composited pixels instead of dropping the effect.
 fn splice_raster_page(tab: &headless_chrome::Tab, page: &PageRect) -> Result<(), RenderError> {
     let selector: String = format!("[data-raster-page=\"{}\"]", page.index);
     let element = tab
@@ -202,13 +169,6 @@ src=\"data:image/png;base64,{}\">';}}}})()",
     Ok(())
 }
 
-// render_pdf
-// Inputs: a validated chrome binary, the print-HTML document, and the pages
-// that must raster (from pdf::raster_page_rects). Output: the finished PDF
-// bytes. Control flow: launch headless chrome -> load the doc via a base64 data
-// URL -> for each raster page, screenshot it and swap in an <img> -> print the
-// whole document to one PDF (printBackground, zero margins, CSS @page). The
-// single print pass yields one PDF mixing vector and raster pages.
 pub fn render_pdf(
     chrome_path: &Path,
     print_html: &str,
@@ -244,13 +204,9 @@ pub fn render_pdf(
     Ok(pdf)
 }
 
-// A known-good Chromium snapshot revision (the one headless_chrome 1.0.22
-// pins). Stored alongside the binary so config.json records what was fetched.
 const CHROMIUM_REVISION: &str = "1095492";
 const CHROMIUM_SNAPSHOT_HOST: &str = "https://storage.googleapis.com";
 
-// chromium_platform_dir — the per-OS prefix in the chromium-browser-snapshots
-// bucket.
 fn chromium_platform_dir() -> &'static str {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
@@ -270,7 +226,6 @@ fn chromium_platform_dir() -> &'static str {
     }
 }
 
-// chromium_archive_name — the snapshot zip's base name (also its top folder).
 fn chromium_archive_name() -> &'static str {
     #[cfg(target_os = "macos")]
     {
@@ -286,8 +241,6 @@ fn chromium_archive_name() -> &'static str {
     }
 }
 
-// chromium_binary_subpath — the executable's path inside the extracted archive
-// folder (relative to <archive_name>/).
 fn chromium_binary_subpath() -> PathBuf {
     #[cfg(target_os = "macos")]
     {
@@ -306,13 +259,6 @@ fn chromium_binary_subpath() -> PathBuf {
     }
 }
 
-// download_chromium
-// Inputs: a progress callback (received bytes, optional total). Output: the
-// downloaded binary path + the revision label, installed under
-// app_data_dir()/chromium/<rev>/. Streams the platform snapshot zip from the
-// Chromium snapshot bucket (reporting byte progress), extracts it with the
-// bundled `zip` crate, and returns the resolved binary. No headless_chrome
-// `fetch` feature (its transitive `zip` pulls a broken aes prerelease).
 pub fn download_chromium(
     progress: &dyn Fn(u64, Option<u64>),
 ) -> Result<(PathBuf, String), RenderError> {
@@ -362,9 +308,6 @@ pub fn download_chromium(
     Ok((binary, CHROMIUM_REVISION.to_string()))
 }
 
-// extract_zip — unpack an in-memory zip into `dest` using the bundled `zip`
-// crate (deflate). Preserves each entry's stored unix mode so the binary keeps
-// its executable bit on unix.
 fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), RenderError> {
     let cursor = std::io::Cursor::new(bytes);
     let mut archive =
@@ -374,8 +317,6 @@ fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), RenderError> {
         .map_err(|e| RenderError::Launch(e.to_string()))
 }
 
-// ensure_executable — set the +x bit on unix (a belt-and-suspenders backstop in
-// case the archive entry lacked a stored mode). No-op on Windows.
 #[cfg(unix)]
 fn ensure_executable(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
@@ -416,21 +357,19 @@ mod tests {
         let base = std::env::temp_dir().join(format!("carousel-norm-{}", std::process::id()));
         let macos = base.join("Foo.app").join("Contents").join("MacOS");
         std::fs::create_dir_all(&macos).unwrap();
-        // A second binary ensures stem-matching is required (not "first file").
+
         std::fs::write(macos.join("Helper"), b"x").unwrap();
         let bin = macos.join("Foo");
         std::fs::write(&bin, b"x").unwrap();
 
         assert_eq!(normalize_chrome_path(base.join("Foo.app")), bin);
-        // A non-.app path passes through unchanged.
+
         let plain = base.join("plain-chrome");
         assert_eq!(normalize_chrome_path(plain.clone()), plain);
 
         std::fs::remove_dir_all(&base).ok();
     }
 
-    // Requires a real browser; run with:
-    //   cargo test --bin Carousel -- --ignored render_pdf_smoke
     #[test]
     #[ignore]
     fn render_pdf_smoke() {
@@ -438,7 +377,7 @@ mod tests {
         use crate::export::pdf::{build_pdf_print_html, raster_page_rects};
         let chrome = match resolve_from_config_or_system() {
             Resolved::Found(p) => p,
-            Resolved::NeedsUser => return, // no browser available; skip
+            Resolved::NeedsUser => return,
         };
         let deck = Deck::sample();
         let html = build_pdf_print_html(&deck);
@@ -448,8 +387,6 @@ mod tests {
         assert!(pdf.len() > 1000);
     }
 
-    // Downloads ~150 MB; run with:
-    //   cargo test --bin Carousel -- --ignored download_chromium_smoke
     #[test]
     #[ignore]
     fn download_chromium_smoke() {
