@@ -1437,6 +1437,17 @@
             boxes[i].style.width = pw + "px";
             boxes[i].style.height = ph + "px";
         }
+        const thumbs = strip.querySelectorAll(".thumb");
+        for (let i = 0; i < thumbs.length; i++) {
+            thumbs[i].style.width = pw + "px";
+            const caption = thumbs[i].querySelector(".thumb__caption");
+            if (caption) {
+                caption.style.maxWidth = pw + "px";
+            }
+        }
+        if (thumbDropLine) {
+            thumbDropLine.style.height = ph + "px";
+        }
         const previews = strip.querySelectorAll(".thumb__preview");
         for (let i = 0; i < previews.length; i++) {
             const mount = previews[i].querySelector(".thumb__mount");
