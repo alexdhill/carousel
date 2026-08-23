@@ -7,7 +7,6 @@ pub struct PatchBuffer {
 }
 
 impl PatchBuffer {
-
     pub fn new() -> Self {
         Self {
             pending: Vec::new(),

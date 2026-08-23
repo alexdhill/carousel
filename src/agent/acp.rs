@@ -64,7 +64,6 @@ pub struct AgentHandle {
 }
 
 impl AgentHandle {
-
     pub fn send_prompt(&self, text: &str) -> crate::error::AppResult<()> {
         assert!(!text.is_empty(), "prompt text must not be empty");
         let session_id_str: Option<String> = self
@@ -342,7 +341,6 @@ fn __stderr_loop(stderr: ChildStderr) {
 
 fn __writer_loop(rx: Receiver<String>, mut stdin: ChildStdin) {
     while let Ok(line) = rx.recv() {
-
         debug!("acp -> {}", line);
         let full_line: String = format!("{}\n", line);
         if let Err(e) = stdin.write_all(full_line.as_bytes()) {
@@ -703,9 +701,7 @@ mod tests {
         });
         let evt: Option<AgentEvent> = __classify_message(msg);
         match evt {
-            Some(AgentEvent::TurnEnded) => {
-
-            }
+            Some(AgentEvent::TurnEnded) => {}
             _ => panic!("expected TurnEnded event"),
         }
     }

@@ -153,7 +153,6 @@ mod tests {
 
     #[test]
     fn snap_at_step_zero_hides_not_yet_entered_elements() {
-
         let t = [enter("a1", "el_a", AnimationTrigger::OnClick)];
         let r = snap_reveal("s1", &t, 0);
         assert!(r.animate.is_empty());
@@ -172,7 +171,6 @@ mod tests {
 
     #[test]
     fn snap_after_exit_hides_element() {
-
         let t = [
             enter("a1", "el_a", AnimationTrigger::OnClick),
             exit("a2", "el_a", AnimationTrigger::OnClick),
@@ -185,7 +183,6 @@ mod tests {
 
     #[test]
     fn snap_lists_each_element_once_in_first_appearance_order() {
-
         let t = [
             enter("a1", "el_a", AnimationTrigger::OnClick),
             entry(
@@ -206,7 +203,6 @@ mod tests {
 
     #[test]
     fn forward_animates_only_the_newly_fired_group() {
-
         let t = [
             enter("a1", "el_a", AnimationTrigger::OnClick),
             enter("a2", "el_b", AnimationTrigger::OnClick),
@@ -238,7 +234,6 @@ mod tests {
 
     #[test]
     fn forward_after_previous_accumulates_effective_delay() {
-
         let t = [
             entry(
                 "a1",

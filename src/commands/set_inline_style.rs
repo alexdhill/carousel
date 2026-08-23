@@ -11,7 +11,6 @@ pub struct SetInlineStyle {
 }
 
 impl Command for SetInlineStyle {
-
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.target.id().is_empty(),
@@ -79,7 +78,6 @@ pub struct RemoveInlineStyle {
 }
 
 impl Command for RemoveInlineStyle {
-
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.target.id().is_empty(),
@@ -140,7 +138,6 @@ impl Command for RemoveInlineStyle {
     }
 
     fn undoable(&self) -> bool {
-
         true
     }
 }

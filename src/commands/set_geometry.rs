@@ -14,7 +14,6 @@ pub enum GeometryProperty {
 }
 
 impl GeometryProperty {
-
     pub fn css_property(&self) -> &'static str {
         match self {
             Self::X => "left",
@@ -48,7 +47,6 @@ pub struct SetGeometryProperty {
 }
 
 impl Command for SetGeometryProperty {
-
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.target.id().is_empty(),

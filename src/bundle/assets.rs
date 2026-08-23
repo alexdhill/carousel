@@ -39,7 +39,6 @@ fn default_version() -> String {
 }
 
 impl AssetRegistry {
-
     pub fn new_empty() -> Self {
         Self {
             version: ASSETS_INDEX_VERSION.to_string(),

@@ -15,7 +15,6 @@ pub struct InsertElement {
 }
 
 impl Command for InsertElement {
-
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.target.id().is_empty(),

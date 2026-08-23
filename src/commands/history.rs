@@ -38,7 +38,6 @@ pub struct CommandHistory {
 }
 
 impl CommandHistory {
-
     pub fn new(max_depth: usize) -> Self {
         assert!(max_depth > 0, "CommandHistory: max_depth must be positive");
         Self {
@@ -189,7 +188,6 @@ impl CommandHistory {
 }
 
 impl Default for CommandHistory {
-
     fn default() -> Self {
         Self::new(DEFAULT_HISTORY_DEPTH)
     }

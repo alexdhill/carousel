@@ -49,7 +49,6 @@ pub enum CanvasTarget {
 }
 
 impl CanvasTarget {
-
     pub fn id(&self) -> &str {
         match self {
             CanvasTarget::Slide(id) => id,
@@ -71,7 +70,6 @@ pub struct Deck {
 }
 
 impl Deck {
-
     pub fn effective_slide_bg(&self, slide: &SlideNode) -> (Option<String>, Option<String>) {
         let layout: Option<&crate::deck::layout::LayoutNode> =
             self.theme.layouts.get(&slide.layout_id);
@@ -353,7 +351,6 @@ mod tests {
 
     #[test]
     fn canvas_mut_resolves_blank_layout_target() {
-
         let mut d = Deck::default();
         let target = CanvasTarget::Layout("blank".into());
         let canvas = d.canvas_mut(&target).expect("layout canvas resolves");

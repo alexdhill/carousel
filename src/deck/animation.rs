@@ -22,7 +22,6 @@ pub enum AnimationEffect {
 }
 
 impl AnimationEffect {
-
     pub fn keyframe_name(&self) -> Option<&str> {
         match self {
             AnimationEffect::Named(n) => Some(n.as_str()),
@@ -87,7 +86,6 @@ pub struct AnimationEntry {
 }
 
 impl AnimationEntry {
-
     pub fn new(
         id: AnimationId,
         element_id: ElementId,
@@ -318,7 +316,6 @@ mod tests {
 
     #[test]
     fn multiple_entrances_allowed_by_accommodating_index() {
-
         let e1 = AnimationEntry::new(
             "e1".into(),
             "el".into(),

@@ -14,7 +14,6 @@ pub struct SetGroupLayout {
 }
 
 impl Command for SetGroupLayout {
-
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.element_id.is_empty(),
@@ -74,7 +73,6 @@ pub struct SetGroupScale {
 }
 
 impl Command for SetGroupScale {
-
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.element_id.is_empty(),

@@ -30,7 +30,6 @@ fn parent_of(root: &ElementNode, id: &str) -> Option<String> {
 }
 
 impl Command for GroupElements {
-
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(!self.group_id.is_empty(), "GroupElements: empty group_id");
         assert!(
@@ -122,7 +121,6 @@ pub struct DissolveGroup {
 }
 
 impl Command for DissolveGroup {
-
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(!self.group_id.is_empty(), "DissolveGroup: empty group_id");
         let canvas = resolve_canvas_mut(deck, &self.target)?;
@@ -197,7 +195,6 @@ mod tests {
 
     #[test]
     fn groups_siblings_and_shrinkwraps_at_top_slot() {
-
         let mut deck = deck_with(vec![
             kid("a", 10.0, 10.0, 20.0, 10.0),
             kid("b", 60.0, 40.0, 20.0, 10.0),
@@ -253,7 +250,6 @@ mod tests {
 
     #[test]
     fn rejects_cross_parent_members() {
-
         let g1 = group_element("g1", vec![kid("a", 0.0, 0.0, 5.0, 5.0)]);
         let mut deck = deck_with(vec![g1, kid("b", 0.0, 0.0, 5.0, 5.0)]);
         let err = GroupElements {

@@ -15,7 +15,6 @@ pub enum ElementType {
 }
 
 impl ElementType {
-
     pub fn as_html(self) -> &'static str {
         match self {
             ElementType::Text => "text",
@@ -132,7 +131,6 @@ pub struct ElementNode {
 }
 
 impl ElementNode {
-
     pub fn is_layout_element(&self) -> bool {
         self.id.starts_with("layout_")
     }

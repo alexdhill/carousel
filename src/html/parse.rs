@@ -366,7 +366,6 @@ fn is_known_attr(key: &str) -> bool {
             | "data-flex-align"
             | "data-flex-scale"
             | "class"
-
             | "data-anim-ids"
     )
 }
@@ -480,10 +479,7 @@ fn known_style_keys(element_type: ElementType) -> &'static [&'static str] {
         "letter-spacing",
     ];
     match element_type {
-        ElementType::Text => {
-
-            TEXT_KEYS
-        }
+        ElementType::Text => TEXT_KEYS,
         _ => GEOMETRY,
     }
 }
@@ -663,7 +659,6 @@ fn extract_theme_var(s: &str) -> Option<String> {
 fn theme_var_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-
         #[allow(clippy::unwrap_used)]
         Regex::new(r"^\s*var\(\s*--theme-([a-zA-Z0-9_\-]+)\s*\)\s*$").unwrap()
     })
@@ -726,7 +721,6 @@ mod tests {
 
     #[test]
     fn anim_tag_does_not_accumulate_through_html_round_trip() {
-
         let html = r#"<section class="slide" data-slide-id="s" data-layout="t" data-root-id="rt"><div class="slide__content"><div data-element-id="el_a" data-element-type="text" data-anim-ids="anim_1">hi</div></div></section>"#;
         let slide = parse_slide_fragment(html).unwrap();
         assert!(slide.animations.is_empty());
@@ -760,7 +754,6 @@ mod tests {
 
     #[test]
     fn parse_missing_id_returns_error() {
-
         let html = r#"<div data-element-type="text"></div>"#;
         let result = parse_element(html);
         assert!(matches!(result, Err(ParseError::NoElement)));
@@ -811,7 +804,6 @@ mod tests {
 
     #[test]
     fn parse_handles_amp_and_lt_in_text() {
-
         let html = r#"<div data-element-id="a" data-element-type="text"
                           style="font-family:Inter;font-size:24px;color:#000;"
                           >a &amp; b &lt; c</div>"#;
@@ -984,7 +976,6 @@ mod tests {
 
     #[test]
     fn roundtrip_image_element_with_background_inline_styles() {
-
         let mut n = image_element("im_a", "asset_deadbeef");
         n.inline_styles.insert(
             "background-image".into(),
@@ -1149,7 +1140,6 @@ mod tests {
 
     #[test]
     fn parse_drops_z_index_from_geometry() {
-
         let html = r#"<div data-element-id="a" data-element-type="text"
             style="left:10px;top:20px;width:0px;height:0px;z-index:7;
                    font-family:Arial;font-size:14px;color:#000">hi</div>"#;
@@ -1315,7 +1305,6 @@ mod tests {
     }
 
     fn arb_element_tree() -> impl Strategy<Value = ElementNode> {
-
         arb_leaf_element().prop_recursive(3, 16, 4, |inner| {
             (arb_element_id(), prop::collection::vec(inner, 0..4))
                 .prop_map(|(id, kids)| group_element(id, kids))

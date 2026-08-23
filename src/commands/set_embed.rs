@@ -11,7 +11,6 @@ pub struct SetEmbedHtml {
 }
 
 impl Command for SetEmbedHtml {
-
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.target.id().is_empty(),

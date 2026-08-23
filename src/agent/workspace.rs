@@ -24,7 +24,6 @@ pub struct Workspace {
 }
 
 impl Workspace {
-
     pub fn create(deck: &Deck) -> io::Result<Workspace> {
         assert!(!deck.slides.is_empty(), "cannot materialize an empty deck");
         let dir: TempDir = tempfile::Builder::new()

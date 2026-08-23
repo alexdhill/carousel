@@ -10,7 +10,6 @@ pub struct SetSlideBackground {
 }
 
 impl Command for SetSlideBackground {
-
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.slide_id.is_empty(),
@@ -99,7 +98,6 @@ pub struct SetSlideTransition {
 }
 
 impl Command for SetSlideTransition {
-
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.slide_id.is_empty(),
@@ -140,7 +138,6 @@ pub struct SetSlideNotes {
 }
 
 impl Command for SetSlideNotes {
-
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(!self.slide_id.is_empty(), "SetSlideNotes: empty slide_id");
         let entry = deck
@@ -182,7 +179,6 @@ pub struct SetSlideLayout {
 }
 
 impl Command for SetSlideLayout {
-
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(!self.slide_id.is_empty(), "SetSlideLayout: empty slide_id");
 
@@ -259,7 +255,6 @@ fn remap_layout_children(old: Vec<ElementNode>, new_slots: Vec<ElementNode>) -> 
         result.push(slot);
     }
     for el in old {
-
         let overflow: bool = el.is_layout_element() && !el.placeholder && !new_ids.contains(&el.id);
         if !el.is_layout_element() || overflow {
             result.push(el);

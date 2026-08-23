@@ -10,7 +10,6 @@ pub struct SwapTheme {
 }
 
 impl Command for SwapTheme {
-
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         let prior_theme: ThemeData = deck.theme.clone();
         deck.theme = self.install_theme.clone();

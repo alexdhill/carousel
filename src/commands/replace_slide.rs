@@ -11,7 +11,6 @@ pub struct ReplaceSlideContent {
 }
 
 impl Command for ReplaceSlideContent {
-
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.slide_id.is_empty(),

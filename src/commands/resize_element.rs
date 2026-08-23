@@ -15,7 +15,6 @@ pub struct ResizeElement {
 }
 
 impl Command for ResizeElement {
-
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.target.id().is_empty(),

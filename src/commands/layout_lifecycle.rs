@@ -9,7 +9,6 @@ pub struct InsertLayout {
 }
 
 impl Command for InsertLayout {
-
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         let layout_id: LayoutId = self.layout.id.clone();
         assert!(!layout_id.is_empty(), "InsertLayout: layout id is empty");
@@ -51,7 +50,6 @@ pub struct RemoveLayout {
 }
 
 impl Command for RemoveLayout {
-
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.layout_id.is_empty(),
@@ -108,7 +106,6 @@ pub struct SetLayoutName {
 }
 
 impl Command for SetLayoutName {
-
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.layout_id.is_empty(),

@@ -270,7 +270,6 @@ mod tests {
 
     #[test]
     fn shrinkwrap_none_fits_box_and_normalizes_origin() {
-
         let mut g = grp(
             GroupStyle::default(),
             vec![
@@ -293,7 +292,6 @@ mod tests {
 
     #[test]
     fn row_space_between_pins_ends_holds_width() {
-
         let style = GroupStyle {
             distribution: GroupDistribution::SpaceBetween,
             ..Default::default()
@@ -391,7 +389,6 @@ mod tests {
 
     #[test]
     fn relayout_ancestors_runs_bottom_up_for_nested_groups() {
-
         let inner = {
             let mut g = grp(
                 GroupStyle {

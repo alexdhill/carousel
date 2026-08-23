@@ -208,7 +208,6 @@ mod tests {
 
     #[test]
     fn collect_used_faces_resolves_inline_and_theme() {
-
         let deck = Deck::sample();
         let v = collect_family_vars(&deck);
         let faces = collect_used_faces(&deck, &v);

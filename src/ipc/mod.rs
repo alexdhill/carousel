@@ -21,7 +21,6 @@ pub struct IpcMessage {
 }
 
 impl IpcMessage {
-
     pub fn new(kind: MessageKind) -> Self {
         let id: String = ulid::Ulid::new().to_string();
         let timestamp: u64 = now_millis();
@@ -43,7 +42,6 @@ fn now_millis() -> u64 {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type", content = "payload")]
 pub enum MessageKind {
-
     Ready,
     Interaction(InteractionEvent),
     ThumbnailGenerated(ThumbnailResult),
@@ -567,7 +565,6 @@ pub struct SelectionState {
 }
 
 impl SelectionState {
-
     pub fn empty() -> Self {
         Self::default()
     }
@@ -1199,7 +1196,6 @@ mod tests {
 
     #[test]
     fn js_style_envelope_parses() {
-
         let raw = r#"{"id":"abc","timestamp":1,"type":"Ready"}"#;
         let parsed: IpcMessage = serde_json::from_str(raw).unwrap();
         assert!(matches!(parsed.kind, MessageKind::Ready));

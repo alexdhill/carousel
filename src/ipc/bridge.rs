@@ -8,7 +8,6 @@ pub struct WebviewSender {
 }
 
 impl WebviewSender {
-
     pub fn new(webview: WebView) -> Self {
         Self { webview }
     }
@@ -52,7 +51,6 @@ mod tests {
 
     #[test]
     fn escape_for_js_handles_unicode_separators() {
-
         let s = "a\u{2028}b\u{2029}c";
         let out = escape_for_js(s);
         let back: String = serde_json::from_str(&out).unwrap();

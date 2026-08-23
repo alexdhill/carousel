@@ -11,7 +11,6 @@ pub struct InsertSlide {
 }
 
 impl Command for InsertSlide {
-
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         let slide_id: SlideId = self.slide.id.clone();
         assert!(!slide_id.is_empty(), "InsertSlide: slide id is empty");
@@ -59,7 +58,6 @@ pub struct RemoveSlide {
 }
 
 impl Command for RemoveSlide {
-
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(!self.slide_id.is_empty(), "RemoveSlide: slide id is empty");
         if !deck.slides.contains_key(&self.slide_id) {
@@ -91,7 +89,6 @@ impl Command for RemoveSlide {
         let removed_entry: SlideEntry = if manifest_pos < deck.manifest.slides.len() {
             deck.manifest.slides.remove(manifest_pos)
         } else {
-
             SlideEntry {
                 id: self.slide_id.clone(),
                 path: crate::bundle::manifest::slide_path_for(&self.slide_id),
@@ -140,7 +137,6 @@ pub struct ReorderSlide {
 }
 
 impl Command for ReorderSlide {
-
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(!self.slide_id.is_empty(), "ReorderSlide: slide id is empty");
         let from: usize = deck

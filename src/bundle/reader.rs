@@ -12,7 +12,6 @@ pub struct BundleReader {
 }
 
 impl BundleReader {
-
     pub fn open(path: &Path) -> BundleResult<Self> {
         assert!(
             !path.as_os_str().is_empty(),

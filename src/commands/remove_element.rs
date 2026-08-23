@@ -11,7 +11,6 @@ pub struct RemoveElementCommand {
 }
 
 impl Command for RemoveElementCommand {
-
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.target.id().is_empty(),

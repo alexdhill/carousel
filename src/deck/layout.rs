@@ -20,7 +20,6 @@ pub struct LayoutNode {
 }
 
 impl LayoutNode {
-
     pub fn new(id: LayoutId, name: String, root: ElementNode) -> Self {
         assert!(!id.is_empty(), "layout id must not be empty");
         assert!(

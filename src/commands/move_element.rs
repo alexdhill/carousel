@@ -11,7 +11,6 @@ pub struct MoveElement {
 }
 
 impl Command for MoveElement {
-
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.target.id().is_empty(),
@@ -319,7 +318,6 @@ mod tests {
 
     #[test]
     fn move_targets_a_layout_canvas() {
-
         let mut deck = Deck::sample();
         let layout = deck.theme.layouts.get_mut("blank").unwrap();
         layout

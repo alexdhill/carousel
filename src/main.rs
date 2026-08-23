@@ -718,7 +718,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Event::UserEvent(UserEvent::ClosePresentation) => {
-
                 if let Some(app) = app.as_mut() {
                     app.end_presentation();
                 }
@@ -738,7 +737,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(app) = app.as_mut() {
                     app.send_chromium_done(ok, message);
                     if ok {
-
                         app.on_chromium_ready();
                     }
                 }
@@ -774,7 +772,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
 
                         open => {
-
                             let chosen = if app.is_some() {
                                 warn!("landing open ignored; editor already open");
                                 None
@@ -783,7 +780,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             };
 
                             if let Some((deck, load)) = chosen {
-
                                 let focus_title: bool = load.is_none();
                                 if let (
                                     Some(sf),
@@ -894,7 +890,11 @@ mod tests {
         assert_eq!(thumb_worker_count(0), 0, "no jobs means no threads");
         assert_eq!(thumb_worker_count(1), 1, "one job never oversubscribes");
         let many: usize = thumb_worker_count(recents::CAP);
-        assert!((1..=4).contains(&many), "worker count out of range: {}", many);
+        assert!(
+            (1..=4).contains(&many),
+            "worker count out of range: {}",
+            many
+        );
     }
 
     #[test]
@@ -906,7 +906,10 @@ mod tests {
             data.recents.len()
         );
         for r in &data.recents {
-            assert!(r.thumb.is_none(), "landing_data must not build thumbs inline");
+            assert!(
+                r.thumb.is_none(),
+                "landing_data must not build thumbs inline"
+            );
         }
     }
 }

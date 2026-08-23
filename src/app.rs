@@ -157,7 +157,6 @@ pub struct ApplicationCore {
 }
 
 impl ApplicationCore {
-
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         sender: WebviewSender,
@@ -265,7 +264,6 @@ impl ApplicationCore {
         debug!(id = %msg.id, "ipc <- webview");
         match msg.kind {
             MessageKind::Ready => {
-
                 self.sender.send(MessageKind::Configure(EditorConfig {
                     debug: false,
                     animation_keyframes_css: ANIMATION_KEYFRAMES_CSS.to_string(),
@@ -605,7 +603,6 @@ impl ApplicationCore {
             return Ok(());
         }
         if self.active_slide.as_deref() == Some(slide_id.as_str()) {
-
             if !self.selection.is_empty() {
                 self.selection = SelectionState::empty();
                 self.sender
@@ -1102,7 +1099,6 @@ impl ApplicationCore {
                     &layout_id,
                 ) {
                     Some((cmd, new_id)) => {
-
                         self.pending_new_active_slide = Some(new_id);
                         InterpretResult::Command(cmd)
                     }
@@ -1186,7 +1182,6 @@ impl ApplicationCore {
                 }
             }
             InteractionEvent::GlobalsCssEditRequested { new_css } => {
-
                 if self.dispatcher.deck().theme.globals_css == new_css {
                     InterpretResult::Nothing
                 } else {
@@ -1264,7 +1259,6 @@ impl ApplicationCore {
                 InterpretResult::FileAction(FileAction::LoadTheme)
             }
             InteractionEvent::SetSlideBackgroundRequested { background } => {
-
                 match self.active_canvas() {
                     Some(CanvasTarget::Slide(sid)) => {
                         InterpretResult::Command(Box::new(SetSlideBackground {
@@ -1432,7 +1426,6 @@ impl ApplicationCore {
                 self.interpret_delete_selection()
             }
             InteractionEvent::KeyPressed { key, .. } if key.eq_ignore_ascii_case(DEBUG_KEY) => {
-
                 match self.build_debug_nudge_command() {
                     Some(cmd) => InterpretResult::Command(cmd),
                     None => InterpretResult::Nothing,
@@ -1452,7 +1445,6 @@ impl ApplicationCore {
         let result: InterpretResult = self.interpret(event);
         match result {
             InterpretResult::Command(cmd) => {
-
                 if let Some(asset_id) = self.pending_asset_broadcast.take()
                     && let Err(e) = self.send_asset_added(&asset_id)
                 {
@@ -1667,7 +1659,6 @@ impl ApplicationCore {
             None => return Ok(()),
         };
         if new_id.is_empty() || new_id == old_id {
-
             return self.send_object_tree();
         }
         let canvas = match self.dispatcher.deck().canvas(&target) {
@@ -1703,7 +1694,6 @@ impl ApplicationCore {
     }
 
     fn react_to_outcome(&mut self, outcome: crate::commands::DispatchOutcome) {
-
         for msg in &outcome.warnings {
             if let Err(e) = self.sender.send(MessageKind::Notice {
                 message: msg.clone(),
@@ -1733,7 +1723,6 @@ impl ApplicationCore {
             return;
         }
         if outcome.affects_globals {
-
             if let Err(e) = self.send_active_slide() {
                 warn!("remount after globals change failed: {}", e);
             }
@@ -1745,14 +1734,12 @@ impl ApplicationCore {
             return;
         }
         if outcome.affects_animations {
-
             if let Err(e) = self.send_slide_animations() {
                 warn!("animations broadcast after dispatch failed: {}", e);
             }
             return;
         }
         if outcome.affects_guides {
-
             if let Err(e) = self.send_guides() {
                 warn!("guides broadcast after dispatch failed: {}", e);
             }
@@ -2097,7 +2084,6 @@ private copy (~150 MB).",
             .show();
         match choice {
             rfd::MessageDialogResult::Custom(label) if label == Self::LOCATE_LABEL => {
-
                 let picked = normalize_chrome_path(rfd::FileDialog::new().pick_file()?);
                 if !is_valid_chrome(&picked) {
                     self.toast(
@@ -2112,7 +2098,6 @@ private copy (~150 MB).",
                 Some(picked)
             }
             rfd::MessageDialogResult::Custom(label) if label == Self::DOWNLOAD_LABEL => {
-
                 self.pending_export_after_chrome = true;
                 (self.dispatch_chromium_download)();
                 None
@@ -2306,7 +2291,6 @@ private copy (~150 MB).",
                 info!(path = %path.display(), "theme: load received");
                 match deserialize_theme(serialized) {
                     Ok((theme, assets)) => {
-
                         let add_assets = collect_loaded_assets(&assets);
                         self.dispatch_and_maybe_flush(Box::new(SwapTheme {
                             install_theme: theme,
@@ -4316,7 +4300,6 @@ mod tests {
         active_slide: &Option<SlideId>,
         event: InteractionEvent,
     ) -> InterpretResult {
-
         match event {
             InteractionEvent::ElementClicked {
                 element_id,
@@ -4688,7 +4671,6 @@ mod tests {
 
     #[test]
     fn drag_dragged_is_a_no_op_on_rust_side() {
-
         let (mut d, sel, sid, eid) = fixture();
         let geo = d.deck().slides[&sid]
             .find_element(&eid)
@@ -4833,7 +4815,6 @@ mod tests {
 
     #[test]
     fn key_pressed_undo_with_meta_modifier_still_maps_to_undo() {
-
         let (d, sel, sid, _) = fixture();
         let event = InteractionEvent::KeyPressed {
             key: UNDO_KEY.into(),
@@ -4850,7 +4831,6 @@ mod tests {
 
     #[test]
     fn dispatcher_undo_after_dispatch_restores_geometry() {
-
         let (mut d, _sel, sid, eid) = fixture();
         let original = d.deck().slides[&sid]
             .find_element(&eid)
@@ -4959,7 +4939,6 @@ mod tests {
 
     #[test]
     fn drag_then_undo_collapses_to_a_single_history_step() {
-
         let (mut d, _sel, sid, eid) = fixture();
         let start = d.deck().slides[&sid]
             .find_element(&eid)
@@ -5017,7 +4996,6 @@ mod tests {
         let (result, sid, eid) = run_property_changed("x", "250");
         match result {
             InterpretResult::Command(cmd) => {
-
                 let mut deck = Deck::sample();
                 let out = cmd.apply(&mut deck).unwrap();
                 assert_eq!(
@@ -5315,7 +5293,6 @@ mod tests {
 
     #[test]
     fn property_changed_empty_value_clears_via_remove_inline_style() {
-
         let (mut d, sel, sid, eid) = fixture();
         d.dispatch(Box::new(SetInlineStyle {
             target: CanvasTarget::Slide(sid.clone()),
@@ -5521,7 +5498,6 @@ mod tests {
         assert_eq!(tree.root_id, slide.root.id);
         assert_eq!(tree.nodes.len(), slide.root.children.len());
         for i in 0..tree.nodes.len() {
-
             assert_eq!(tree.nodes[i].id, slide.root.children[i].id);
         }
     }
@@ -5611,7 +5587,6 @@ mod tests {
 
     #[test]
     fn backspace_with_parent_and_child_selected_only_removes_parent() {
-
         use crate::deck::builders::{group_element, text_element};
         use crate::deck::slide::SlideNode;
         use std::collections::BTreeMap;
@@ -5634,7 +5609,6 @@ mod tests {
         sel.element_ids = vec!["el_parent".into(), "el_inner".into()];
         match interpret_inline(&dispatcher, &sel, &Some("s".into()), keypress("Backspace")) {
             InterpretResult::Command(cmd) => {
-
                 assert_eq!(cmd.label(), "Delete Element");
             }
             other => panic!("expected single Delete Element, got {other:?}"),
@@ -5798,7 +5772,6 @@ mod tests {
 
     #[test]
     fn switching_slides_preserves_in_memory_edits_to_previous_slide() {
-
         let (deck, sid_a, sid_b) = two_slide_deck();
         let mut dispatcher = CommandDispatcher::new(deck);
         let mut active: Option<SlideId> = Some(sid_a.clone());
@@ -6095,7 +6068,6 @@ mod tests {
 
     #[test]
     fn asset_registry_insert_blob_increases_count_and_serializes_via_deck_io() {
-
         use crate::bundle::deck_io::{deserialize_deck, serialize_deck};
 
         let mut deck = Deck::sample();
@@ -6125,7 +6097,6 @@ mod tests {
 
     #[test]
     fn build_insert_slide_after_active_inserts_after_the_active_slide() {
-
         let mut deck = Deck::sample();
         let orig: SlideId = deck.slide_order[0].clone();
         InsertSlide {
@@ -6199,7 +6170,6 @@ mod tests {
 
     #[test]
     fn build_insert_slide_after_active_seeds_from_chosen_layout() {
-
         let deck = crate::deck::templates::new_deck(crate::deck::templates::light_theme(), "title");
         let active: SlideId = deck.slide_order[0].clone();
         let dispatcher = CommandDispatcher::new(deck);
@@ -6262,7 +6232,6 @@ mod tests {
 
     #[test]
     fn build_set_text_command_none_on_non_text_element() {
-
         let (dispatcher, _sel, sid, _eid) = fixture();
         let root_id: ElementId = dispatcher.deck().slides[&sid].root.id.clone();
         assert!(

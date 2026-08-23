@@ -21,7 +21,6 @@ pub struct PresentCursor {
 }
 
 impl PresentCursor {
-
     pub fn new(slide_index: usize) -> Self {
         Self {
             cursor: AnimationState::default(),
@@ -46,7 +45,6 @@ impl PresentCursor {
             return PresentStep::Reveal(forward_reveal(&sid, &timeline, step));
         }
         if self.slide_index + 1 < deck.slide_order.len() {
-
             let outgoing: crate::deck::SlideTransition = deck
                 .slides
                 .get(&sid)
@@ -156,7 +154,6 @@ pub struct PresentationSession {
 }
 
 impl PresentationSession {
-
     pub fn new(sender: WebviewSender, slide_index: usize) -> Self {
         Self {
             sender,
@@ -227,7 +224,6 @@ mod tests {
 
     #[test]
     fn advance_within_slide_increments_step_and_animates() {
-
         let deck = deck_with(vec![("s1", vec![click_entry("a1", "el_a")])]);
         let mut cur = PresentCursor::new(0);
         match cur.advance(&deck) {
@@ -243,7 +239,6 @@ mod tests {
 
     #[test]
     fn advance_at_last_step_crosses_to_next_slide_snapped() {
-
         let deck = deck_with(vec![
             ("s1", vec![]),
             ("s2", vec![click_entry("b1", "el_b")]),
@@ -287,7 +282,6 @@ mod tests {
 
     #[test]
     fn back_at_step_zero_crosses_to_prev_slide_last_step() {
-
         let deck = deck_with(vec![
             ("s1", vec![click_entry("a1", "el_a")]),
             ("s2", vec![]),

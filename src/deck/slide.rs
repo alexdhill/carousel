@@ -28,7 +28,6 @@ pub struct SlideTransition {
 }
 
 impl Default for SlideTransition {
-
     fn default() -> Self {
         Self {
             kind: TransitionKind::None,
@@ -69,7 +68,6 @@ pub struct SlideNode {
 }
 
 impl SlideNode {
-
     pub fn is_root_id(&self, id: &str) -> bool {
         self.root.id == id
     }
@@ -149,7 +147,6 @@ mod tests {
 
     #[test]
     fn transition_kinds_round_trip_by_name() {
-
         for kind in [
             TransitionKind::None,
             TransitionKind::Fade,

@@ -6,7 +6,6 @@ pub struct SetGlobalsCss {
 }
 
 impl Command for SetGlobalsCss {
-
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         let prior: String = deck.theme.globals_css.clone();
         deck.theme.globals_css = self.new_css.clone();

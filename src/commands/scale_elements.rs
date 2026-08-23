@@ -25,7 +25,6 @@ pub struct SetElementsTransform {
 }
 
 impl Command for SetElementsTransform {
-
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.target.id().is_empty(),

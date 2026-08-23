@@ -12,7 +12,6 @@ pub struct ReparentElement {
 }
 
 impl Command for ReparentElement {
-
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.target.id().is_empty(),
@@ -199,7 +198,6 @@ mod tests {
 
     #[test]
     fn move_across_parents_relocates_subtree() {
-
         let inner = text_element("el_inner", "g");
         let group = group_element("el_group", vec![inner]);
         let outer = text_element("el_a", "a");
@@ -228,7 +226,6 @@ mod tests {
 
     #[test]
     fn reparent_into_group_shrinkwraps_and_preserves_position() {
-
         let mut a = text_element("el_a", "a");
         a.geometry.x = 200.0;
         a.geometry.y = 100.0;
@@ -304,7 +301,6 @@ mod tests {
 
     #[test]
     fn moving_element_under_itself_is_invalid() {
-
         let inner = text_element("el_inner", "x");
         let group = group_element("el_group", vec![inner]);
         let root = group_element("el_root", vec![group]);

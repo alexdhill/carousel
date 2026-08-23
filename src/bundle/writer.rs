@@ -18,7 +18,6 @@ pub struct BundleWriter {
 }
 
 impl BundleWriter {
-
     pub fn create(target_path: &Path) -> BundleResult<Self> {
         assert!(
             !target_path.as_os_str().is_empty(),
@@ -103,10 +102,8 @@ impl BundleWriter {
 }
 
 impl Drop for BundleWriter {
-
     fn drop(&mut self) {
         if !self.finished {
-
             self.writer = None;
             if self.tmp_path.exists()
                 && let Err(e) = std::fs::remove_file(&self.tmp_path)
@@ -204,7 +201,6 @@ mod tests {
             w.write_string("manifest.json", "garbage").unwrap();
             tmp_existed_during = w.tmp_path().to_path_buf();
             assert!(tmp_existed_during.exists());
-
         }
 
         assert!(!tmp_existed_during.exists());

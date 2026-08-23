@@ -15,7 +15,6 @@ pub struct SetMorphTransition {
 }
 
 impl Command for SetMorphTransition {
-
     fn apply(&self, deck: &mut Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.element_id.is_empty(),

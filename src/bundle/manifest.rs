@@ -93,7 +93,6 @@ pub fn validate_format_version(version: &str) -> Result<(), BundleError> {
 }
 
 impl Default for ManifestData {
-
     fn default() -> Self {
         Self {
             format_version: CURRENT_FORMAT_VERSION.to_string(),
@@ -310,7 +309,6 @@ mod tests {
 
     #[test]
     fn manifest_parses_missing_optional_slide_fields() {
-
         let raw = r#"{
             "id":"01HQTEST",
             "path":"slides/slide_01HQTEST.html",
@@ -333,14 +331,12 @@ mod tests {
 
     #[test]
     fn iso8601_format_is_canonical() {
-
         let s = civil_iso8601_from_unix(946_684_800);
         assert_eq!(s, "2000-01-01T00:00:00Z");
     }
 
     #[test]
     fn iso8601_carries_into_next_day_and_month() {
-
         let s = civil_iso8601_from_unix(951_868_799);
         assert_eq!(s, "2000-02-29T23:59:59Z");
     }

@@ -8,7 +8,6 @@ pub struct SetSlideTitle {
 }
 
 impl Command for SetSlideTitle {
-
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.slide_id.is_empty(),
@@ -53,7 +52,6 @@ pub struct SetDeckTitle {
 }
 
 impl Command for SetDeckTitle {
-
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         let prior: String = deck.manifest.metadata.title.clone();
         deck.manifest.metadata.title = self.new_title.clone();

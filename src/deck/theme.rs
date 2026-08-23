@@ -48,7 +48,6 @@ const DEFAULT_THEME_CSS: &str = r#"
 
 impl Default for ThemeData {
     fn default() -> Self {
-
         let blank_id: LayoutId = "blank".to_string();
         let blank_root = crate::deck::builders::group_element("el_layout_root", vec![]);
         let blank = LayoutNode::new(blank_id.clone(), "Blank".to_string(), blank_root);

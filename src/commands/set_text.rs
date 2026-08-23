@@ -11,7 +11,6 @@ pub struct SetTextContent {
 }
 
 impl Command for SetTextContent {
-
     fn apply(&self, deck: &mut crate::deck::Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.target.id().is_empty(),
@@ -216,7 +215,6 @@ mod tests {
 
     #[test]
     fn set_text_errors_on_non_text_element() {
-
         let mut deck = Deck::sample();
         let sid: SlideId = deck.slide_order[0].clone();
         let slide = deck.slides.get_mut(&sid).unwrap();

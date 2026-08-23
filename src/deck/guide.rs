@@ -13,7 +13,6 @@ pub struct Guide {
 }
 
 impl Guide {
-
     pub fn new(axis: GuideAxis, pos: f64) -> Self {
         Self { axis, pos }
     }

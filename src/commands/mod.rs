@@ -254,7 +254,6 @@ pub struct CommandDispatcher {
 }
 
 impl CommandDispatcher {
-
     pub fn new(deck: Deck) -> Self {
         Self::with_history(deck, CommandHistory::default())
     }

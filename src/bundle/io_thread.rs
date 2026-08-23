@@ -64,7 +64,6 @@ pub struct IoThread {
 }
 
 impl IoThread {
-
     pub fn spawn(
         responses: Sender<IoResponse>,
         wake: Box<dyn Fn() + Send + 'static>,
@@ -86,9 +85,7 @@ impl IoThread {
 }
 
 impl Drop for IoThread {
-
     fn drop(&mut self) {
-
         let _ = std::mem::replace(&mut self.sender, mpsc::channel().0);
         if let Some(h) = self.handle.take()
             && let Err(e) = h.join()

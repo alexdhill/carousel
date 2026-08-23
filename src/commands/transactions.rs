@@ -10,7 +10,6 @@ pub struct TransactionSnapshot {
 }
 
 impl TransactionSnapshot {
-
     pub fn empty() -> Self {
         Self::default()
     }
@@ -48,7 +47,6 @@ pub struct Transaction {
 }
 
 impl Transaction {
-
     pub fn new(label: &'static str, snapshot: TransactionSnapshot) -> Self {
         assert!(!label.is_empty(), "transaction label must not be empty");
         Self {

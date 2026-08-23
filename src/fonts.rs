@@ -13,7 +13,6 @@ pub enum FontFormat {
 }
 
 impl FontFormat {
-
     pub fn ext(self) -> &'static str {
         match self {
             FontFormat::Ttf => "ttf",

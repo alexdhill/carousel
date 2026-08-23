@@ -9,7 +9,6 @@ pub struct CompositeCommand {
 }
 
 impl CompositeCommand {
-
     pub fn new(commands: Vec<Box<dyn Command>>, label: &'static str) -> Self {
         assert!(!label.is_empty(), "CompositeCommand: label is empty");
         assert!(
@@ -29,7 +28,6 @@ impl CompositeCommand {
 }
 
 impl Command for CompositeCommand {
-
     fn apply(&self, deck: &mut Deck) -> Result<CommandOutput, CommandError> {
         assert!(
             !self.commands.is_empty(),

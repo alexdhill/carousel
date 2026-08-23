@@ -418,7 +418,6 @@ fn build_style(node: &ElementNode, sibling_index: Option<i32>) -> String {
     if let ElementStyle::Group(gs) = &node.style
         && gs.scale != 1.0
     {
-
         let rot: String = if node.geometry.rotation != 0.0 {
             format!("rotate({}rad) ", node.geometry.rotation)
         } else {
@@ -450,7 +449,6 @@ fn write_geom(g: &Geometry, out: &mut String) {
     if g.opacity != 1.0 {
         decl(out, "opacity", &format!("{}", g.opacity));
     }
-
 }
 
 fn write_text_style(ts: &TextStyle, out: &mut String) {
@@ -727,13 +725,11 @@ mod tests {
 
     #[test]
     fn base_css_isolates_slide_for_consistent_blend_modes() {
-
         assert!(ANIMATION_KEYFRAMES_CSS.contains(".slide { isolation: isolate; }"));
     }
 
     #[test]
     fn base_css_gives_slides_a_white_floor_overridable_by_theme() {
-
         assert!(ANIMATION_KEYFRAMES_CSS.contains(":where(.slide) { background: #fff; }"));
     }
 

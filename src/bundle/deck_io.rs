@@ -540,7 +540,6 @@ mod tests {
 
     #[test]
     fn read_serialized_works_when_optional_theme_files_absent() {
-
         let deck = Deck::sample();
         let s = serialize_deck(&deck).unwrap();
         let dir = TempDir::new().unwrap();
@@ -701,7 +700,6 @@ mod tests {
 
     #[test]
     fn older_bundle_without_guides_loads_empty() {
-
         let deck = Deck::sample();
         let mut s = serialize_deck(&deck).unwrap();
         let mut manifest: serde_json::Value = serde_json::from_str(&s.manifest_json).unwrap();
@@ -716,7 +714,6 @@ mod tests {
 
     #[test]
     fn older_bundle_without_animations_loads_empty_timeline() {
-
         let deck = Deck::sample();
         let mut s = serialize_deck(&deck).unwrap();
 
@@ -740,7 +737,6 @@ mod tests {
 
     #[test]
     fn older_bundle_without_layouts_loads_the_seed() {
-
         let deck = Deck::sample();
         let s = serialize_deck(&deck).unwrap();
         let dir = TempDir::new().unwrap();
