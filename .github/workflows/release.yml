@@ -118,10 +118,14 @@ jobs:
                     security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions "$kc"
                     codesign --deep --force --options runtime --timestamp \
                       --sign "$MACOS_SIGN_IDENTITY" "$app"
-                    codesign --verify --strict --verbose=2 "$app"
                   else
-                    echo "no MACOS_CERT_P12 secret; shipping unsigned app"
+                    # No cert: ad-hoc sign the assembled bundle. arm64 macOS refuses
+                    # to launch an app whose signature does not match its contents,
+                    # and the linker's signature on the bare binary does not.
+                    echo "no MACOS_CERT_P12 secret; ad-hoc signing"
+                    codesign --force --deep --sign - "$app"
                   fi
+                  codesign --verify --strict --verbose=2 "$app"
 
                   # DMG.
                   dmg="Carousel-${arch}.dmg"
