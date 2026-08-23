@@ -6375,7 +6375,7 @@
             return;
         }
 
-        for (let i = 0; i < tree.nodes.length; i++) {
+        for (let i = tree.nodes.length - 1; i >= 0; i--) {
             host.appendChild(buildObjectNode(tree.nodes[i], 0));
         }
         updateObjectPanelSelection();
@@ -6483,7 +6483,7 @@
         if (Array.isArray(node.children) && node.children.length > 0) {
             const kids = document.createElement("div");
             kids.className = "objects__children";
-            for (let i = 0; i < node.children.length; i++) {
+            for (let i = node.children.length - 1; i >= 0; i--) {
                 kids.appendChild(buildObjectNode(node.children[i], depth + 1));
             }
             wrap.appendChild(kids);
@@ -6778,7 +6778,8 @@
             displayIndex = target.node.children.length;
         } else {
             newParentId = target.parentId;
-            displayIndex = zone === "before" ? target.index : target.index + 1;
+            // panel lists top-most first, so a row above the target is a later sibling
+            displayIndex = zone === "before" ? target.index + 1 : target.index;
         }
         let position = displayIndex;
         if (source.parentId === newParentId && source.index < displayIndex) {
