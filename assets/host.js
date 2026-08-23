@@ -1331,6 +1331,7 @@
         const sub = document.getElementById("inspector-target");
         if (sub) {
             sub.textContent = (g.orient === "h" ? "Horizontal" : "Vertical") + " guide";
+            setInspectorIcon("guide");
         }
         const lbl = document.getElementById("guide-pos-label");
         if (lbl) {
@@ -5844,6 +5845,7 @@
             const slideMode = currentMode === "slide";
 
             subtitle.textContent = slideMode ? "Slide" : "Layout";
+            setInspectorIcon(slideMode ? "slide" : "layout");
             setSlideBoxVisible(true);
             setElementInspectorVisible(false, null);
             renderSlideBox();
@@ -5852,6 +5854,7 @@
         setSlideBoxVisible(false);
         if (currentSelectionIds.length > 1) {
             subtitle.textContent = currentSelectionIds.length + " selected";
+            setInspectorIcon("multi");
             clearInspectorInputs();
             setElementInspectorVisible(false, null);
             return;
@@ -5865,6 +5868,7 @@
             return;
         }
         const type = el.dataset.elementType || "";
+        setInspectorIcon(type);
         setElementInspectorVisible(true, type);
         const decls = parseStyleAttr(el.getAttribute("style") || "");
         populateInspector(decls);
@@ -6507,9 +6511,26 @@
                 return "▦";
             case "embed":
                 return "<>";
+            case "slide":
+                return "◻";
+            case "layout":
+                return "▨";
+            case "guide":
+                return "┼";
+            case "multi":
+                return "❖";
             default:
                 return "?";
         }
+    }
+
+    function setInspectorIcon(kind) {
+        const icon = document.getElementById("inspector-icon");
+        if (!icon) {
+            return;
+        }
+        icon.className = "objects__badge objects__badge--" + (kind || "unknown");
+        icon.textContent = badgeGlyph(kind);
     }
 
     function updateObjectPanelSelection() {
