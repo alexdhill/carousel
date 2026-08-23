@@ -1,6 +1,6 @@
 [package]
 name = "Carousel"
-version = "1.1.4"
+version = "1.1.4a"
 edition = "2024"
 
 [dependencies]
