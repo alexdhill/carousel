@@ -3958,7 +3958,7 @@ fn build_insert_slide_after_active(
         id: slide_id.clone(),
         path: slide_path_for(&slide_id),
         layout_id: seed_layout,
-        title: String::new(),
+        title: format!("Slide {}", position + 1),
         thumbnail: None,
         transition: None,
         duration_hint: None,
@@ -6137,6 +6137,49 @@ mod tests {
         assert_eq!(deck2.slide_order[2], "s_b");
         assert!(deck2.slides.contains_key(&new_id));
         assert!(deck2.manifest.slides.iter().any(|e| e.id == new_id));
+    }
+
+    #[test]
+    fn build_insert_slide_after_active_titles_slide_by_position() {
+        let mut deck = Deck::sample();
+        let orig: SlideId = deck.slide_order[0].clone();
+        InsertSlide {
+            position: 1,
+            slide: SlideNode::new(
+                "s_b".into(),
+                "blank".into(),
+                crate::deck::builders::group_element("rt_b", Vec::new()),
+            ),
+            manifest_entry: crate::bundle::SlideEntry {
+                id: "s_b".into(),
+                path: crate::bundle::manifest::slide_path_for("s_b"),
+                layout_id: "blank".into(),
+                title: String::new(),
+                thumbnail: None,
+                transition: None,
+                duration_hint: None,
+                notes_ref: None,
+                animations: Vec::new(),
+                guides: Vec::new(),
+                background: None,
+                background_image: None,
+                notes: None,
+            },
+        }
+        .apply(&mut deck)
+        .unwrap();
+        let dispatcher = CommandDispatcher::new(deck);
+
+        let (cmd, new_id) = build_insert_slide_after_active(&dispatcher, Some(&orig), "").unwrap();
+        let mut deck2 = dispatcher.deck().clone();
+        cmd.apply(&mut deck2).unwrap();
+        let entry = deck2
+            .manifest
+            .slides
+            .iter()
+            .find(|e| e.id == new_id)
+            .unwrap();
+        assert_eq!(entry.title, "Slide 2");
     }
 
     #[test]
