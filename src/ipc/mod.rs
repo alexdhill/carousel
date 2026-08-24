@@ -74,6 +74,10 @@ pub enum MessageKind {
         allow: bool,
     },
 
+    WindowControl {
+        action: String,
+    },
+
     MountSlide(MountSlideArgs),
     ApplyPatch(Patch),
     SetSelection(SelectionState),

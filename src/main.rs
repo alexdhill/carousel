@@ -354,10 +354,21 @@ fn build_editor(
     agent_sink: std::sync::Arc<dyn Fn(crate::agent::AgentEvent) + Send + Sync>,
     focus_title: bool,
 ) -> Result<(Window, ApplicationCore), Box<dyn std::error::Error>> {
-    let window = WindowBuilder::new()
+    let builder = WindowBuilder::new()
         .with_title("carousel")
-        .with_inner_size(tao::dpi::LogicalSize::new(1400.0, 900.0))
-        .build(target)?;
+        .with_inner_size(tao::dpi::LogicalSize::new(1400.0, 900.0));
+
+    #[cfg(target_os = "macos")]
+    let builder = {
+        use tao::platform::macos::WindowBuilderExtMacOS;
+        builder
+            .with_titlebar_transparent(true)
+            .with_title_hidden(true)
+            .with_fullsize_content_view(true)
+    };
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.with_decorations(false);
+    let window = builder.build(target)?;
     let html: String = assemble_host_html(
         HOST_HTML_TEMPLATE,
         HOST_CSS,
@@ -399,6 +410,11 @@ fn build_editor(
         agent_sink,
         focus_title,
     );
+    #[cfg(target_os = "macos")]
+    inset_traffic_lights(
+        &window,
+        tao::dpi::LogicalPosition::new(TRAFFIC_LIGHT_INSET.0, TRAFFIC_LIGHT_INSET.1),
+    );
     Ok((window, app))
 }
 
@@ -430,6 +446,115 @@ fn send_landing_thumb(webview: &WebView, path: &str, thumb: &ThumbData) {
     let script: String = format!("window.__landing.thumb({});", escaped);
     if let Err(e) = webview.evaluate_script(&script) {
         error!("landing thumb evaluate_script failed: {}", e);
+    }
+}
+
+/// Top-left inset that centres the traffic lights in the editor's 48px top bar,
+/// which itself starts 7px down from the window edge (body padding in host.css).
+#[cfg(target_os = "macos")]
+const TRAFFIC_LIGHT_INSET: (f64, f64) = (18.0, 24.0);
+
+/// Moves the macOS traffic lights to `inset` pixels from the window's top-left corner.
+///
+/// tao's `with_traffic_light_inset` only takes effect from its own view's `drawRect:`,
+/// which never runs once wry installs the web view, so the placement is done here and
+/// re-run on every resize (AppKit restores the titlebar container's frame each time).
+/// Does nothing if AppKit hands back a nil window or button.
+#[cfg(target_os = "macos")]
+#[allow(deprecated)] // cocoa 0.26 deprecates its whole AppKit surface in favour of objc2
+fn inset_traffic_lights(window: &Window, inset: tao::dpi::LogicalPosition<f64>) {
+    use cocoa::appkit::{NSView, NSWindow, NSWindowButton};
+    use cocoa::base::id;
+    use cocoa::foundation::NSRect;
+    use objc::{msg_send, sel, sel_impl};
+    use tao::platform::macos::WindowExtMacOS;
+
+    assert!(
+        inset.x >= 0.0 && inset.y >= 0.0,
+        "inset_traffic_lights: negative inset"
+    );
+    let ns_window: id = window.ns_window() as id;
+    if ns_window.is_null() {
+        warn!("inset_traffic_lights: nil ns_window");
+        return;
+    }
+    unsafe {
+        let close: id = ns_window.standardWindowButton_(NSWindowButton::NSWindowCloseButton);
+        let miniaturize: id =
+            ns_window.standardWindowButton_(NSWindowButton::NSWindowMiniaturizeButton);
+        let zoom: id = ns_window.standardWindowButton_(NSWindowButton::NSWindowZoomButton);
+        if close.is_null() || miniaturize.is_null() || zoom.is_null() {
+            warn!("inset_traffic_lights: missing standard window button");
+            return;
+        }
+        let titlebar: id = NSView::superview(close);
+        let container: id = if titlebar.is_null() {
+            titlebar
+        } else {
+            NSView::superview(titlebar)
+        };
+        if container.is_null() {
+            warn!("inset_traffic_lights: nil titlebar container");
+            return;
+        }
+
+        let close_rect: NSRect = NSView::frame(close);
+        let mut bar: NSRect = NSView::frame(container);
+        // buttons keep their offset inside the container, so grow it to push them down
+        bar.size.height = close_rect.origin.y + close_rect.size.height + inset.y;
+        bar.origin.y = NSWindow::frame(ns_window).size.height - bar.size.height;
+        let _: () = msg_send![container, setFrame: bar];
+
+        let gap: f64 = NSView::frame(miniaturize).origin.x - close_rect.origin.x;
+        let buttons: [id; 3] = [close, miniaturize, zoom];
+        for (i, button) in buttons.iter().enumerate() {
+            let mut rect: NSRect = NSView::frame(*button);
+            rect.origin.x = inset.x + (i as f64 * gap);
+            let _: () = msg_send![*button, setFrameOrigin: rect.origin];
+        }
+    }
+}
+
+/// Applies a titlebar-replacement request coming from the editor chrome.
+///
+/// `action` is one of `drag`, `minimize`, `maximize`, `close`; anything else is
+/// logged and ignored. `close` mirrors `WindowEvent::CloseRequested`, so unsaved
+/// work still routes through the quit dialog instead of exiting outright.
+fn apply_window_control(
+    action: &str,
+    window: Option<&Window>,
+    app: Option<&ApplicationCore>,
+    control_flow: &mut ControlFlow,
+) {
+    assert!(!action.is_empty(), "apply_window_control: empty action");
+    let window: &Window = match window {
+        Some(w) => w,
+        None => {
+            warn!("window control {} ignored; no editor window", action);
+            return;
+        }
+    };
+    match action {
+        "drag" => {
+            if let Err(e) = window.drag_window() {
+                warn!("drag_window failed: {}", e);
+            }
+        }
+        "minimize" => window.set_minimized(true),
+        "maximize" => window.set_maximized(!window.is_maximized()),
+        "close" => match app {
+            Some(a) if a.wants_quit_confirmation() => {
+                info!("window control close with unsaved changes; confirming");
+                if let Err(e) = a.show_quit_dialog() {
+                    error!("show_quit_dialog failed: {}", e);
+                }
+            }
+            _ => {
+                info!("window control close; exiting");
+                *control_flow = ControlFlow::Exit;
+            }
+        },
+        other => warn!("unknown window control action: {}", other),
     }
 }
 
@@ -661,6 +786,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         match event {
             Event::UserEvent(UserEvent::IpcReceived) => {
                 while let Ok(msg) = ipc_rx.try_recv() {
+                    if let ipc::MessageKind::WindowControl { action } = &msg.kind {
+                        apply_window_control(
+                            action,
+                            editor_window.as_ref(),
+                            app.as_ref(),
+                            control_flow,
+                        );
+                        continue;
+                    }
                     if let Some(app) = app.as_mut()
                         && let Err(e) = app.handle_ipc(msg)
                     {
@@ -845,6 +979,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         });
                         let _ = proxy.send_event(UserEvent::LandingIpcReceived);
                     }
+                }
+            }
+            #[cfg(target_os = "macos")]
+            Event::WindowEvent {
+                event: WindowEvent::Resized(_),
+                window_id,
+                ..
+            } => {
+                if let Some(win) = editor_window.as_ref()
+                    && win.id() == window_id
+                {
+                    inset_traffic_lights(
+                        win,
+                        tao::dpi::LogicalPosition::new(
+                            TRAFFIC_LIGHT_INSET.0,
+                            TRAFFIC_LIGHT_INSET.1,
+                        ),
+                    );
                 }
             }
             Event::WindowEvent {

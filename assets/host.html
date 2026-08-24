@@ -16,25 +16,42 @@
     <body data-mode="slide">
         <header id="top-bar" class="top-bar">
             <div class="top-bar__left">
-                <button
-                    type="button"
-                    class="icon-btn"
-                    data-stub
-                    title="Menu"
-                    aria-label="Menu"
-                >
-                    <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor">
-                        <circle cx="5" cy="5" r="2" />
-                        <circle cx="12" cy="5" r="2" />
-                        <circle cx="19" cy="5" r="2" />
-                        <circle cx="5" cy="12" r="2" />
-                        <circle cx="12" cy="12" r="2" />
-                        <circle cx="19" cy="12" r="2" />
-                        <circle cx="5" cy="19" r="2" />
-                        <circle cx="12" cy="19" r="2" />
-                        <circle cx="19" cy="19" r="2" />
-                    </svg>
-                </button>
+                <div id="window-controls" class="win-ctls" role="group" aria-label="Window">
+                    <button
+                        type="button"
+                        id="win-close"
+                        class="win-ctl win-ctl--close"
+                        aria-label="Close"
+                    >
+                        <svg viewBox="0 0 12 12" aria-hidden="true">
+                            <path d="M3 3l6 6M9 3l-6 6" />
+                        </svg>
+                    </button>
+                    <button
+                        type="button"
+                        id="win-min"
+                        class="win-ctl win-ctl--min"
+                        aria-label="Minimize"
+                    >
+                        <svg viewBox="0 0 12 12" aria-hidden="true">
+                            <path d="M3 6h6" />
+                        </svg>
+                    </button>
+                    <button
+                        type="button"
+                        id="win-max"
+                        class="win-ctl win-ctl--max"
+                        aria-label="Maximize"
+                    >
+                        <svg class="win-ctl__grow" viewBox="0 0 12 12" aria-hidden="true">
+                            <path d="M6 3v6M3 6h6" />
+                        </svg>
+                        <svg class="win-ctl__shrink" viewBox="0 0 12 12" aria-hidden="true">
+                            <rect x="2.5" y="4.5" width="5" height="5" rx="1" />
+                            <path d="M4.5 4.5V3a1 1 0 0 1 1-1H9a1 1 0 0 1 1 1v3.5a1 1 0 0 1-1 1H7.5" />
+                        </svg>
+                    </button>
+                </div>
                 <span class="tbar-divider"></span>
                 <div class="doc-meta">
                     <span

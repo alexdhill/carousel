@@ -1457,6 +1457,65 @@
         }
     }
 
+    function wireWindowControls() {
+        const bar = document.getElementById("top-bar");
+        const ctls = document.getElementById("window-controls");
+        if (!bar || !ctls) {
+            return;
+        }
+        const ua = navigator.userAgent || "";
+        document.body.dataset.platform = /Mac|iPhone|iPad/.test(ua)
+            ? "mac"
+            : /Windows/.test(ua)
+              ? "win"
+              : "linux";
+
+        const send = function (action) {
+            window.__deck.send("WindowControl", { action: action });
+        };
+        const toggleMaximized = function () {
+            const now = ctls.dataset.maximized === "true";
+            ctls.dataset.maximized = now ? "false" : "true";
+            send("maximize");
+        };
+        const buttons = {
+            "win-close": function () {
+                send("close");
+            },
+            "win-min": function () {
+                send("minimize");
+            },
+            "win-max": toggleMaximized,
+        };
+        Object.keys(buttons).forEach(function (id) {
+            const btn = document.getElementById(id);
+            if (btn) {
+                btn.addEventListener("click", buttons[id]);
+            }
+        });
+
+        bar.addEventListener("mousedown", function (e) {
+            if (e.button !== 0 || isInteractiveTarget(e.target)) {
+                return;
+            }
+            e.preventDefault();
+            send("drag");
+        });
+        bar.addEventListener("dblclick", function (e) {
+            if (isInteractiveTarget(e.target)) {
+                return;
+            }
+            toggleMaximized();
+        });
+    }
+
+    function isInteractiveTarget(node) {
+        if (!node || !node.closest) {
+            return false;
+        }
+        return !!node.closest("button, input, select, textarea, a, [contenteditable='true']");
+    }
+
     function wirePaneResizers() {
         const map = {
             "divider-objects": "objects",
@@ -7962,6 +8021,7 @@
         init_agent_panel(document.body);
         wireAnimationsSection();
         wirePaneResizers();
+        wireWindowControls();
         renderObjectPanel(null);
 
         window.requestAnimationFrame(function () {
