@@ -21,6 +21,7 @@ use ipc::landing::{LandingData, LandingInbound, LandingRecent, LandingTemplate, 
 use ipc::present::PresentInbound;
 use std::path::PathBuf;
 use tao::{
+    dpi::{LogicalPosition, LogicalSize},
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoopBuilder, EventLoopWindowTarget},
     monitor::MonitorHandle,
@@ -54,7 +55,7 @@ enum UserEvent {
     FlushPatches,
     IoResponse,
 
-    OpenPresentation,
+    OpenPresentation { windowed: bool },
     PresentIpcReceived,
     ClosePresentation,
 
@@ -301,23 +302,147 @@ fn external_monitor(
         .find(|m| m.position() != home.position())
 }
 
-/// build_present_window — one fullscreen webview wired to the shared present
+/// Placement — where one presentation window goes: the monitor to fullscreen on
+/// when the bounds are `None`, or the position and size to open at when they
+/// are `Some`.
+type Placement = (
+    Option<MonitorHandle>,
+    Option<(LogicalPosition<f64>, LogicalSize<f64>)>,
+);
+
+/// present_placement — placements for the audience window and, when there is
+/// one, the presenter console. Fullscreen mode puts the audience window on an
+/// external display and the console on the editor's display, dropping the
+/// console entirely when only one display is attached. Windowed mode ignores
+/// external displays and tiles both windows on the editor's display.
+fn present_placement(
+    target: &EventLoopWindowTarget<UserEvent>,
+    editor: Option<&Window>,
+    windowed: bool,
+) -> (Placement, Option<Placement>) {
+    let home: Option<MonitorHandle> = editor.and_then(|w| w.current_monitor());
+    if windowed {
+        let audience: Placement = (home.clone(), Some(windowed_bounds(home.as_ref(), 0)));
+        let console: Placement = (home.clone(), Some(windowed_bounds(home.as_ref(), 1)));
+        return (audience, Some(console));
+    }
+    let external: Option<MonitorHandle> = external_monitor(target, editor);
+    let console: Option<Placement> = match external {
+        Some(_) => home.map(|m| (Some(m), None)),
+        None => None,
+    };
+    ((external, None), console)
+}
+
+/// Screen inset and menu-bar allowance, in logical pixels, for tiled windows.
+const TILE_INSET: f64 = 24.0;
+const TILE_TOP_BAR: f64 = 28.0;
+
+/// tile_bounds — the position and size of one of two side-by-side windows on a
+/// screen whose logical origin is `origin` and logical size is `size`. `slot` 0
+/// is the left half and 1 the right half; both are inset from the screen edges
+/// so the title bars stay reachable. Widths and heights are clamped so a very
+/// small screen still yields a usable window even when the two then overlap.
+fn tile_bounds(
+    origin: LogicalPosition<f64>,
+    size: LogicalSize<f64>,
+    slot: u32,
+) -> (LogicalPosition<f64>, LogicalSize<f64>) {
+    assert!(slot < 2, "tile_bounds: slot out of range");
+    let width: f64 = ((size.width - TILE_INSET * 3.0) / 2.0).max(480.0);
+    let height: f64 = (size.height - TILE_INSET * 2.0 - TILE_TOP_BAR).max(360.0);
+    let x: f64 = origin.x + TILE_INSET + f64::from(slot) * (width + TILE_INSET);
+    (
+        LogicalPosition::new(x, origin.y + TILE_INSET + TILE_TOP_BAR),
+        LogicalSize::new(width, height),
+    )
+}
+
+/// windowed_bounds — `tile_bounds` for `monitor`, translating its physical
+/// geometry into logical pixels first. Falls back to a fixed 1280x720 box near
+/// the top-left of the primary screen when the monitor is unknown.
+fn windowed_bounds(
+    monitor: Option<&MonitorHandle>,
+    slot: u32,
+) -> (LogicalPosition<f64>, LogicalSize<f64>) {
+    let m: &MonitorHandle = match monitor {
+        Some(m) => m,
+        None => {
+            return (
+                LogicalPosition::new(80.0, 80.0),
+                LogicalSize::new(1280.0, 720.0),
+            );
+        }
+    };
+    let scale: f64 = m.scale_factor();
+    tile_bounds(
+        m.position().to_logical(scale),
+        m.size().to_logical(scale),
+        slot,
+    )
+}
+
+#[cfg(test)]
+mod tile_tests {
+    use super::tile_bounds;
+    use tao::dpi::{LogicalPosition, LogicalSize};
+
+    #[test]
+    fn slots_sit_side_by_side_inside_the_screen() {
+        let origin = LogicalPosition::new(100.0, 50.0);
+        let size = LogicalSize::new(1920.0, 1080.0);
+        let (left_pos, left_size) = tile_bounds(origin, size, 0);
+        let (right_pos, right_size) = tile_bounds(origin, size, 1);
+
+        assert!(left_pos.x >= origin.x, "left slot starts inside the screen");
+        assert!(
+            left_pos.x + left_size.width <= right_pos.x,
+            "slots do not overlap"
+        );
+        assert!(
+            right_pos.x + right_size.width <= origin.x + size.width,
+            "right slot ends inside the screen"
+        );
+        assert!(
+            left_pos.y + left_size.height <= origin.y + size.height,
+            "slot height fits the screen"
+        );
+        assert_eq!(left_size.width, right_size.width);
+    }
+
+    #[test]
+    fn tiny_screen_still_yields_a_usable_window() {
+        let (_, size) = tile_bounds(
+            LogicalPosition::new(0.0, 0.0),
+            LogicalSize::new(320.0, 200.0),
+            1,
+        );
+        assert!(size.width >= 480.0 && size.height >= 360.0);
+    }
+}
+
+/// build_present_window — one presentation webview wired to the shared present
 /// control channel. Both the audience window and the presenter console are
-/// built through here; they differ only in monitor, title, and document, and
-/// both post `PresentInbound` variants back to the same event loop.
+/// built through here; they differ only in placement, title, and document, and
+/// both post `PresentInbound` variants back to the same event loop. `bounds`
+/// selects the placement: `None` means borderless fullscreen on `monitor`,
+/// `Some` means an ordinary resizable window at that position and size.
 fn build_present_window(
     target: &EventLoopWindowTarget<UserEvent>,
     proxy: tao::event_loop::EventLoopProxy<UserEvent>,
     present_tx: std::sync::mpsc::Sender<PresentInbound>,
     monitor: Option<MonitorHandle>,
+    bounds: Option<(LogicalPosition<f64>, LogicalSize<f64>)>,
     title: &str,
     html: String,
 ) -> Result<(Window, WebView), Box<dyn std::error::Error>> {
     assert!(!html.is_empty(), "assembled present html is empty");
-    let window = WindowBuilder::new()
-        .with_title(title)
-        .with_fullscreen(Some(Fullscreen::Borderless(monitor)))
-        .build(target)?;
+    let builder = WindowBuilder::new().with_title(title);
+    let builder = match bounds {
+        Some((position, size)) => builder.with_position(position).with_inner_size(size),
+        None => builder.with_fullscreen(Some(Fullscreen::Borderless(monitor))),
+    };
+    let window = builder.build(target)?;
     let webview = WebViewBuilder::new(&window)
         .with_html(html)
         .with_devtools(true)
@@ -345,6 +470,7 @@ fn build_presentation(
     proxy: tao::event_loop::EventLoopProxy<UserEvent>,
     present_tx: std::sync::mpsc::Sender<PresentInbound>,
     monitor: Option<MonitorHandle>,
+    bounds: Option<(LogicalPosition<f64>, LogicalSize<f64>)>,
 ) -> Result<(Window, WebView), Box<dyn std::error::Error>> {
     let html: String =
         assemble_present_html(PRESENT_HTML_TEMPLATE, PRESENT_CSS, MORPH_JS, PRESENT_JS);
@@ -353,6 +479,7 @@ fn build_presentation(
         proxy,
         present_tx,
         monitor,
+        bounds,
         "carousel — presenting",
         html,
     )
@@ -363,6 +490,7 @@ fn build_presenter(
     proxy: tao::event_loop::EventLoopProxy<UserEvent>,
     present_tx: std::sync::mpsc::Sender<PresentInbound>,
     monitor: Option<MonitorHandle>,
+    bounds: Option<(LogicalPosition<f64>, LogicalSize<f64>)>,
 ) -> Result<(Window, WebView), Box<dyn std::error::Error>> {
     let html: String =
         assemble_presenter_html(PRESENTER_HTML_TEMPLATE, PRESENTER_CSS, PRESENTER_JS);
@@ -371,6 +499,7 @@ fn build_presenter(
         proxy,
         present_tx,
         monitor,
+        bounds,
         "carousel — presenter",
         html,
     )
@@ -442,7 +571,7 @@ fn build_editor(
     deck: Deck,
     schedule_flush: Box<dyn Fn()>,
     io_thread: IoThread,
-    request_present_open: Box<dyn Fn()>,
+    request_present_open: Box<dyn Fn(bool)>,
     request_present_close: Box<dyn Fn()>,
     dispatch_pdf_job: Box<dyn Fn(app::PdfJob)>,
     dispatch_chromium_download: Box<dyn Fn()>,
@@ -830,10 +959,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let (present_tx, present_rx) = std::sync::mpsc::channel::<PresentInbound>();
-    let request_present_open: Box<dyn Fn()> = {
+    let request_present_open: Box<dyn Fn(bool)> = {
         let p = proxy_for_app.clone();
-        Box::new(move || {
-            if p.send_event(UserEvent::OpenPresentation).is_err() {
+        Box::new(move |windowed: bool| {
+            if p.send_event(UserEvent::OpenPresentation { windowed })
+                .is_err()
+            {
                 error!("could not schedule OpenPresentation; proxy closed");
             }
         })
@@ -886,7 +1017,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut schedule_flush_opt: Option<Box<dyn Fn()>> = Some(schedule_flush);
     let mut io_thread_opt: Option<IoThread> = Some(io_thread);
-    let mut request_present_open_opt: Option<Box<dyn Fn()>> = Some(request_present_open);
+    let mut request_present_open_opt: Option<Box<dyn Fn(bool)>> = Some(request_present_open);
     let mut request_present_close_opt: Option<Box<dyn Fn()>> = Some(request_present_close);
     let mut dispatch_pdf_job_opt: Option<Box<dyn Fn(app::PdfJob)>> = Some(dispatch_pdf_job);
     let mut dispatch_chromium_download_opt: Option<Box<dyn Fn()>> =
@@ -953,22 +1084,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     *control_flow = ControlFlow::Exit;
                 }
             }
-            Event::UserEvent(UserEvent::OpenPresentation) => {
+            Event::UserEvent(UserEvent::OpenPresentation { windowed }) => {
                 if let Some(app) = app.as_mut() {
                     if present_window.is_some() {
                         warn!("OpenPresentation ignored; already presenting");
                     } else {
-                        let external: Option<MonitorHandle> =
-                            external_monitor(target, editor_window.as_ref());
-                        let home: Option<MonitorHandle> = editor_window
-                            .as_ref()
-                            .and_then(|w| w.current_monitor())
-                            .filter(|_| external.is_some());
+                        let (audience, console): (Placement, Option<Placement>) =
+                            present_placement(target, editor_window.as_ref(), windowed);
                         match build_presentation(
                             target,
                             proxy_present.clone(),
                             present_tx.clone(),
-                            external,
+                            audience.0,
+                            audience.1,
                         ) {
                             Ok((win, wv)) => {
                                 app.begin_presentation(WebviewSender::new(wv));
@@ -976,13 +1104,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             Err(e) => error!("failed to build presentation window: {}", e),
                         }
-                        match (present_window.is_some(), home) {
-                            (true, Some(monitor)) => {
+                        match (present_window.is_some(), console) {
+                            (true, Some(place)) => {
                                 match build_presenter(
                                     target,
                                     proxy_present.clone(),
                                     present_tx.clone(),
-                                    Some(monitor),
+                                    place.0,
+                                    place.1,
                                 ) {
                                     Ok((win, wv)) => {
                                         app.begin_presenter(WebviewSender::new(wv));

@@ -211,7 +211,9 @@ pub enum InterpretResult {
 
     SetActiveLayout(LayoutId),
 
-    StartPresentation,
+    StartPresentation {
+        windowed: bool,
+    },
 
     SendSlideLayoutPicker,
     Nothing,
@@ -232,7 +234,7 @@ impl std::fmt::Debug for InterpretResult {
             Self::SetActiveSlide(id) => write!(f, "SetActiveSlide({id})"),
             Self::SetEditorMode(m) => write!(f, "SetEditorMode({m:?})"),
             Self::SetActiveLayout(id) => write!(f, "SetActiveLayout({id})"),
-            Self::StartPresentation => f.write_str("StartPresentation"),
+            Self::StartPresentation { windowed } => write!(f, "StartPresentation({windowed})"),
             Self::SendSlideLayoutPicker => f.write_str("SendSlideLayoutPicker"),
             Self::Nothing => f.write_str("Nothing"),
         }

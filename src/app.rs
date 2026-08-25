@@ -87,6 +87,7 @@ const EXPORT_HTML_KEY: &str = "export_html";
 const EXPORT_PDF_KEY: &str = "export_pdf";
 
 const PRESENT_KEY: &str = "present";
+const PRESENT_WINDOWED_KEY: &str = "present_windowed";
 const BUNDLE_FILE_EXTENSION: &str = "deck";
 const THEME_FILE_EXTENSION: &str = "slidetheme";
 
@@ -119,7 +120,7 @@ pub struct ApplicationCore {
     present: Option<PresentationSession>,
 
     presenter: Option<WebviewSender>,
-    request_present_open: Box<dyn Fn()>,
+    request_present_open: Box<dyn Fn(bool)>,
     request_present_close: Box<dyn Fn()>,
 
     pending_present_index: Option<usize>,
@@ -165,7 +166,7 @@ impl ApplicationCore {
         sender: WebviewSender,
         schedule_flush: Box<dyn Fn()>,
         io_thread: IoThread,
-        request_present_open: Box<dyn Fn()>,
+        request_present_open: Box<dyn Fn(bool)>,
         request_present_close: Box<dyn Fn()>,
         dispatch_pdf_job: Box<dyn Fn(PdfJob)>,
         dispatch_chromium_download: Box<dyn Fn()>,
@@ -191,7 +192,7 @@ impl ApplicationCore {
         sender: WebviewSender,
         schedule_flush: Box<dyn Fn()>,
         io_thread: IoThread,
-        request_present_open: Box<dyn Fn()>,
+        request_present_open: Box<dyn Fn(bool)>,
         request_present_close: Box<dyn Fn()>,
         dispatch_pdf_job: Box<dyn Fn(PdfJob)>,
         dispatch_chromium_download: Box<dyn Fn()>,
@@ -1443,7 +1444,10 @@ impl ApplicationCore {
                 InterpretResult::FileAction(FileAction::ExportPdf)
             }
             InteractionEvent::KeyPressed { ref key, .. } if key == PRESENT_KEY => {
-                InterpretResult::StartPresentation
+                InterpretResult::StartPresentation { windowed: false }
+            }
+            InteractionEvent::KeyPressed { ref key, .. } if key == PRESENT_WINDOWED_KEY => {
+                InterpretResult::StartPresentation { windowed: true }
             }
             InteractionEvent::KeyPressed { ref key, .. }
                 if key == DELETE_KEY_BACKSPACE || key == DELETE_KEY_DELETE =>
@@ -1521,8 +1525,8 @@ impl ApplicationCore {
             InterpretResult::SetActiveSlide(slide_id) => self.set_active_slide(slide_id),
             InterpretResult::SetEditorMode(mode) => self.set_editor_mode(mode),
             InterpretResult::SetActiveLayout(layout_id) => self.set_active_layout(layout_id),
-            InterpretResult::StartPresentation => {
-                self.start_presentation();
+            InterpretResult::StartPresentation { windowed } => {
+                self.start_presentation(windowed);
                 Ok(())
             }
             InterpretResult::SendSlideLayoutPicker => self.send_slide_layout_picker(),
@@ -1530,7 +1534,12 @@ impl ApplicationCore {
         }
     }
 
-    fn start_presentation(&mut self) {
+    /// start_presentation — records the slide to open on and asks the event loop
+    /// for presentation windows. `windowed` picks the layout: `false` puts one
+    /// borderless fullscreen audience window on the external display, `true`
+    /// opens an ordinary audience window plus a presenter console side by side
+    /// on the display the editor is on.
+    fn start_presentation(&mut self, windowed: bool) {
         if self.present.is_some() {
             debug!("start_presentation: already presenting; ignoring");
             return;
@@ -1543,9 +1552,9 @@ impl ApplicationCore {
                     return;
                 }
             };
-        info!(slide_index = idx, "presentation requested");
+        info!(slide_index = idx, windowed, "presentation requested");
         self.pending_present_index = Some(idx);
-        (self.request_present_open)();
+        (self.request_present_open)(windowed);
     }
 
     pub fn begin_presentation(&mut self, sender: WebviewSender) {

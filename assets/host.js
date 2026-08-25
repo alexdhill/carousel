@@ -7184,13 +7184,36 @@
         },
     ];
 
-    function buildShareMenu(onPick) {
+    const PRESENT_MODES = [
+        {
+            key: "present",
+            name: "Fullscreen",
+            sub: "Second display when attached",
+            icon: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+        },
+        {
+            key: "present_windowed",
+            name: "Windowed",
+            sub: "Slides and presenter view",
+            icon: '<path d="M3 5h8v14H3zM13 5h8v14h-8z"/>',
+        },
+    ];
+
+    /**
+     * buildOptionMenu — a hidden popup menu of icon/name/subtitle cards.
+     *
+     * `id` is the element id given to the menu, `options` the card descriptors
+     * (`key`, `name`, `sub`, and `icon` SVG path markup), and `onPick` the
+     * callback invoked with an option's `key` when its card is clicked. The
+     * menu is returned detached and hidden; the caller appends and positions it.
+     */
+    function buildOptionMenu(id, options, onPick) {
         const menu = document.createElement("div");
-        menu.id = "share-menu";
+        menu.id = id;
         menu.className = "share-menu";
         menu.hidden = true;
-        for (let i = 0; i < SHARE_EXPORTS.length; i++) {
-            const opt = SHARE_EXPORTS[i];
+        for (let i = 0; i < options.length; i++) {
+            const opt = options[i];
             const card = document.createElement("button");
             card.type = "button";
             card.className = "share-menu__card";
@@ -7228,7 +7251,7 @@
             return;
         }
         let isOpen = false;
-        const menu = buildShareMenu(function (key) {
+        const menu = buildOptionMenu("share-menu", SHARE_EXPORTS, function (key) {
             close();
             sendSyntheticKey(key, {});
         });
@@ -7270,6 +7293,93 @@
             } else {
                 open();
             }
+        });
+    }
+
+    const PRESENT_HOLD_MS = 400;
+
+    /**
+     * wirePresentButton — click starts a fullscreen presentation; pressing and
+     * holding the button for PRESENT_HOLD_MS opens a menu to pick fullscreen or
+     * windowed instead. The click that ends a hold is swallowed so releasing
+     * over the button does not also start a presentation. Does nothing when the
+     * button is absent.
+     */
+    function wirePresentButton() {
+        const btn = document.getElementById("present-btn");
+        if (!btn) {
+            return;
+        }
+        let isOpen = false;
+        let holdTimer = 0;
+        let openedByHold = false;
+        const menu = buildOptionMenu("present-menu", PRESENT_MODES, function (key) {
+            close();
+            sendSyntheticKey(key, {});
+        });
+        document.body.appendChild(menu);
+        function onDoc(e) {
+            if (!menu.contains(e.target) && !btn.contains(e.target)) {
+                close();
+            }
+        }
+        function onKey(e) {
+            if (e.key === "Escape") {
+                close();
+            }
+        }
+        function close() {
+            if (!isOpen) {
+                return;
+            }
+            isOpen = false;
+            openedByHold = false;
+            menu.hidden = true;
+            btn.setAttribute("aria-expanded", "false");
+            document.removeEventListener("mousedown", onDoc, true);
+            document.removeEventListener("keydown", onKey, true);
+        }
+        function open() {
+            const r = btn.getBoundingClientRect();
+            menu.style.top = r.bottom + 6 + "px";
+            menu.style.right = Math.max(8, window.innerWidth - r.right) + "px";
+            menu.hidden = false;
+            isOpen = true;
+            btn.setAttribute("aria-expanded", "true");
+            document.addEventListener("mousedown", onDoc, true);
+            document.addEventListener("keydown", onKey, true);
+        }
+        function cancelHold() {
+            if (holdTimer) {
+                window.clearTimeout(holdTimer);
+                holdTimer = 0;
+            }
+        }
+        btn.addEventListener("mousedown", function () {
+            if (isOpen) {
+                return;
+            }
+            cancelHold();
+            holdTimer = window.setTimeout(function () {
+                holdTimer = 0;
+                openedByHold = true;
+                open();
+            }, PRESENT_HOLD_MS);
+        });
+        btn.addEventListener("mouseup", cancelHold);
+        btn.addEventListener("mouseleave", cancelHold);
+        btn.addEventListener("click", function (e) {
+            e.preventDefault();
+            cancelHold();
+            if (openedByHold) {
+                openedByHold = false;
+                return;
+            }
+            if (isOpen) {
+                close();
+                return;
+            }
+            sendSyntheticKey("present", {});
         });
     }
 
@@ -9407,17 +9517,7 @@
                 });
             });
         }
-        const presentBtn = document.getElementById("present-btn");
-        if (presentBtn) {
-            presentBtn.addEventListener("click", function () {
-
-                window.__deck.send("Interaction", {
-                    kind: "KeyPressed",
-                    key: "present",
-                    modifiers: { shift: false, ctrl: false, alt: false, meta: false },
-                });
-            });
-        }
+        wirePresentButton();
         const globals = document.getElementById("globals-css");
         if (globals) {
             globals.addEventListener("blur", function () {
