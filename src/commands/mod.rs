@@ -1,5 +1,6 @@
 #![allow(dead_code, unused_imports)]
 
+pub mod align_commands;
 pub mod animation;
 pub mod composite;
 pub mod group_commands;
@@ -36,6 +37,7 @@ use crate::deck::{Canvas, CanvasTarget, Deck, ElementId, LayoutId, SlideId};
 use crate::ipc::{Patch, Point, SelectionState};
 use tracing::{debug, warn};
 
+pub use align_commands::{AlignAxis, AlignElements, AlignOp, DistributeAxis};
 pub use animation::{InsertAnimation, RemoveAnimation, ReorderAnimation, SetAnimationProperty};
 pub use composite::CompositeCommand;
 pub use group_commands::{SetGroupLayout, SetGroupScale};

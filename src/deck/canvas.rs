@@ -67,6 +67,27 @@ pub fn find_element<'a>(root: &'a ElementNode, id: &str) -> Option<&'a ElementNo
     None
 }
 
+/// Finds the node whose children contain `id`.
+///
+/// Input: the tree root and a non-empty element id. Output: the parent node,
+/// or `None` when `id` is the root or is absent. Control flow: iterative
+/// depth-first walk bounded by `MAX_TREE_NODES`.
+pub fn find_parent<'a>(root: &'a ElementNode, id: &str) -> Option<&'a ElementNode> {
+    assert!(!id.is_empty(), "find_parent called with empty id");
+    let mut stack: Vec<&'a ElementNode> = Vec::new();
+    stack.push(root);
+    for _ in 0..MAX_TREE_NODES {
+        let node = stack.pop()?;
+        if node.children.iter().any(|c| c.id == id) {
+            return Some(node);
+        }
+        for child in node.children.iter().rev() {
+            stack.push(child);
+        }
+    }
+    None
+}
+
 pub fn find_element_mut<'a>(root: &'a mut ElementNode, id: &str) -> Option<&'a mut ElementNode> {
     assert!(!id.is_empty(), "find_element_mut called with empty id");
     let mut stack: Vec<&'a mut ElementNode> = Vec::new();

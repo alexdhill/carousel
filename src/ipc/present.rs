@@ -49,6 +49,8 @@ pub enum PresentInbound {
     Advance,
     Back,
     Exit,
+
+    PresenterReady,
 }
 
 #[cfg(test)]
@@ -171,6 +173,10 @@ mod tests {
             (r#"{"kind":"Advance"}"#, PresentInbound::Advance),
             (r#"{"kind":"Back"}"#, PresentInbound::Back),
             (r#"{"kind":"Exit"}"#, PresentInbound::Exit),
+            (
+                r#"{"kind":"PresenterReady"}"#,
+                PresentInbound::PresenterReady,
+            ),
         ];
         for (raw, want) in cases {
             let got: PresentInbound = serde_json::from_str(raw).unwrap();

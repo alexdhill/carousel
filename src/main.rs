@@ -23,6 +23,7 @@ use std::path::PathBuf;
 use tao::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoopBuilder, EventLoopWindowTarget},
+    monitor::MonitorHandle,
     window::{Fullscreen, Window, WindowBuilder},
 };
 use tracing::{error, info, warn};
@@ -38,6 +39,9 @@ const PRESET_CSS_JS: &str = include_str!("../assets/preset_css.js");
 const PRESENT_HTML_TEMPLATE: &str = include_str!("../assets/present.html");
 const PRESENT_CSS: &str = include_str!("../assets/present.css");
 const PRESENT_JS: &str = include_str!("../assets/present.js");
+const PRESENTER_HTML_TEMPLATE: &str = include_str!("../assets/presenter.html");
+const PRESENTER_CSS: &str = include_str!("../assets/presenter.css");
+const PRESENTER_JS: &str = include_str!("../assets/presenter.js");
 const MORPH_JS: &str = include_str!("../assets/morph.js");
 const LANDING_HTML_TEMPLATE: &str = include_str!("../assets/landing.html");
 const LANDING_CSS: &str = include_str!("../assets/landing.css");
@@ -259,18 +263,51 @@ fn assemble_present_html(template: &str, css: &str, morph: &str, js: &str) -> St
         .replace("__PRESENT_JS__", js)
 }
 
-fn build_presentation(
+fn assemble_presenter_html(template: &str, css: &str, js: &str) -> String {
+    assert!(
+        template.contains("__PRESENTER_CSS__"),
+        "presenter template missing CSS marker"
+    );
+    assert!(
+        template.contains("__PRESENTER_JS__"),
+        "presenter template missing JS marker"
+    );
+    template
+        .replace("__PRESENTER_CSS__", css)
+        .replace("__PRESENTER_JS__", js)
+}
+
+/// external_monitor — the first monitor that is not the one hosting `editor`.
+/// `None` means there is only one display (or no editor window yet), which is
+/// the signal to skip the presenter console entirely. Monitors are compared by
+/// position because two displays never share an origin on the virtual desktop.
+fn external_monitor(
+    target: &EventLoopWindowTarget<UserEvent>,
+    editor: Option<&Window>,
+) -> Option<MonitorHandle> {
+    let home: MonitorHandle = editor?.current_monitor()?;
+    target
+        .available_monitors()
+        .find(|m| m.position() != home.position())
+}
+
+/// build_present_window — one fullscreen webview wired to the shared present
+/// control channel. Both the audience window and the presenter console are
+/// built through here; they differ only in monitor, title, and document, and
+/// both post `PresentInbound` variants back to the same event loop.
+fn build_present_window(
     target: &EventLoopWindowTarget<UserEvent>,
     proxy: tao::event_loop::EventLoopProxy<UserEvent>,
     present_tx: std::sync::mpsc::Sender<PresentInbound>,
+    monitor: Option<MonitorHandle>,
+    title: &str,
+    html: String,
 ) -> Result<(Window, WebView), Box<dyn std::error::Error>> {
-    let window = WindowBuilder::new()
-        .with_title("carousel — presenting")
-        .with_fullscreen(Some(Fullscreen::Borderless(None)))
-        .build(target)?;
-    let html: String =
-        assemble_present_html(PRESENT_HTML_TEMPLATE, PRESENT_CSS, MORPH_JS, PRESENT_JS);
     assert!(!html.is_empty(), "assembled present html is empty");
+    let window = WindowBuilder::new()
+        .with_title(title)
+        .with_fullscreen(Some(Fullscreen::Borderless(monitor)))
+        .build(target)?;
     let webview = WebViewBuilder::new(&window)
         .with_html(html)
         .with_devtools(true)
@@ -291,6 +328,42 @@ fn build_presentation(
         })
         .build()?;
     Ok((window, webview))
+}
+
+fn build_presentation(
+    target: &EventLoopWindowTarget<UserEvent>,
+    proxy: tao::event_loop::EventLoopProxy<UserEvent>,
+    present_tx: std::sync::mpsc::Sender<PresentInbound>,
+    monitor: Option<MonitorHandle>,
+) -> Result<(Window, WebView), Box<dyn std::error::Error>> {
+    let html: String =
+        assemble_present_html(PRESENT_HTML_TEMPLATE, PRESENT_CSS, MORPH_JS, PRESENT_JS);
+    build_present_window(
+        target,
+        proxy,
+        present_tx,
+        monitor,
+        "carousel — presenting",
+        html,
+    )
+}
+
+fn build_presenter(
+    target: &EventLoopWindowTarget<UserEvent>,
+    proxy: tao::event_loop::EventLoopProxy<UserEvent>,
+    present_tx: std::sync::mpsc::Sender<PresentInbound>,
+    monitor: Option<MonitorHandle>,
+) -> Result<(Window, WebView), Box<dyn std::error::Error>> {
+    let html: String =
+        assemble_presenter_html(PRESENTER_HTML_TEMPLATE, PRESENTER_CSS, PRESENTER_JS);
+    build_present_window(
+        target,
+        proxy,
+        present_tx,
+        monitor,
+        "carousel — presenter",
+        html,
+    )
 }
 
 fn assemble_landing_html(template: &str, css: &str, js: &str) -> String {
@@ -778,6 +851,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     install_main_menu();
 
     let mut present_window: Option<Window> = None;
+    let mut presenter_window: Option<Window> = None;
     let proxy_present = proxy_for_app.clone();
 
     info!("event loop running");
@@ -831,13 +905,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if present_window.is_some() {
                         warn!("OpenPresentation ignored; already presenting");
                     } else {
-                        match build_presentation(target, proxy_present.clone(), present_tx.clone())
-                        {
+                        let external: Option<MonitorHandle> =
+                            external_monitor(target, editor_window.as_ref());
+                        let home: Option<MonitorHandle> = editor_window
+                            .as_ref()
+                            .and_then(|w| w.current_monitor())
+                            .filter(|_| external.is_some());
+                        match build_presentation(
+                            target,
+                            proxy_present.clone(),
+                            present_tx.clone(),
+                            external,
+                        ) {
                             Ok((win, wv)) => {
                                 app.begin_presentation(WebviewSender::new(wv));
                                 present_window = Some(win);
                             }
                             Err(e) => error!("failed to build presentation window: {}", e),
+                        }
+                        match (present_window.is_some(), home) {
+                            (true, Some(monitor)) => {
+                                match build_presenter(
+                                    target,
+                                    proxy_present.clone(),
+                                    present_tx.clone(),
+                                    Some(monitor),
+                                ) {
+                                    Ok((win, wv)) => {
+                                        app.begin_presenter(WebviewSender::new(wv));
+                                        presenter_window = Some(win);
+                                    }
+                                    Err(e) => {
+                                        error!("failed to build presenter window: {}", e)
+                                    }
+                                }
+                            }
+                            (true, None) => {
+                                info!("presenter view skipped; no second display");
+                            }
+                            (false, _) => {}
                         }
                     }
                 }
@@ -856,6 +962,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     app.end_presentation();
                 }
                 present_window = None;
+                presenter_window = None;
             }
             Event::UserEvent(UserEvent::PdfRenderDone { ok, dest }) => {
                 if let Some(app) = app.as_mut() {
@@ -1004,12 +1111,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 window_id,
                 ..
             } => {
-                if Some(window_id) == present_window.as_ref().map(|w| w.id()) {
+                if Some(window_id) == present_window.as_ref().map(|w| w.id())
+                    || Some(window_id) == presenter_window.as_ref().map(|w| w.id())
+                {
                     info!("presentation window closed; ending presentation");
                     if let Some(app) = app.as_mut() {
                         app.end_presentation();
                     }
                     present_window = None;
+                    presenter_window = None;
                 } else if Some(window_id) == editor_window.as_ref().map(|w| w.id()) {
                     match app.as_ref() {
                         Some(a) if a.wants_quit_confirmation() => {
@@ -1047,6 +1157,23 @@ mod tests {
             "worker count out of range: {}",
             many
         );
+    }
+
+    #[test]
+    fn presenter_template_markers_are_substituted() {
+        let html: String =
+            assemble_presenter_html(PRESENTER_HTML_TEMPLATE, PRESENTER_CSS, PRESENTER_JS);
+        assert!(
+            !html.contains("__PRESENTER_CSS__"),
+            "css marker left behind"
+        );
+        assert!(!html.contains("__PRESENTER_JS__"), "js marker left behind");
+        assert!(
+            html.contains("current-slot"),
+            "current preview slot missing"
+        );
+        assert!(html.contains("next-slot"), "next preview slot missing");
+        assert!(html.contains("PresenterReady"), "presenter js not inlined");
     }
 
     #[test]

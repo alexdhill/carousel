@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>carousel — presenter</title>
+    <style>__PRESENTER_CSS__</style>
+</head>
+<body>
+    <header id="bar">
+        <span id="counter">— / —</span>
+        <span id="timer">00:00</span>
+        <button id="timer-toggle" type="button">pause</button>
+        <button id="timer-reset" type="button">reset</button>
+    </header>
+    <main id="stage">
+        <section id="current-pane">
+            <h2 class="pane-label">current</h2>
+            <div class="preview" id="current-slot"></div>
+        </section>
+        <section id="next-pane">
+            <h2 class="pane-label">next</h2>
+            <div class="preview" id="next-slot"></div>
+            <div id="notes"></div>
+        </section>
+    </main>
+    <footer id="controls">
+        <button id="prev-btn" type="button">◀ back</button>
+        <button id="next-btn" type="button">next ▶</button>
+        <button id="exit-btn" type="button">exit</button>
+    </footer>
+    <script>__PRESENTER_JS__</script>
+</body>
+</html>

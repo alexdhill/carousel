@@ -2,6 +2,7 @@ pub mod agent;
 pub mod bridge;
 pub mod landing;
 pub mod present;
+pub mod presenter;
 
 use serde::{Deserialize, Serialize};
 
@@ -131,6 +132,8 @@ pub enum MessageKind {
     PresentSlide(present::PresentSlidePayload),
 
     PresentReveal(present::RevealPayload),
+
+    PresenterUpdate(presenter::PresenterUpdatePayload),
 
     SlideInspectorUpdate(SlideInspectorData),
 
@@ -491,6 +494,11 @@ pub enum InteractionEvent {
 
     GroupSelectionRequested {
         element_ids: Vec<ElementId>,
+    },
+
+    AlignSelectionRequested {
+        element_ids: Vec<ElementId>,
+        op: String,
     },
 
     QuitConfirmed {
@@ -1309,6 +1317,24 @@ mod tests {
         match back {
             InteractionEvent::SetSelectionFromPanel { element_ids } => {
                 assert_eq!(element_ids, vec!["e1", "e2"]);
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn align_selection_requested_roundtrips() {
+        let event = InteractionEvent::AlignSelectionRequested {
+            element_ids: vec!["e1".into(), "e2".into(), "e3".into()],
+            op: "distribute-h".into(),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["kind"], "AlignSelectionRequested");
+        let back: InteractionEvent = serde_json::from_value(json).unwrap();
+        match back {
+            InteractionEvent::AlignSelectionRequested { element_ids, op } => {
+                assert_eq!(element_ids, vec!["e1", "e2", "e3"]);
+                assert_eq!(op, "distribute-h");
             }
             other => panic!("unexpected variant: {other:?}"),
         }

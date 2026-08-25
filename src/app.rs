@@ -6,12 +6,13 @@ use crate::bundle::{
     serialize_deck, serialize_theme,
 };
 use crate::commands::{
-    Command, CommandDispatcher, CompositeCommand, DeleteTableColumn, DeleteTableRow, EditorMode,
-    ElementTransform, FileAction, GeometryProperty, GroupElements, InsertAnimation, InsertElement,
-    InsertLayout, InsertSlide, InsertTableColumn, InsertTableRow, InterpretResult, MoveElement,
-    RemoveAnimation, RemoveElementCommand, RemoveInlineStyle, RemoveSlide, RenameElement,
-    ReorderSlide, ReparentElement, ReplaceSlideContent, ResizeElement, SetAnimationProperty,
-    SetCellStyles, SetCellText, SetDeckTitle, SetElementId, SetElementsTransform, SetEmbedHtml,
+    AlignAxis, AlignElements, AlignOp, Command, CommandDispatcher, CompositeCommand,
+    DeleteTableColumn, DeleteTableRow, DistributeAxis, EditorMode, ElementTransform, FileAction,
+    GeometryProperty, GroupElements, InsertAnimation, InsertElement, InsertLayout, InsertSlide,
+    InsertTableColumn, InsertTableRow, InterpretResult, MoveElement, RemoveAnimation,
+    RemoveElementCommand, RemoveInlineStyle, RemoveSlide, RenameElement, ReorderSlide,
+    ReparentElement, ReplaceSlideContent, ResizeElement, SetAnimationProperty, SetCellStyles,
+    SetCellText, SetDeckTitle, SetElementId, SetElementsTransform, SetEmbedHtml,
     SetGeometryProperty, SetGlobalsCss, SetGroupLayout, SetGroupScale, SetInlineStyle,
     SetLayoutBackground, SetLayoutBackgroundImage, SetLayoutName, SetMorphTransition,
     SetSlideBackground, SetSlideBackgroundImage, SetSlideLayout, SetSlideNotes, SetSlideTitle,
@@ -116,6 +117,8 @@ pub struct ApplicationCore {
     io_thread: IoThread,
 
     present: Option<PresentationSession>,
+
+    presenter: Option<WebviewSender>,
     request_present_open: Box<dyn Fn()>,
     request_present_close: Box<dyn Fn()>,
 
@@ -207,6 +210,7 @@ impl ApplicationCore {
             schedule_flush,
             io_thread,
             present: None,
+            presenter: None,
             request_present_open,
             request_present_close,
             pending_present_index: None,
@@ -1387,6 +1391,24 @@ impl ApplicationCore {
                     None => InterpretResult::Nothing,
                 }
             }
+            InteractionEvent::AlignSelectionRequested { element_ids, op } => {
+                let target: CanvasTarget = match self.active_canvas() {
+                    Some(t) => t,
+                    None => return InterpretResult::Nothing,
+                };
+                let parsed: AlignOp = match parse_align_op(&op) {
+                    Some(o) => o,
+                    None => {
+                        warn!(op = %op, "unknown align op");
+                        return InterpretResult::Nothing;
+                    }
+                };
+                InterpretResult::Command(Box::new(AlignElements {
+                    target,
+                    element_ids,
+                    op: parsed,
+                }))
+            }
             InteractionEvent::QuitConfirmed { save } => {
                 if save {
                     self.pending_quit = true;
@@ -1539,9 +1561,18 @@ impl ApplicationCore {
         self.present = Some(PresentationSession::new(sender, idx));
     }
 
+    /// begin_presenter — adopts the presenter console webview. Called only when
+    /// a second display exists; the console mirrors the same cursor as the
+    /// audience window and never owns one of its own.
+    pub fn begin_presenter(&mut self, sender: WebviewSender) {
+        info!("presenter console window ready");
+        self.presenter = Some(sender);
+    }
+
     pub fn handle_present_control(&mut self, ctrl: PresentInbound) -> AppResult<()> {
         match ctrl {
             PresentInbound::Ready => self.handle_present_ready(),
+            PresentInbound::PresenterReady => self.handle_presenter_ready(),
             PresentInbound::Advance => self.present_step(true),
             PresentInbound::Back => self.present_step(false),
             PresentInbound::Exit => {
@@ -1550,6 +1581,35 @@ impl ApplicationCore {
                 Ok(())
             }
         }
+    }
+
+    /// handle_presenter_ready — first frame for the console: deck assets so the
+    /// previews resolve image urls, then the current console frame.
+    fn handle_presenter_ready(&self) -> AppResult<()> {
+        let presenter = match &self.presenter {
+            Some(p) => p,
+            None => return Ok(()),
+        };
+        if let Some(bundle) = build_assets_bundle(self.dispatcher.deck()) {
+            presenter.send(MessageKind::PresentAssets(bundle))?;
+        }
+        self.send_presenter_update()
+    }
+
+    /// send_presenter_update — pushes the current console frame. No-op when the
+    /// console is not open or the cursor has no slide, so every call site can
+    /// fire it unconditionally after a cursor move.
+    fn send_presenter_update(&self) -> AppResult<()> {
+        let (presenter, session) = match (&self.presenter, &self.present) {
+            (Some(p), Some(s)) => (p, s),
+            _ => return Ok(()),
+        };
+        let payload = match session.presenter_payload(self.dispatcher.deck()) {
+            Some(p) => p,
+            None => return Ok(()),
+        };
+        debug!(index = payload.index, "ipc -> PresenterUpdate");
+        presenter.send(MessageKind::PresenterUpdate(payload))
     }
 
     fn handle_present_ready(&mut self) -> AppResult<()> {
@@ -1574,7 +1634,7 @@ impl ApplicationCore {
         if let Some(reveal) = session.current_reveal(deck) {
             session.sender().send(MessageKind::PresentReveal(reveal))?;
         }
-        Ok(())
+        self.send_presenter_update()
     }
 
     fn present_step(&mut self, forward: bool) -> AppResult<()> {
@@ -1590,17 +1650,19 @@ impl ApplicationCore {
         };
         match step {
             PresentStep::Reveal(reveal) => {
-                session.sender().send(MessageKind::PresentReveal(reveal))
+                session.sender().send(MessageKind::PresentReveal(reveal))?;
             }
             PresentStep::SlideChanged { slide, reveal } => {
                 session.sender().send(MessageKind::PresentSlide(slide))?;
-                session.sender().send(MessageKind::PresentReveal(reveal))
+                session.sender().send(MessageKind::PresentReveal(reveal))?;
             }
-            PresentStep::Unchanged => Ok(()),
+            PresentStep::Unchanged => return Ok(()),
         }
+        self.send_presenter_update()
     }
 
     pub fn end_presentation(&mut self) {
+        self.presenter = None;
         if self.present.take().is_some() {
             info!("presentation session ended");
         }
@@ -1651,7 +1713,15 @@ impl ApplicationCore {
                 }
                 self.react_to_outcome(outcome);
             }
-            Err(e) => warn!(label, "command failed: {}", e),
+            Err(e) => {
+                warn!(label, "command failed: {}", e);
+                if let Err(send_err) = self.sender.send(MessageKind::Notice {
+                    message: format!("{label} failed"),
+                    detail: Some(e.to_string()),
+                }) {
+                    warn!("notice send failed: {}", send_err);
+                }
+            }
         }
     }
 
@@ -3588,6 +3658,25 @@ fn parse_group_dir_opt(s: Option<&str>) -> Option<crate::deck::style::GroupDirec
         _ => None,
     }
 }
+/// Maps a wire token from the inspector's align row onto an `AlignOp`.
+///
+/// Input: one of `left | h-center | right | top | v-center | bottom |
+/// distribute-h | distribute-v`. Output: the operation, or `None` for any
+/// other token so an unknown request is ignored rather than guessed at.
+fn parse_align_op(s: &str) -> Option<AlignOp> {
+    match s {
+        "left" => Some(AlignOp::Align(AlignAxis::Left)),
+        "h-center" => Some(AlignOp::Align(AlignAxis::HCenter)),
+        "right" => Some(AlignOp::Align(AlignAxis::Right)),
+        "top" => Some(AlignOp::Align(AlignAxis::Top)),
+        "v-center" => Some(AlignOp::Align(AlignAxis::VCenter)),
+        "bottom" => Some(AlignOp::Align(AlignAxis::Bottom)),
+        "distribute-h" => Some(AlignOp::Distribute(DistributeAxis::Horizontal)),
+        "distribute-v" => Some(AlignOp::Distribute(DistributeAxis::Vertical)),
+        _ => None,
+    }
+}
+
 fn parse_group_dist_opt(s: Option<&str>) -> Option<crate::deck::style::GroupDistribution> {
     use crate::deck::style::GroupDistribution::*;
     match s {

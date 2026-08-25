@@ -6092,6 +6092,7 @@
         }
         refreshCropBox();
         refreshTableBox();
+        setAlignBoxVisible(selectedGuideId === null && currentSelectionIds.length >= 2);
 
         if (selectedGuideId !== null) {
             clearInspectorInputs();
@@ -8683,6 +8684,78 @@
             },
         });
         return animField(label, dd);
+    }
+
+    const ALIGN_OPS = [
+        { op: "left", tip: "Align left", min: 2, d: "M4 4v16M4 8h12M4 15h8" },
+        { op: "h-center", tip: "Align centers", min: 2, d: "M12 4v16M6 8h12M8 15h8" },
+        { op: "right", tip: "Align right", min: 2, d: "M20 4v16M8 8h12M12 15h8" },
+        { op: "top", tip: "Align top", min: 2, d: "M4 4h16M8 4v12M15 4v8" },
+        { op: "v-center", tip: "Align middles", min: 2, d: "M4 12h16M8 6v12M15 8v8" },
+        { op: "bottom", tip: "Align bottom", min: 2, d: "M4 20h16M8 8v12M15 12v8" },
+        {
+            op: "distribute-h",
+            tip: "Distribute horizontally",
+            min: 3,
+            d: "M4 4v16M20 4v16M10 8h4v8h-4z",
+        },
+        {
+            op: "distribute-v",
+            tip: "Distribute vertically",
+            min: 3,
+            d: "M4 4h16M4 20h16M8 10h8v4H8z",
+        },
+    ];
+
+    function buildAlignControls(host) {
+        console.assert(host, "align controls host missing");
+        for (let i = 0; i < ALIGN_OPS.length; i++) {
+            const spec = ALIGN_OPS[i];
+            const b = document.createElement("button");
+            b.type = "button";
+            b.className = "inspector__segment-btn tt";
+            b.dataset.alignOp = spec.op;
+            b.dataset.alignMin = String(spec.min);
+            b.setAttribute("data-tip", spec.tip);
+            b.setAttribute("data-key", "");
+            b.setAttribute("aria-label", spec.tip);
+            b.innerHTML = segIcon(spec.d);
+            host.appendChild(b);
+        }
+        host.addEventListener("click", onAlignClick);
+    }
+
+    function onAlignClick(e) {
+        const btn = e.target.closest("[data-align-op]");
+        if (!btn || btn.disabled) {
+            return;
+        }
+        const min = Number(btn.dataset.alignMin);
+        if (currentSelectionIds.length < min) {
+            return;
+        }
+        window.__deck.send("Interaction", {
+            kind: "AlignSelectionRequested",
+            element_ids: currentSelectionIds.slice(),
+            op: btn.dataset.alignOp,
+        });
+    }
+
+    function setAlignBoxVisible(show) {
+        const box = document.getElementById("align-box");
+        const host = document.getElementById("align-controls");
+        if (!box || !host) {
+            return;
+        }
+        if (host.childElementCount === 0) {
+            buildAlignControls(host);
+        }
+        box.style.display = show ? "" : "none";
+        const count = currentSelectionIds.length;
+        for (let i = 0; i < host.children.length; i++) {
+            const btn = host.children[i];
+            btn.disabled = count < Number(btn.dataset.alignMin);
+        }
     }
 
     function refreshGroupFlexSection() {

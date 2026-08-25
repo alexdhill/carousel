@@ -3,6 +3,7 @@ use crate::deck::{Deck, SlideId};
 use crate::html::serialize::serialize_slide_themed;
 use crate::ipc::bridge::WebviewSender;
 use crate::ipc::present::{PresentSlidePayload, RevealPayload};
+use crate::ipc::presenter::PresenterUpdatePayload;
 use crate::present::reveal::{forward_reveal, snap_reveal};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,6 +96,59 @@ impl PresentCursor {
         ))
     }
 
+    /// next_slide_payload — renders the slide after the cursor, or `None` when
+    /// the cursor sits on the last slide. Used only by the presenter console;
+    /// the audience window never mounts it.
+    pub fn next_slide_payload(&self, deck: &Deck) -> Option<PresentSlidePayload> {
+        let index: usize = self.slide_index + 1;
+        let sid: &SlideId = deck.slide_order.get(index)?;
+        Some(slide_payload(deck, sid, index + 1, deck.slide_order.len()))
+    }
+
+    /// current_notes — speaker notes for the slide under the cursor, empty when
+    /// the slide is missing or has no notes set.
+    pub fn current_notes(&self, deck: &Deck) -> String {
+        deck.slide_order
+            .get(self.slide_index)
+            .and_then(|sid| deck.slides.get(sid))
+            .and_then(|s| s.metadata.notes.clone())
+            .unwrap_or_default()
+    }
+
+    /// presenter_payload — one console frame: current slide, next slide, notes,
+    /// position, and the not-yet-revealed element ids for both previews so they
+    /// match what the audience sees. `None` when the cursor has no slide.
+    pub fn presenter_payload(&self, deck: &Deck) -> Option<PresenterUpdatePayload> {
+        let current: PresentSlidePayload = self.current_slide_payload(deck)?;
+        let current_hidden: Vec<String> = self
+            .current_reveal(deck)
+            .map(|r| r.hidden)
+            .unwrap_or_default();
+        let next: Option<PresentSlidePayload> = self.next_slide_payload(deck);
+        Some(PresenterUpdatePayload {
+            index: self.slide_index,
+            count: deck.slide_order.len(),
+            width: deck.manifest.dimensions.width,
+            height: deck.manifest.dimensions.height,
+            current_html: current.slide_html,
+            next_html: next.map(|n| n.slide_html).unwrap_or_default(),
+            current_hidden,
+            next_hidden: self.next_hidden(deck),
+            notes: self.current_notes(deck),
+            theme_css: current.theme_css,
+            globals_css: current.globals_css,
+        })
+    }
+
+    fn next_hidden(&self, deck: &Deck) -> Vec<String> {
+        let sid: &SlideId = match deck.slide_order.get(self.slide_index + 1) {
+            Some(id) => id,
+            None => return Vec::new(),
+        };
+        let timeline = self.timeline(deck, sid);
+        snap_reveal(sid, &timeline, 0).hidden
+    }
+
     fn snapped_slide_change(
         &self,
         deck: &Deck,
@@ -179,6 +233,10 @@ impl PresentationSession {
 
     pub fn current_slide_payload(&self, deck: &Deck) -> Option<PresentSlidePayload> {
         self.cursor.current_slide_payload(deck)
+    }
+
+    pub fn presenter_payload(&self, deck: &Deck) -> Option<PresenterUpdatePayload> {
+        self.cursor.presenter_payload(deck)
     }
 }
 
@@ -353,6 +411,54 @@ mod tests {
             }
             other => panic!("expected SlideChanged, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn next_slide_payload_is_none_on_last_slide_and_set_otherwise() {
+        let deck = deck_with(vec![("s1", vec![]), ("s2", vec![])]);
+        let first = PresentCursor::new(0);
+        let next = first.next_slide_payload(&deck).expect("s2 follows s1");
+        assert_eq!(next.slide_id, "s2");
+        assert!(!next.slide_html.is_empty());
+
+        let last = PresentCursor::new(1);
+        assert!(last.next_slide_payload(&deck).is_none());
+    }
+
+    #[test]
+    fn presenter_payload_carries_notes_position_and_hidden_lists() {
+        let mut deck = deck_with(vec![
+            ("s1", vec![]),
+            ("s2", vec![click_entry("b1", "el_b")]),
+        ]);
+        deck.slides.get_mut("s1").unwrap().metadata.notes = Some("open strong".into());
+
+        let cur = PresentCursor::new(0);
+        let p = cur.presenter_payload(&deck).expect("slide exists");
+        assert_eq!(p.index, 0);
+        assert_eq!(p.count, 2);
+        assert_eq!(p.notes, "open strong");
+        assert!(!p.current_html.is_empty());
+        assert!(!p.next_html.is_empty());
+
+        assert_eq!(p.next_hidden, vec!["el_b".to_string()]);
+    }
+
+    #[test]
+    fn presenter_payload_has_empty_notes_and_next_on_last_slide() {
+        let deck = deck_with(vec![("s1", vec![])]);
+        let cur = PresentCursor::new(0);
+        let p = cur.presenter_payload(&deck).expect("slide exists");
+        assert!(p.notes.is_empty(), "unset notes come through empty");
+        assert!(p.next_html.is_empty(), "last slide has no next preview");
+        assert!(p.next_hidden.is_empty());
+    }
+
+    #[test]
+    fn presenter_payload_is_none_for_out_of_range_cursor() {
+        let deck = deck_with(vec![("s1", vec![])]);
+        let cur = PresentCursor::new(7);
+        assert!(cur.presenter_payload(&deck).is_none());
     }
 
     #[test]
