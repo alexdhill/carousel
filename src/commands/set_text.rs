@@ -62,19 +62,35 @@ impl Command for SetTextContent {
             count,
             date: crate::html::serialize::today_ymd(),
         };
-        let text: String = crate::html::serialize::resolve_tokens(raw, &ctx);
-        let src: Option<String> = if raw.contains("${") {
-            Some(raw.to_string())
+        // `SetText` writes textContent and would flatten any markup, so a
+        // formatted body has to go over as inner HTML instead.
+        let patch: Patch = if self.new_content.is_plain() {
+            Patch::SetText {
+                element_id: self.element_id.clone(),
+                text: crate::html::serialize::resolve_tokens(raw, &ctx),
+                src: if raw.contains("${") {
+                    Some(raw.to_string())
+                } else {
+                    None
+                },
+            }
         } else {
-            None
+            // ponytail: SetInnerHtml carries no `src`, so a formatted body that
+            // also contains a ${token} loses the raw text the editor would
+            // restore. Widen the patch if tokens and inline marks need to mix.
+            let opts: crate::html::serialize::RenderOpts = crate::html::serialize::RenderOpts {
+                ctx: Some(ctx),
+                hide_placeholders: false,
+                min_element_size: 0.0,
+            };
+            Patch::SetInnerHtml {
+                element_id: self.element_id.clone(),
+                html: crate::html::serialize::serialize_rich_body(&self.new_content, &opts),
+            }
         };
 
         Ok(CommandOutput {
-            patches: vec![Patch::SetText {
-                element_id: self.element_id.clone(),
-                text,
-                src,
-            }],
+            patches: vec![patch],
             inverse: Box::new(inverse),
             dirty_targets: vec![self.target.clone()],
             manifest_dirty: false,
@@ -93,6 +109,20 @@ mod tests {
     use super::*;
     use crate::deck::Deck;
     use crate::deck::builders::{group_element, image_element};
+
+    fn bold_head(text: &str, end: usize) -> RichText {
+        use crate::deck::element::{RunMarks, TextRun};
+        let mut rt = RichText::new(text);
+        rt.runs = vec![TextRun {
+            start: 0,
+            end,
+            marks: RunMarks {
+                bold: true,
+                ..RunMarks::default()
+            },
+        }];
+        rt
+    }
 
     fn fresh_deck_first_text_child() -> (Deck, SlideId, ElementId) {
         let deck = Deck::sample();
@@ -116,6 +146,45 @@ mod tests {
                 assert_eq!(src.as_deref(), Some("Slide ${slideNumber}"));
             }
             _ => panic!("expected SetText"),
+        }
+    }
+
+    #[test]
+    fn set_text_emits_inner_html_when_the_body_is_formatted() {
+        let (mut deck, sid, eid) = fresh_deck_first_text_child();
+        let content = bold_head("bold plain", 4);
+        let out = SetTextContent {
+            target: CanvasTarget::Slide(sid),
+            element_id: eid,
+            new_content: content,
+        }
+        .apply(&mut deck)
+        .unwrap();
+        match &out.patches[0] {
+            Patch::SetInnerHtml { html, .. } => assert_eq!(html, "<b>bold</b> plain"),
+            other => panic!("expected SetInnerHtml, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_text_inverse_of_a_formatted_body_restores_the_runs() {
+        let (mut deck, sid, eid) = fresh_deck_first_text_child();
+        let content = bold_head("bold plain", 4);
+        let out = SetTextContent {
+            target: CanvasTarget::Slide(sid.clone()),
+            element_id: eid.clone(),
+            new_content: content.clone(),
+        }
+        .apply(&mut deck)
+        .unwrap();
+        match &deck.slides[&sid].find_element(&eid).unwrap().content {
+            ElementContent::Text(rt) => assert_eq!(rt, &content),
+            other => panic!("expected Text, got {other:?}"),
+        }
+        out.inverse.apply(&mut deck).unwrap();
+        match &deck.slides[&sid].find_element(&eid).unwrap().content {
+            ElementContent::Text(rt) => assert!(rt.is_plain()),
+            other => panic!("expected Text, got {other:?}"),
         }
     }
 

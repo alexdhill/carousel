@@ -41,8 +41,7 @@ const DEFAULT_THEME_CSS: &str = r#"
 }
 [data-element-type="text"] {
     white-space: pre-wrap;
-    display: flex;
-    flex-direction: column;
+    display: block;
 }
 "#;
 

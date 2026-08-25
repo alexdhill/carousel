@@ -18,7 +18,7 @@ const BASE_SLIDE_CSS: &str = r#"
 }
 .slide__content { position: relative; width: 100%; height: 100%; }
 [data-element-id] { position: absolute; user-select: none; }
-[data-element-type="text"] { white-space: pre-wrap; display: flex; flex-direction: column; }
+[data-element-type="text"] { white-space: pre-wrap; display: block; }
 "#;
 
 const PRESET_CSS: &str = r#"[data-element-type="text"].title {

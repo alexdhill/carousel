@@ -2364,6 +2364,12 @@
             if (ev.key === "Escape") {
                 ev.preventDefault();
                 cancelTextEdit();
+                return;
+            }
+            const mark = matchTextMarkShortcut(ev);
+            if (mark) {
+                ev.preventDefault();
+                applyMarkInEditor(mark);
             }
         };
         const onBlur = function () {
@@ -2372,12 +2378,18 @@
         textEditState = {
             elementId: elementId,
             target: target,
-            original: target.innerText,
+            original: target.innerHTML,
             onKeydown: onKeydown,
             onBlur: onBlur,
         };
 
-        if (target.dataset && typeof target.dataset.src === "string") {
+        // Swapping in the raw token text flattens markup, so only do it for a
+        // body that is a bare text node anyway.
+        if (
+            target.dataset &&
+            typeof target.dataset.src === "string" &&
+            target.childElementCount === 0
+        ) {
             target.textContent = target.dataset.src;
         }
         target.setAttribute("contenteditable", "true");
@@ -2407,10 +2419,10 @@
             window.__deck.send("Interaction", {
                 kind: "TextEditEnded",
                 element_id: state.elementId,
-                text: target.innerText,
+                content: richTextFromDom(target),
             });
         } else {
-            target.textContent = state.original;
+            target.innerHTML = state.original;
         }
         if (typeof target.blur === "function") {
             target.blur();
@@ -2423,6 +2435,184 @@
 
     function cancelTextEdit() {
         finishTextEdit(false);
+    }
+
+    const TEXT_MARK_TAGS = {
+        B: "bold",
+        STRONG: "bold",
+        I: "italic",
+        EM: "italic",
+        U: "underline",
+        S: "strike",
+        STRIKE: "strike",
+        DEL: "strike",
+    };
+
+    // Mirrors parse_rich_text in src/html/parse.rs: the contenteditable DOM is
+    // whatever the browser produced, this flattens it back to plain text plus
+    // byte ranges. Rust normalizes and re-serializes, so browser markup never
+    // reaches the deck.
+    function richTextFromDom(el) {
+        const encoder = new TextEncoder();
+        const runs = [];
+        let plain = "";
+        let bytes = 0;
+        const stack = [];
+        let i;
+        for (i = el.childNodes.length - 1; i >= 0; i--) {
+            stack.push({ node: el.childNodes[i], marks: {} });
+        }
+        const MAX_NODES = 100000;
+        let visited = 0;
+        while (stack.length > 0 && visited < MAX_NODES) {
+            visited++;
+            const entry = stack.pop();
+            const node = entry.node;
+            if (node.nodeType === 3) {
+                const start = bytes;
+                plain += node.nodeValue;
+                bytes += encoder.encode(node.nodeValue).length;
+                if (Object.keys(entry.marks).length > 0 && bytes > start) {
+                    runs.push({ start: start, end: bytes, marks: entry.marks });
+                }
+                continue;
+            }
+            if (node.nodeType !== 1) {
+                continue;
+            }
+            if (node.tagName === "BR") {
+                plain += "\n";
+                bytes += 1;
+                continue;
+            }
+            // The browser starts a new block on Enter; innerText used to turn
+            // that into a newline and the model still expects one. Only these
+            // tags, never computed display: a mark wrapper inside a flex text
+            // box computes as block but must not break the line.
+            if (
+                (node.tagName === "DIV" || node.tagName === "P") &&
+                bytes > 0 &&
+                plain.charAt(plain.length - 1) !== "\n"
+            ) {
+                plain += "\n";
+                bytes += 1;
+            }
+            const marks = mergeDomMarks(node, entry.marks);
+            for (i = node.childNodes.length - 1; i >= 0; i--) {
+                stack.push({ node: node.childNodes[i], marks: marks });
+            }
+        }
+        return { plain: plain, runs: runs };
+    }
+
+    function mergeDomMarks(node, inherited) {
+        const marks = Object.assign({}, inherited);
+        const named = TEXT_MARK_TAGS[node.tagName];
+        if (named) {
+            marks[named] = true;
+        }
+        if (node.tagName === "A" && node.getAttribute("href")) {
+            marks.link = node.getAttribute("href");
+        }
+        const style = node.style;
+        if (style) {
+            const weight = style.fontWeight;
+            if (weight === "bold" || weight === "bolder" || parseInt(weight, 10) >= 600) {
+                marks.bold = true;
+            }
+            if (style.fontStyle === "italic") {
+                marks.italic = true;
+            }
+            const deco = style.textDecoration || style.textDecorationLine || "";
+            if (deco.indexOf("underline") >= 0) {
+                marks.underline = true;
+            }
+            if (deco.indexOf("line-through") >= 0) {
+                marks.strike = true;
+            }
+            if (style.color) {
+                marks.color = { Literal: style.color };
+            }
+        }
+        return marks;
+    }
+
+    const TEXT_MARK_COMMANDS = {
+        bold: "bold",
+        italic: "italic",
+        underline: "underline",
+        strike: "strikeThrough",
+    };
+
+    // Cmd/Ctrl+B, +I, +U and +Shift+X. Returns the mark name or null.
+    function matchTextMarkShortcut(e) {
+        if (!(e.metaKey || e.ctrlKey) || e.altKey) {
+            return null;
+        }
+        const key = typeof e.key === "string" ? e.key.toLowerCase() : "";
+        if (e.shiftKey) {
+            return key === "x" ? "strike" : null;
+        }
+        if (key === "b") {
+            return "bold";
+        }
+        if (key === "i") {
+            return "italic";
+        }
+        if (key === "u") {
+            return "underline";
+        }
+        return null;
+    }
+
+    const TEXT_MARK_DECLS = {
+        bold: ["font-weight", "700"],
+        italic: ["font-style", "italic"],
+        underline: ["text-decoration", "underline"],
+        strike: ["text-decoration", "line-through"],
+    };
+
+    // Outside the editor the mark applies to the whole box, which is what the
+    // inspector's B/I/U/S buttons already do. Drive that same control rather
+    // than adding character runs on top of it, or the two stack up.
+    function toggleWholeBoxMark(mark) {
+        const want = TEXT_MARK_DECLS[mark];
+        const box = textStyleControls[0];
+        if (!want || !box || currentSelectionIds.length !== 1) {
+            return false;
+        }
+        const el = findElement(currentSelectionIds[0]);
+        const type = el ? el.dataset.elementType : "";
+        if (type !== "text" && type !== "table") {
+            return false;
+        }
+        let i;
+        for (i = 0; i < TEXT_STYLE_BUTTONS.length; i++) {
+            const spec = TEXT_STYLE_BUTTONS[i];
+            if (spec.prop === want[0] && spec.on === want[1]) {
+                toggleTextStyle(box, spec);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Inside the editor the browser already owns both cases the user cares
+    // about: a range takes the mark now, a bare caret carries it into the next
+    // characters typed. Commit reads the resulting DOM back into runs.
+    function applyMarkInEditor(mark) {
+        const command = TEXT_MARK_COMMANDS[mark];
+        if (!command) {
+            return;
+        }
+        try {
+            document.execCommand("styleWithCSS", false, false);
+            if (!document.execCommand(command, false, null)) {
+                console.warn("text mark command refused:", mark);
+            }
+        } catch (err) {
+            console.warn("text mark command failed:", mark, err);
+        }
     }
 
     function selectAllText(el) {
@@ -9941,6 +10131,12 @@
         }
         if (isEditableFocus()) {
 
+            return;
+        }
+
+        const markShortcut = matchTextMarkShortcut(e);
+        if (markShortcut && !textEditState && toggleWholeBoxMark(markShortcut)) {
+            e.preventDefault();
             return;
         }
 

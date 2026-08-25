@@ -897,12 +897,15 @@ impl ApplicationCore {
 
             InteractionEvent::TextEditStarted { .. } => InterpretResult::Nothing,
             InteractionEvent::TextEdited { .. } => InterpretResult::Nothing,
-            InteractionEvent::TextEditEnded { element_id, text } => {
+            InteractionEvent::TextEditEnded {
+                element_id,
+                content,
+            } => {
                 match build_set_text_command(
                     &self.dispatcher,
                     self.active_canvas(),
                     element_id,
-                    text,
+                    content,
                 ) {
                     Some(cmd) => InterpretResult::Command(cmd),
                     None => InterpretResult::Nothing,
@@ -3520,27 +3523,34 @@ fn build_set_text_command(
     dispatcher: &CommandDispatcher,
     active: Option<CanvasTarget>,
     element_id: ElementId,
-    new_text: String,
+    new_content: RichText,
 ) -> Option<Box<dyn Command>> {
     let target: CanvasTarget = active?;
     assert!(
         !target.id().is_empty(),
         "build_set_text_command: active canvas id is empty"
     );
-    let canvas = dispatcher.deck().canvas(&target)?;
-    let element = canvas.find_element(&element_id)?;
-    let current: &str = match &element.content {
-        ElementContent::Text(rt) => rt.plain.as_str(),
-        _ => return None,
-    };
-    if current == new_text {
+    let current: RichText = read_text_content(dispatcher, &target, &element_id)?;
+    if current == new_content {
         return None;
     }
     Some(Box::new(SetTextContent {
         target,
         element_id,
-        new_content: RichText::new(new_text),
+        new_content,
     }))
+}
+
+fn read_text_content(
+    dispatcher: &CommandDispatcher,
+    target: &CanvasTarget,
+    element_id: &ElementId,
+) -> Option<RichText> {
+    let canvas = dispatcher.deck().canvas(target)?;
+    match &canvas.find_element(element_id)?.content {
+        ElementContent::Text(rt) => Some(rt.clone()),
+        _ => None,
+    }
 }
 
 fn build_set_embed_command(
@@ -6238,7 +6248,7 @@ mod tests {
             &dispatcher,
             Some(CanvasTarget::Slide(sid.clone())),
             eid,
-            "brand new text".into(),
+            RichText::new("brand new text"),
         );
         let cmd = out.expect("changed text should produce a command");
         assert_eq!(cmd.label(), "Edit Text");
@@ -6247,12 +6257,12 @@ mod tests {
     #[test]
     fn build_set_text_command_none_when_text_unchanged() {
         let (dispatcher, _sel, sid, eid) = fixture();
-        let current: String = match &dispatcher.deck().slides[&sid]
+        let current: RichText = match &dispatcher.deck().slides[&sid]
             .find_element(&eid)
             .unwrap()
             .content
         {
-            ElementContent::Text(rt) => rt.plain.clone(),
+            ElementContent::Text(rt) => rt.clone(),
             other => panic!("expected text, got {other:?}"),
         };
 
@@ -6270,7 +6280,7 @@ mod tests {
     #[test]
     fn build_set_text_command_none_without_active_slide() {
         let (dispatcher, _sel, _sid, eid) = fixture();
-        assert!(build_set_text_command(&dispatcher, None, eid, "x".into()).is_none());
+        assert!(build_set_text_command(&dispatcher, None, eid, RichText::new("x")).is_none());
     }
 
     #[test]
@@ -6282,7 +6292,7 @@ mod tests {
                 &dispatcher,
                 Some(CanvasTarget::Slide(sid.clone())),
                 root_id,
-                "x".into()
+                RichText::new("x")
             )
             .is_none()
         );

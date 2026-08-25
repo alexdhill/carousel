@@ -191,10 +191,9 @@ fn parse_typed_payload(
     match element_type {
         ElementType::Text => {
             let ts: TextStyle = parse_text_style(style_decls);
-            let text: String = extract_text(node);
             Ok((
                 ElementStyle::Text(ts),
-                ElementContent::Text(RichText::new(text)),
+                ElementContent::Text(parse_rich_text(node)),
                 vec![],
             ))
         }
@@ -312,7 +311,7 @@ fn parse_table_row(tr_node: &NodeRef) -> Vec<TableCell> {
             parse_style_decls(a.get("style").unwrap_or(""))
         };
         row.push(TableCell {
-            content: RichText::new(extract_text(&child)),
+            content: parse_rich_text(&child),
             style_overrides,
             colspan: 1,
             rowspan: 1,
@@ -407,14 +406,151 @@ pub fn parse_slide_children_lenient(html: &str) -> (Vec<ElementNode>, usize) {
     (out, skipped)
 }
 
-fn extract_text(node: &NodeRef) -> String {
-    let mut out: String = String::new();
+/// Read the body of a text element or table cell back into a `RichText`.
+///
+/// Inputs: the element node whose descendants carry the text. Output: a
+/// normalized `RichText` — `plain` always holds every character seen, `runs`
+/// hold the marks recognised from `<b>/<i>/<u>/<s>/<a>` and span styles, and
+/// `list` is set when a `<ul>/<ol data-list>` wraps the body. Errors: none;
+/// unknown inline tags contribute their text and no marks. Control flow: an
+/// iterative descendant walk with a fixed node ceiling, then `normalize_runs`.
+fn parse_rich_text(node: &NodeRef) -> RichText {
+    let mut rt: RichText = RichText::default();
+    match find_list_root(node) {
+        Some((list_node, kind)) => {
+            let mut levels: Vec<u8> = Vec::new();
+            let mut first: bool = true;
+            for item in list_node.children() {
+                let is_li: bool = item
+                    .as_element()
+                    .map(|e| e.name.local.as_ref() == "li")
+                    .unwrap_or(false);
+                if !is_li {
+                    continue;
+                }
+                if !first {
+                    rt.plain.push('\n');
+                }
+                first = false;
+                levels.push(read_level(&item));
+                collect_marked_text(&item, &mut rt);
+            }
+            rt.list = Some(ListStyle { kind, levels });
+        }
+        None => collect_marked_text(node, &mut rt),
+    }
+    normalize_runs(&mut rt);
+    rt
+}
+
+fn find_list_root(node: &NodeRef) -> Option<(NodeRef, ListKind)> {
     for child in node.children() {
-        if let Some(text) = child.as_text() {
-            out.push_str(&text.borrow());
+        let ed = match child.as_element() {
+            Some(e) => e,
+            None => continue,
+        };
+        let name: &str = ed.name.local.as_ref();
+        if name != "ul" && name != "ol" {
+            continue;
+        }
+        let kind: ListKind = {
+            let a = ed.attributes.borrow();
+            a.get("data-list")
+                .and_then(ListKind::from_html)
+                .unwrap_or(if name == "ol" {
+                    ListKind::Ordered
+                } else {
+                    ListKind::Bullet
+                })
+        };
+        return Some((child.clone(), kind));
+    }
+    None
+}
+
+fn read_level(item: &NodeRef) -> u8 {
+    item.as_element()
+        .and_then(|e| e.attributes.borrow().get("data-level").map(str::to_string))
+        .and_then(|v| v.parse::<u8>().ok())
+        .unwrap_or(0)
+}
+
+fn collect_marked_text(root: &NodeRef, rt: &mut RichText) {
+    const MAX_NODES: usize = 100_000;
+    let mut stack: Vec<(NodeRef, RunMarks)> = Vec::new();
+    for child in root.children().rev() {
+        stack.push((child, RunMarks::default()));
+    }
+    for _ in 0..MAX_NODES {
+        let (node, marks) = match stack.pop() {
+            Some(v) => v,
+            None => break,
+        };
+        if let Some(text) = node.as_text() {
+            let start: usize = rt.plain.len();
+            rt.plain.push_str(&text.borrow());
+            if !marks.is_empty() {
+                rt.runs.push(TextRun {
+                    start,
+                    end: rt.plain.len(),
+                    marks,
+                });
+            }
+            continue;
+        }
+        if node.as_element().is_none() {
+            continue;
+        }
+        let inner: RunMarks = merge_marks(&node, marks);
+        for child in node.children().rev() {
+            stack.push((child, inner.clone()));
         }
     }
-    out
+}
+
+fn merge_marks(node: &NodeRef, mut marks: RunMarks) -> RunMarks {
+    let ed = match node.as_element() {
+        Some(e) => e,
+        None => return marks,
+    };
+    match ed.name.local.as_ref() {
+        "b" | "strong" => marks.bold = true,
+        "i" | "em" => marks.italic = true,
+        "u" => marks.underline = true,
+        "s" | "strike" | "del" => marks.strike = true,
+        _ => {}
+    }
+    let a = ed.attributes.borrow();
+    if ed.name.local.as_ref() == "a"
+        && let Some(href) = a.get("href")
+    {
+        marks.link = Some(href.to_string());
+    }
+    let decls: BTreeMap<String, String> = parse_style_decls(a.get("style").unwrap_or(""));
+    if let Some(v) = decls.get("color") {
+        marks.color = Some(parse_color_ref(v));
+    }
+    if let Some(l) = decls.get("font-size").and_then(|v| parse_length(v)) {
+        marks.font_size = Some(l);
+    }
+    // The editor is a contenteditable, so marks can also arrive as the
+    // browser's own CSS spelling rather than as tags.
+    if let Some(w) = decls.get("font-weight")
+        && (w == "bold" || w == "bolder" || w.parse::<u16>().is_ok_and(|n| n >= 600))
+    {
+        marks.bold = true;
+    }
+    if decls.get("font-style").map(String::as_str) == Some("italic") {
+        marks.italic = true;
+    }
+    if let Some(d) = decls
+        .get("text-decoration")
+        .or(decls.get("text-decoration-line"))
+    {
+        marks.underline = marks.underline || d.contains("underline");
+        marks.strike = marks.strike || d.contains("line-through");
+    }
+    marks
 }
 
 fn serialize_inner_html(node: &NodeRef) -> Result<String, ParseError> {
@@ -707,6 +843,154 @@ mod tests {
                 assert_eq!(gs.scale, 1.5);
             }
             other => panic!("expected group, got {other:?}"),
+        }
+    }
+
+    fn rich_roundtrip(rt: RichText) -> RichText {
+        let mut node = text_element("el_a", "");
+        node.content = ElementContent::Text(rt);
+        let html: String = serialize_element(&node);
+        match parse_element(&html).unwrap().content {
+            ElementContent::Text(back) => back,
+            other => panic!("expected text content, got {other:?}"),
+        }
+    }
+
+    fn run(start: usize, end: usize, marks: RunMarks) -> TextRun {
+        TextRun { start, end, marks }
+    }
+
+    #[test]
+    fn unformatted_text_serializes_exactly_as_before() {
+        let node = text_element("el_a", "plain & <text>");
+        let html: String = serialize_element(&node);
+        assert!(html.contains(">plain &amp; &lt;text&gt;</div>"));
+        assert!(!html.contains("<span"));
+    }
+
+    #[test]
+    fn every_mark_roundtrips_through_html() {
+        let cases: Vec<RunMarks> = vec![
+            RunMarks {
+                bold: true,
+                ..RunMarks::default()
+            },
+            RunMarks {
+                italic: true,
+                ..RunMarks::default()
+            },
+            RunMarks {
+                underline: true,
+                ..RunMarks::default()
+            },
+            RunMarks {
+                strike: true,
+                ..RunMarks::default()
+            },
+            RunMarks {
+                color: Some(ColorRef::Literal("#ff0000".into())),
+                ..RunMarks::default()
+            },
+            RunMarks {
+                font_size: Some(Length {
+                    value: 18.0,
+                    unit: LengthUnit::Px,
+                }),
+                ..RunMarks::default()
+            },
+            RunMarks {
+                link: Some("https://example.com/?a=1&b=2".into()),
+                ..RunMarks::default()
+            },
+        ];
+        for marks in cases {
+            let mut rt = RichText::new("one two three");
+            rt.runs = vec![run(4, 7, marks.clone())];
+            let back = rich_roundtrip(rt.clone());
+            assert_eq!(back.plain, rt.plain);
+            assert_eq!(back.runs, rt.runs, "marks lost: {marks:?}");
+        }
+    }
+
+    #[test]
+    fn nested_marks_roundtrip_as_one_run() {
+        let mut rt = RichText::new("abcdef");
+        rt.runs = vec![run(
+            1,
+            4,
+            RunMarks {
+                bold: true,
+                italic: true,
+                color: Some(ColorRef::Theme("accent".into())),
+                ..RunMarks::default()
+            },
+        )];
+        assert_eq!(rich_roundtrip(rt.clone()), rt);
+    }
+
+    #[test]
+    fn whole_string_run_and_empty_string_roundtrip() {
+        let mut all = RichText::new("bold");
+        all.runs = vec![run(
+            0,
+            4,
+            RunMarks {
+                bold: true,
+                ..RunMarks::default()
+            },
+        )];
+        assert_eq!(rich_roundtrip(all.clone()), all);
+        let empty = RichText::new("");
+        assert_eq!(rich_roundtrip(empty.clone()), empty);
+    }
+
+    #[test]
+    fn lists_roundtrip_with_kind_and_levels() {
+        for kind in [ListKind::Bullet, ListKind::Ordered] {
+            let mut rt = RichText::new("first\nsecond\nthird");
+            rt.list = Some(ListStyle {
+                kind,
+                levels: vec![0, 1, 2],
+            });
+            rt.runs = vec![run(
+                6,
+                12,
+                RunMarks {
+                    italic: true,
+                    ..RunMarks::default()
+                },
+            )];
+            let back = rich_roundtrip(rt.clone());
+            assert_eq!(back.plain, rt.plain);
+            assert_eq!(back.list, rt.list);
+            assert_eq!(back.runs, rt.runs);
+        }
+    }
+
+    #[test]
+    fn browser_css_spelling_of_marks_is_recognised() {
+        let html = r#"<div data-element-id="el_a" data-element-type="text"><span style="font-weight: bold">a</span><span style="text-decoration: line-through">b</span><span style="text-decoration: underline">c</span></div>"#;
+        match parse_element(html).unwrap().content {
+            ElementContent::Text(rt) => {
+                assert_eq!(rt.plain, "abc");
+                assert_eq!(rt.runs.len(), 3);
+                assert!(rt.runs[0].marks.bold);
+                assert!(rt.runs[1].marks.strike);
+                assert!(rt.runs[2].marks.underline);
+            }
+            other => panic!("expected text content, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unknown_inline_tags_keep_characters_and_drop_marks() {
+        let html = r#"<div data-element-id="el_a" data-element-type="text">a<mark>b</mark>c</div>"#;
+        match parse_element(html).unwrap().content {
+            ElementContent::Text(rt) => {
+                assert_eq!(rt.plain, "abc");
+                assert!(rt.runs.is_empty());
+            }
+            other => panic!("expected text content, got {other:?}"),
         }
     }
 

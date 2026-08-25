@@ -41,15 +41,178 @@ impl ElementType {
     }
 }
 
+/// Character-level formatting marks carried by a `TextRun`.
+///
+/// Every field is an override of the owning element's `TextStyle`: `false` /
+/// `None` means "inherit". A run whose marks are entirely default carries no
+/// information and is dropped by `normalize_runs`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct RunMarks {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub bold: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub italic: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub underline: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub strike: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<ColorRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_size: Option<Length>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+impl RunMarks {
+    /// True when the marks override nothing, i.e. the run is redundant.
+    pub fn is_empty(&self) -> bool {
+        !self.bold
+            && !self.italic
+            && !self.underline
+            && !self.strike
+            && self.color.is_none()
+            && self.font_size.is_none()
+            && self.link.is_none()
+    }
+}
+
+/// A half-open byte range `[start, end)` of `RichText::plain` carrying marks.
+///
+/// Offsets are byte offsets and must fall on UTF-8 character boundaries;
+/// `normalize_runs` is the single place that invariant is enforced.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct TextRun {
+    pub start: usize,
+    pub end: usize,
+    pub marks: RunMarks,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum ListKind {
+    #[default]
+    Bullet,
+    Ordered,
+}
+
+impl ListKind {
+    pub fn as_html(self) -> &'static str {
+        match self {
+            ListKind::Bullet => "bullet",
+            ListKind::Ordered => "ordered",
+        }
+    }
+
+    pub fn from_html(s: &str) -> Option<Self> {
+        Some(match s {
+            "bullet" => ListKind::Bullet,
+            "ordered" => ListKind::Ordered,
+            _ => return None,
+        })
+    }
+}
+
+/// Whole-box list treatment. `levels` is parallel to the newline-split
+/// paragraphs of `RichText::plain`; a missing entry reads as level 0.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListStyle {
+    pub kind: ListKind,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub levels: Vec<u8>,
+}
+
+/// Text content of a text element or table cell.
+///
+/// `plain` is the flattened text and remains the token-substitution, search
+/// and export surface. `runs` and `list` are additive and elide from both
+/// serde and HTML when absent, so an unformatted 1.2 deck is byte-identical
+/// to a 1.1 one.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct RichText {
     pub plain: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runs: Vec<TextRun>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list: Option<ListStyle>,
 }
 
 impl RichText {
     pub fn new(s: impl Into<String>) -> Self {
-        Self { plain: s.into() }
+        Self {
+            plain: s.into(),
+            runs: Vec::new(),
+            list: None,
+        }
     }
+
+    /// True when the value carries no formatting and can take the plain path.
+    pub fn is_plain(&self) -> bool {
+        self.runs.is_empty() && self.list.is_none()
+    }
+}
+
+/// Enforce the `runs` invariants in place: in-bounds, on char boundaries,
+/// sorted, non-overlapping, no empty marks, adjacent identical runs merged.
+///
+/// Inputs: any `RichText`, including one assembled by a parser from untrusted
+/// HTML. Output: none; `rt.runs` is rewritten. Errors: none — out-of-range or
+/// mid-character offsets are clamped rather than panicking, because they can
+/// originate from a hand-edited deck. Control flow: clamp, drop, sort, merge,
+/// then assert the post-conditions the rest of the code relies on.
+pub fn normalize_runs(rt: &mut RichText) {
+    const MAX_RUNS: usize = 100_000;
+    assert!(rt.runs.len() <= MAX_RUNS, "normalize_runs: run ceiling");
+    let len: usize = rt.plain.len();
+    let mut kept: Vec<TextRun> = Vec::with_capacity(rt.runs.len());
+    for run in rt.runs.drain(..) {
+        let mut start: usize = run.start.min(len);
+        let mut end: usize = run.end.min(len);
+        while start < len && !rt.plain.is_char_boundary(start) {
+            start += 1;
+        }
+        while end < len && !rt.plain.is_char_boundary(end) {
+            end += 1;
+        }
+        if start >= end || run.marks.is_empty() {
+            continue;
+        }
+        kept.push(TextRun {
+            start,
+            end,
+            marks: run.marks,
+        });
+    }
+    kept.sort_by_key(|r| (r.start, r.end));
+    let mut merged: Vec<TextRun> = Vec::with_capacity(kept.len());
+    for run in kept {
+        match merged.last_mut() {
+            Some(prev) if prev.end >= run.start && prev.marks == run.marks => {
+                prev.end = prev.end.max(run.end);
+            }
+            Some(prev) if prev.end > run.start => {
+                let clipped: usize = prev.end.max(run.start);
+                if clipped < run.end {
+                    merged.push(TextRun {
+                        start: clipped,
+                        end: run.end,
+                        marks: run.marks,
+                    });
+                }
+            }
+            _ => merged.push(run),
+        }
+    }
+    for run in &merged {
+        assert!(
+            rt.plain.is_char_boundary(run.start) && rt.plain.is_char_boundary(run.end),
+            "normalize_runs: run offset not on a char boundary"
+        );
+    }
+    rt.runs = merged;
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -286,6 +449,128 @@ mod tests {
     fn group_default_is_consistent() {
         let g = group_element("id_g", vec![]);
         assert!(g.is_consistent());
+    }
+
+    fn bold() -> RunMarks {
+        RunMarks {
+            bold: true,
+            ..RunMarks::default()
+        }
+    }
+
+    #[test]
+    fn normalize_drops_empty_and_zero_width_runs() {
+        let mut rt = RichText::new("hello");
+        rt.runs = vec![
+            TextRun {
+                start: 0,
+                end: 2,
+                marks: RunMarks::default(),
+            },
+            TextRun {
+                start: 3,
+                end: 3,
+                marks: bold(),
+            },
+        ];
+        normalize_runs(&mut rt);
+        assert!(rt.runs.is_empty());
+    }
+
+    #[test]
+    fn normalize_merges_adjacent_identical_runs() {
+        let mut rt = RichText::new("hello");
+        rt.runs = vec![
+            TextRun {
+                start: 2,
+                end: 4,
+                marks: bold(),
+            },
+            TextRun {
+                start: 0,
+                end: 2,
+                marks: bold(),
+            },
+        ];
+        normalize_runs(&mut rt);
+        assert_eq!(rt.runs.len(), 1);
+        assert_eq!((rt.runs[0].start, rt.runs[0].end), (0, 4));
+    }
+
+    #[test]
+    fn normalize_clamps_out_of_range_and_mid_char_offsets() {
+        let mut rt = RichText::new("héllo");
+        rt.runs = vec![TextRun {
+            start: 2,
+            end: 999,
+            marks: bold(),
+        }];
+        normalize_runs(&mut rt);
+        assert_eq!(rt.runs.len(), 1);
+        assert!(rt.plain.is_char_boundary(rt.runs[0].start));
+        assert_eq!(rt.runs[0].end, rt.plain.len());
+        assert_eq!(&rt.plain[rt.runs[0].start..rt.runs[0].end], "llo");
+    }
+
+    #[test]
+    fn normalize_clips_overlapping_runs_with_different_marks() {
+        let mut rt = RichText::new("abcdef");
+        rt.runs = vec![
+            TextRun {
+                start: 0,
+                end: 4,
+                marks: bold(),
+            },
+            TextRun {
+                start: 2,
+                end: 6,
+                marks: RunMarks {
+                    italic: true,
+                    ..RunMarks::default()
+                },
+            },
+        ];
+        normalize_runs(&mut rt);
+        assert_eq!(rt.runs.len(), 2);
+        assert_eq!((rt.runs[0].start, rt.runs[0].end), (0, 4));
+        assert_eq!((rt.runs[1].start, rt.runs[1].end), (4, 6));
+    }
+
+    #[test]
+    fn rich_text_serde_roundtrips_with_runs_and_list() {
+        let mut rt = RichText::new("a\nb");
+        rt.runs = vec![TextRun {
+            start: 0,
+            end: 1,
+            marks: bold(),
+        }];
+        rt.list = Some(ListStyle {
+            kind: ListKind::Ordered,
+            levels: vec![0, 1],
+        });
+        let json = serde_json::to_string(&rt).unwrap();
+        assert_eq!(serde_json::from_str::<RichText>(&json).unwrap(), rt);
+    }
+
+    #[test]
+    fn rich_text_reads_one_one_shaped_json() {
+        let rt: RichText = serde_json::from_str(r#"{"plain":"x"}"#).unwrap();
+        assert_eq!(rt, RichText::new("x"));
+        assert!(rt.is_plain());
+    }
+
+    #[test]
+    fn unformatted_rich_text_serializes_without_new_keys() {
+        let json = serde_json::to_string(&RichText::new("x")).unwrap();
+        assert_eq!(json, r#"{"plain":"x"}"#);
+    }
+
+    #[test]
+    fn list_kind_html_roundtrips() {
+        for k in [ListKind::Bullet, ListKind::Ordered] {
+            assert_eq!(ListKind::from_html(k.as_html()), Some(k));
+        }
+        assert_eq!(ListKind::from_html("dotted"), None);
     }
 
     #[test]

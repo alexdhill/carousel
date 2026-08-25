@@ -242,7 +242,7 @@ pub enum InteractionEvent {
 
     TextEditEnded {
         element_id: ElementId,
-        text: String,
+        content: crate::deck::element::RichText,
     },
 
     EmbedHtmlEditRequested {
@@ -1498,22 +1498,38 @@ mod tests {
         ));
 
         let ended: InteractionEvent = serde_json::from_str(
-            r#"{"kind":"TextEditEnded","element_id":"el_t","text":"Hello world"}"#,
+            r#"{"kind":"TextEditEnded","element_id":"el_t","content":{"plain":"Hello world"}}"#,
         )
         .unwrap();
         assert!(matches!(
             ended,
-            InteractionEvent::TextEditEnded { ref element_id, ref text }
-                if element_id == "el_t" && text == "Hello world"
+            InteractionEvent::TextEditEnded { ref element_id, ref content }
+                if element_id == "el_t" && content.plain == "Hello world" && content.is_plain()
         ));
 
-        let cleared: InteractionEvent =
-            serde_json::from_str(r#"{"kind":"TextEditEnded","element_id":"el_t","text":""}"#)
-                .unwrap();
+        let cleared: InteractionEvent = serde_json::from_str(
+            r#"{"kind":"TextEditEnded","element_id":"el_t","content":{"plain":""}}"#,
+        )
+        .unwrap();
         assert!(matches!(
             cleared,
-            InteractionEvent::TextEditEnded { ref text, .. } if text.is_empty()
+            InteractionEvent::TextEditEnded { ref content, .. } if content.plain.is_empty()
         ));
+    }
+
+    #[test]
+    fn rich_text_edit_events_parse_from_js_envelopes() {
+        let ended: InteractionEvent = serde_json::from_str(
+            r#"{"kind":"TextEditEnded","element_id":"el_t","content":{"plain":"ab","runs":[{"start":0,"end":1,"marks":{"bold":true}}]}}"#,
+        )
+        .unwrap();
+        match ended {
+            InteractionEvent::TextEditEnded { content, .. } => {
+                assert_eq!(content.runs.len(), 1);
+                assert!(content.runs[0].marks.bold);
+            }
+            other => panic!("expected TextEditEnded, got {other:?}"),
+        }
     }
 
     #[test]

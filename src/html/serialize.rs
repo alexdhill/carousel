@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
-use crate::deck::element::{ElementContent, ElementNode, ElementStyle};
+use crate::deck::element::{
+    ElementContent, ElementNode, ElementStyle, ListKind, ListStyle, RichText, RunMarks,
+};
 use crate::deck::slide::SlideNode;
 use crate::deck::style::*;
 use std::collections::BTreeMap;
@@ -30,6 +32,21 @@ pub const ANIMATION_KEYFRAMES_CSS: &str = r#"
 [data-element-type="table"] > table { width: 100%; height: 100%; border-collapse: collapse; table-layout: fixed; }
 [data-element-type="table"] th, [data-element-type="table"] td { border: 1px solid var(--theme-muted, #bbb); padding: 6px 10px; text-align: left; vertical-align: top; color: inherit; font: inherit; overflow: hidden; }
 [data-element-type="table"] th { font-weight: 600; background: color-mix(in srgb, var(--theme-foreground, #000) 8%, transparent); }
+/* Decks saved before 1.2 carry `display:flex; flex-direction:column` for text,
+   which puts every inline mark on its own row. The selector is doubled so this
+   wins over that stored rule whatever order the stylesheets load in. */
+[data-element-type="text"][data-element-type="text"] { display: block; }
+/* Hairline underlines and strikes disappear once a 1920px slide is scaled to
+   fit a panel, so thicken them relative to the font size. No underline-offset:
+   moving the line off its metric position grows the inline box and nudges the
+   run's baseline away from the unmarked text beside it. */
+[data-element-type="text"], [data-element-type="text"] u, [data-element-type="text"] s { text-decoration-thickness: 0.08em; text-decoration-skip-ink: none; }
+[data-element-type="text"] s { text-decoration-thickness: 0.12em; }
+[data-element-type="text"] ul, [data-element-type="text"] ol { margin: 0; padding-left: 1.4em; }
+[data-element-type="text"] li { margin: 0; }
+[data-element-type="text"] li[data-level="1"] { margin-left: 1.4em; }
+[data-element-type="text"] li[data-level="2"] { margin-left: 2.8em; }
+[data-element-type="text"] li[data-level="3"] { margin-left: 4.2em; }
 .slide { isolation: isolate; }
 :where(.slide) { background: #fff; }
 [data-placeholder="true"] { opacity: 0.45; }
@@ -93,8 +110,13 @@ pub fn resolve_tokens(raw: &str, ctx: &RenderCtx) -> String {
                 }
             }
         } else {
-            out.push(bytes[i] as char);
-            i += 1;
+            match raw[i..].chars().next() {
+                Some(ch) => {
+                    out.push(ch);
+                    i += ch.len_utf8();
+                }
+                None => i = n,
+            }
         }
     }
     out
@@ -346,10 +368,7 @@ fn group_align_token(a: crate::deck::style::GroupAlignment) -> &'static str {
 
 fn write_content(node: &ElementNode, anim: &AnimMap, opts: &RenderOpts, out: &mut String) {
     match &node.content {
-        ElementContent::Text(rt) => match &opts.ctx {
-            Some(c) => out.push_str(&escape_text(&resolve_tokens(&rt.plain, c))),
-            None => out.push_str(&escape_text(&rt.plain)),
-        },
+        ElementContent::Text(rt) => write_rich_text(rt, opts, out),
         ElementContent::Group => {
             for (idx, child) in node.children.iter().enumerate() {
                 if opts.hide_placeholders && child.placeholder {
@@ -365,6 +384,139 @@ fn write_content(node: &ElementNode, anim: &AnimMap, opts: &RenderOpts, out: &mu
         ElementContent::Table(td) => write_table(td, opts, out),
         ElementContent::Image(_) | ElementContent::Media(_) | ElementContent::Shape(_) => {}
     }
+}
+
+/// Render just the inner body of a text element, for `Patch::SetInnerHtml`.
+pub fn serialize_rich_body(rt: &RichText, opts: &RenderOpts) -> String {
+    let mut out: String = String::new();
+    write_rich_text(rt, opts, &mut out);
+    out
+}
+
+/// Emit the body of a text element or table cell.
+///
+/// Inputs: normalized `RichText` (runs sorted, non-overlapping, on char
+/// boundaries) and the render options carrying the optional token context.
+/// Output: HTML appended to `out`. Errors: none. Control flow: with no runs
+/// and no list this emits exactly the escaped text node 1.1 emitted, which is
+/// the round-trip regression canary; otherwise it wraps runs in mark tags and
+/// paragraphs in list items.
+fn write_rich_text(rt: &RichText, opts: &RenderOpts, out: &mut String) {
+    assert!(rt.runs.len() < 100_000, "write_rich_text: absurd run count");
+    match &rt.list {
+        Some(list) => write_list(rt, list, opts, out),
+        None => write_runs(rt, 0, rt.plain.len(), opts, out),
+    }
+}
+
+fn write_list(rt: &RichText, list: &ListStyle, opts: &RenderOpts, out: &mut String) {
+    const MAX_PARAGRAPHS: usize = 10_000;
+    let tag: &str = match list.kind {
+        ListKind::Bullet => "ul",
+        ListKind::Ordered => "ol",
+    };
+    out.push('<');
+    out.push_str(tag);
+    out.push_str(" data-list=\"");
+    out.push_str(list.kind.as_html());
+    out.push_str("\">");
+    let mut start: usize = 0;
+    for (idx, para) in rt.plain.split('\n').take(MAX_PARAGRAPHS).enumerate() {
+        let end: usize = start + para.len();
+        let level: u8 = list.levels.get(idx).copied().unwrap_or(0);
+        out.push_str("<li data-level=\"");
+        out.push_str(&level.to_string());
+        out.push_str("\">");
+        write_runs(rt, start, end, opts, out);
+        out.push_str("</li>");
+        start = end + 1;
+    }
+    out.push_str("</");
+    out.push_str(tag);
+    out.push('>');
+}
+
+fn write_runs(rt: &RichText, from: usize, to: usize, opts: &RenderOpts, out: &mut String) {
+    let mut cursor: usize = from;
+    for run in &rt.runs {
+        if run.end <= from || run.start >= to {
+            continue;
+        }
+        let s: usize = run.start.max(from);
+        let e: usize = run.end.min(to);
+        if cursor < s {
+            write_marked(&rt.plain[cursor..s], None, opts, out);
+        }
+        write_marked(&rt.plain[s..e], Some(&run.marks), opts, out);
+        cursor = e;
+    }
+    if cursor < to {
+        write_marked(&rt.plain[cursor..to], None, opts, out);
+    }
+}
+
+fn write_marked(text: &str, marks: Option<&RunMarks>, opts: &RenderOpts, out: &mut String) {
+    // Tokens resolve per run segment, so a token split across a run boundary
+    // stays literal — the run vector is the authority on offsets and never
+    // needs remapping.
+    let resolved: String = match &opts.ctx {
+        Some(c) => resolve_tokens(text, c),
+        None => text.to_string(),
+    };
+    let marks: &RunMarks = match marks {
+        Some(m) => m,
+        None => {
+            out.push_str(&escape_text(&resolved));
+            return;
+        }
+    };
+    if let Some(href) = &marks.link {
+        out.push_str("<a href=\"");
+        out.push_str(&escape_attr(href));
+        out.push_str("\">");
+    }
+    if marks.color.is_some() || marks.font_size.is_some() {
+        let mut style: String = String::new();
+        if let Some(c) = &marks.color {
+            decl(&mut style, "color", &color_ref_css(c));
+        }
+        if let Some(fs) = &marks.font_size {
+            decl(&mut style, "font-size", &length_css(fs));
+        }
+        out.push_str("<span style=\"");
+        out.push_str(&escape_attr(&style));
+        out.push_str("\">");
+    }
+    for (on, tag) in mark_tags(marks) {
+        if on {
+            out.push('<');
+            out.push_str(tag);
+            out.push('>');
+        }
+    }
+    out.push_str(&escape_text(&resolved));
+    for (on, tag) in mark_tags(marks).iter().rev() {
+        if *on {
+            out.push_str("</");
+            out.push_str(tag);
+            out.push('>');
+        }
+    }
+    if marks.color.is_some() || marks.font_size.is_some() {
+        out.push_str("</span>");
+    }
+    if marks.link.is_some() {
+        out.push_str("</a>");
+    }
+}
+
+fn mark_tags(m: &RunMarks) -> [(bool, &'static str); 4] {
+    [
+        (m.bold, "b"),
+        (m.italic, "i"),
+        (m.underline, "u"),
+        (m.strike, "s"),
+    ]
 }
 
 fn write_table(td: &crate::deck::element::TableData, opts: &RenderOpts, out: &mut String) {
@@ -396,10 +548,7 @@ fn write_table(td: &crate::deck::element::TableData, opts: &RenderOpts, out: &mu
                     out.push('"');
                 }
                 out.push('>');
-                match &opts.ctx {
-                    Some(c) => out.push_str(&escape_text(&resolve_tokens(&cell.content.plain, c))),
-                    None => out.push_str(&escape_text(&cell.content.plain)),
-                }
+                write_rich_text(&cell.content, opts, out);
             } else {
                 out.push('>');
             }
@@ -725,6 +874,9 @@ mod tests {
 
     #[test]
     fn base_css_isolates_slide_for_consistent_blend_modes() {
+        assert!(ANIMATION_KEYFRAMES_CSS.contains(
+            "[data-element-type=\"text\"][data-element-type=\"text\"] { display: block; }"
+        ));
         assert!(ANIMATION_KEYFRAMES_CSS.contains(".slide { isolation: isolate; }"));
     }
 
@@ -911,6 +1063,36 @@ mod tests {
             html.contains("data-src=\"Slide ${slideNumber}\""),
             "raw carried: {html}"
         );
+    }
+
+    #[test]
+    fn token_inside_a_run_resolves_and_keeps_the_mark() {
+        use crate::deck::element::{ElementContent, TextRun};
+        let mut rt = RichText::new("Slide ${slideNumber} end");
+        rt.runs = vec![TextRun {
+            start: 6,
+            end: 20,
+            marks: RunMarks {
+                bold: true,
+                ..RunMarks::default()
+            },
+        }];
+        let mut child = crate::deck::builders::text_element("t1", "");
+        child.content = ElementContent::Text(rt);
+        let root = crate::deck::builders::group_element("root", vec![child]);
+        let slide = SlideNode::new("s1".into(), "blank".into(), root);
+        let opts = RenderOpts {
+            ctx: Some(RenderCtx {
+                number: 3,
+                count: 9,
+                date: "2026-07-08".into(),
+            }),
+            hide_placeholders: false,
+            min_element_size: 0.0,
+        };
+        let html = serialize_slide_themed(&slide, None, None, &opts);
+        assert!(html.contains("<b>3</b>"), "token in run resolved: {html}");
+        assert!(html.contains(">Slide <b>3</b> end<"), "body: {html}");
     }
 
     #[test]
