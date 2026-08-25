@@ -79,6 +79,10 @@ pub enum MessageKind {
         action: String,
     },
 
+    SetAppearance {
+        mode: String,
+    },
+
     MountSlide(MountSlideArgs),
     ApplyPatch(Patch),
     SetSelection(SelectionState),

@@ -39,6 +39,39 @@ pub struct AgentDef {
     pub args: Vec<String>,
 }
 
+/// Which chrome the editor and landing windows paint themselves in. `System`
+/// defers to the OS setting and is resolved in the webview, not here.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Appearance {
+    Light,
+    Dark,
+    #[default]
+    System,
+}
+
+impl Appearance {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Appearance::Light => "light",
+            Appearance::Dark => "dark",
+            Appearance::System => "system",
+        }
+    }
+
+    /// Parses a mode name coming from the webview. Unknown names are rejected
+    /// rather than defaulted, so a malformed message never silently rewrites
+    /// the saved preference.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "light" => Some(Appearance::Light),
+            "dark" => Some(Appearance::Dark),
+            "system" => Some(Appearance::System),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -47,6 +80,8 @@ pub struct Config {
     pub chromium_revision: Option<String>,
     #[serde(default)]
     pub agents: Vec<AgentDef>,
+    #[serde(default)]
+    pub appearance: Appearance,
 }
 
 fn config_path() -> PathBuf {
@@ -123,6 +158,18 @@ mod tests {
         let json = serde_json::to_string(&cfg).unwrap();
         let back: Config = serde_json::from_str(&json).unwrap();
         assert_eq!(back, cfg);
+    }
+
+    #[test]
+    fn appearance_defaults_to_system_and_rejects_junk() {
+        let back: Config = serde_json::from_str("{}").unwrap();
+        assert_eq!(back.appearance, Appearance::System);
+        assert_eq!(Appearance::parse("dark"), Some(Appearance::Dark));
+        assert_eq!(Appearance::parse("Dark"), None);
+        assert_eq!(Appearance::parse(""), None);
+        for mode in [Appearance::Light, Appearance::Dark, Appearance::System] {
+            assert_eq!(Appearance::parse(mode.as_str()), Some(mode));
+        }
     }
 
     #[test]

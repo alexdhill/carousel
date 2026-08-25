@@ -1,4 +1,5 @@
 :root {
+    color-scheme: light;
     --bg: #f2f0eb;
     --panel: #ffffff;
     --ink: #362a28;
@@ -9,7 +10,26 @@
     --accent: #f19035;
     --accent-soft: #fbe0c7;
     --accent-ink: #c3742b;
+    --edge: #d9d4ca;
+    --tint: #e7e2d9;
     --r: 12px;
+}
+
+/* Dark chrome. `data-theme` is written by appearance.js from the saved
+   light/dark/system choice before the first paint. */
+:root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #14130f;
+    --panel: #201e1a;
+    --ink: #f2efe8;
+    --ink2: #b7ada0;
+    --ink3: #8b8478;
+    --line: #302d27;
+    --field: #2b2823;
+    --accent-soft: #3a2a18;
+    --accent-ink: #f0a45c;
+    --edge: #4e4941;
+    --tint: #35312a;
 }
 
 * {
@@ -112,7 +132,7 @@ body {
 }
 
 .landing__card:hover {
-    border-color: #d9d4ca;
+    border-color: var(--edge);
 }
 
 .landing__forget {
@@ -228,7 +248,7 @@ body {
 }
 
 .landing__seg-btn:hover {
-    background: #e7e2d9;
+    background: var(--tint);
     color: var(--ink);
 }
 

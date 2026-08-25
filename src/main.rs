@@ -46,6 +46,7 @@ const MORPH_JS: &str = include_str!("../assets/morph.js");
 const LANDING_HTML_TEMPLATE: &str = include_str!("../assets/landing.html");
 const LANDING_CSS: &str = include_str!("../assets/landing.css");
 const LANDING_JS: &str = include_str!("../assets/landing.js");
+const APPEARANCE_JS: &str = include_str!("../assets/appearance.js");
 
 #[derive(Debug)]
 enum UserEvent {
@@ -202,6 +203,7 @@ fn install_main_menu() {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // one parameter per template marker
 fn assemble_host_html(
     template: &str,
     css: &str,
@@ -210,6 +212,7 @@ fn assemble_host_html(
     crop: &str,
     style_props: &str,
     preset_css: &str,
+    appearance: &str,
 ) -> String {
     assert!(
         template.contains("__HOST_CSS__"),
@@ -235,7 +238,14 @@ fn assemble_host_html(
         template.contains("__PRESET_CSS_JS__"),
         "template missing preset-css JS marker"
     );
+    assert!(
+        template.contains("__APPEARANCE__") && template.contains("__APPEARANCE_JS__"),
+        "template missing appearance markers"
+    );
+    assert!(!appearance.is_empty(), "appearance mode is empty");
     template
+        .replace("__APPEARANCE__", appearance)
+        .replace("__APPEARANCE_JS__", APPEARANCE_JS)
         .replace("__HOST_CSS__", css)
         .replace("__CROP_JS__", crop)
         .replace("__SNAP_JS__", snap)
@@ -366,7 +376,7 @@ fn build_presenter(
     )
 }
 
-fn assemble_landing_html(template: &str, css: &str, js: &str) -> String {
+fn assemble_landing_html(template: &str, css: &str, js: &str, appearance: &str) -> String {
     assert!(
         template.contains("__LANDING_CSS__"),
         "landing template missing CSS marker"
@@ -375,7 +385,14 @@ fn assemble_landing_html(template: &str, css: &str, js: &str) -> String {
         template.contains("__LANDING_JS__"),
         "landing template missing JS marker"
     );
+    assert!(
+        template.contains("__APPEARANCE__") && template.contains("__APPEARANCE_JS__"),
+        "landing template missing appearance markers"
+    );
+    assert!(!appearance.is_empty(), "appearance mode is empty");
     template
+        .replace("__APPEARANCE__", appearance)
+        .replace("__APPEARANCE_JS__", APPEARANCE_JS)
         .replace("__LANDING_CSS__", css)
         .replace("__LANDING_JS__", js)
 }
@@ -389,7 +406,12 @@ fn build_landing(
         .with_title("carousel")
         .with_inner_size(tao::dpi::LogicalSize::new(960.0, 640.0))
         .build(target)?;
-    let html: String = assemble_landing_html(LANDING_HTML_TEMPLATE, LANDING_CSS, LANDING_JS);
+    let html: String = assemble_landing_html(
+        LANDING_HTML_TEMPLATE,
+        LANDING_CSS,
+        LANDING_JS,
+        config::load().appearance.as_str(),
+    );
     assert!(!html.is_empty(), "assembled landing html is empty");
     let webview = WebViewBuilder::new(&window)
         .with_html(html)
@@ -450,6 +472,7 @@ fn build_editor(
         CROP_JS,
         STYLE_PROPS_JS,
         PRESET_CSS_JS,
+        config::load().appearance.as_str(),
     );
     assert!(!html.is_empty(), "assembled host html is empty");
     let webview = WebViewBuilder::new(&window)
@@ -741,6 +764,32 @@ fn deck_for_open(inbound: &LandingInbound) -> Option<(Deck, Option<PathBuf>)> {
     }
 }
 
+/// Persists a light/dark/system choice made in a webview.
+///
+/// `mode` arrives as a string over IPC, so an unrecognised name is logged and
+/// dropped rather than written; the windows have already applied the change
+/// themselves, this only makes it survive a restart. A failed write is logged
+/// and otherwise ignored — losing a chrome preference is not worth interrupting
+/// the session for.
+fn save_appearance(mode: &str) {
+    let parsed: config::Appearance = match config::Appearance::parse(mode) {
+        Some(a) => a,
+        None => {
+            warn!("ignoring unknown appearance mode from webview");
+            return;
+        }
+    };
+    let mut cfg: config::Config = config::load();
+    if cfg.appearance == parsed {
+        return;
+    }
+    info!("appearance set to {}", parsed.as_str());
+    cfg.appearance = parsed;
+    if let Err(e) = config::save(&cfg) {
+        error!("could not save appearance: {}", e);
+    }
+}
+
 fn initial_open_path() -> Option<PathBuf> {
     let path = PathBuf::from(std::env::args_os().nth(1)?);
     if path.is_file() { Some(path) } else { None }
@@ -860,6 +909,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         match event {
             Event::UserEvent(UserEvent::IpcReceived) => {
                 while let Ok(msg) = ipc_rx.try_recv() {
+                    if let ipc::MessageKind::SetAppearance { mode } = &msg.kind {
+                        save_appearance(mode);
+                        continue;
+                    }
                     if let ipc::MessageKind::WindowControl { action } = &msg.kind {
                         apply_window_control(
                             action,
@@ -1011,6 +1064,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             info!("landing: forgetting recent");
                             recents::forget(&path);
                         }
+                        LandingInbound::SetAppearance { mode } => save_appearance(&mode),
 
                         open => {
                             let chosen = if app.is_some() {
@@ -1174,6 +1228,38 @@ mod tests {
         );
         assert!(html.contains("next-slot"), "next preview slot missing");
         assert!(html.contains("PresenterReady"), "presenter js not inlined");
+    }
+
+    #[test]
+    fn appearance_reaches_both_documents_before_first_paint() {
+        let host: String = assemble_host_html(
+            HOST_HTML_TEMPLATE,
+            HOST_CSS,
+            HOST_JS,
+            SNAP_JS,
+            CROP_JS,
+            STYLE_PROPS_JS,
+            PRESET_CSS_JS,
+            config::Appearance::Dark.as_str(),
+        );
+        let landing: String =
+            assemble_landing_html(LANDING_HTML_TEMPLATE, LANDING_CSS, LANDING_JS, "light");
+        for (name, doc, mode) in [("host", &host, "dark"), ("landing", &landing, "light")] {
+            assert!(
+                !doc.contains("__APPEARANCE__") && !doc.contains("__APPEARANCE_JS__"),
+                "{name}: appearance marker left behind"
+            );
+            assert!(
+                doc.contains(&format!("data-appearance=\"{mode}\"")),
+                "{name}: saved mode not written onto <html>"
+            );
+            let script: usize = doc.find("window.__appearance").unwrap_or(usize::MAX);
+            let body: usize = doc.find("<body").unwrap_or(0);
+            assert!(
+                script < body,
+                "{name}: appearance script must resolve before the body renders"
+            );
+        }
     }
 
     #[test]

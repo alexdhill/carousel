@@ -10091,6 +10091,20 @@
 
         if (
             (e.metaKey || e.ctrlKey) &&
+            e.shiftKey &&
+            !e.altKey &&
+            typeof e.key === "string" &&
+            e.key.toLowerCase() === "d"
+        ) {
+            e.preventDefault();
+            window.__deck.send("SetAppearance", {
+                mode: window.__appearance.rotate(),
+            });
+            return;
+        }
+
+        if (
+            (e.metaKey || e.ctrlKey) &&
             !e.shiftKey &&
             !e.altKey &&
             typeof e.key === "string" &&

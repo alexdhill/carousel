@@ -7,6 +7,7 @@ pub enum LandingInbound {
     OpenTemplate { theme_id: String, layout_id: String },
     OpenRecent { path: String },
     ForgetRecent { path: String },
+    SetAppearance { mode: String },
     OpenDefault,
     Cancel,
 }
@@ -68,6 +69,9 @@ mod tests {
             },
             LandingInbound::ForgetRecent {
                 path: "/x.slidedeck".into(),
+            },
+            LandingInbound::SetAppearance {
+                mode: "dark".into(),
             },
             LandingInbound::OpenDefault,
             LandingInbound::Cancel,

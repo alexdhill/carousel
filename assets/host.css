@@ -1,4 +1,5 @@
 :root {
+    color-scheme: light;
     --acc: #f19035;
     --acc-hover: #e08631;
     --acc-soft: #fbe0c7;
@@ -16,12 +17,49 @@
     --hover: color-mix(in srgb, var(--field) 95%, var(--acc));
     --line: #f2f0eb;
     --guide: var(--acc);
+    --tint: #efebe3;
+    --tint-2: #e7e2d9;
+    --tint-warm: #e7dad3;
+    --scroll: #d9d4ca;
+    --scroll-hover: #c7c1b5;
+    --danger: #c1584d;
+    --danger-soft: #fde8e8;
+    --ok: #4caf50;
     --r-panel: 10px;
     --r-field: 6px;
     --r-btn: 5px;
     --shadow: 0 2px 5px rgba(40, 35, 30, 0.1), 0 1px 3px rgba(40, 35, 30, 0.08);
     --shadow-slide: 0 10px 34px rgba(40, 35, 30, 0.16), 0 2px 8px rgba(40, 35, 30, 0.08);
     --gap: 7px;
+}
+
+/* Dark chrome. Only the source colours are restated: everything derived through
+   color-mix in :root above (--canvas, --ink2/3, --label, --field*, --hover)
+   recomputes from these, because custom properties cascade per property and
+   [data-theme] outranks a bare :root. `data-theme` is written by appearance.js,
+   which resolves the user's light/dark/system choice before first paint. */
+:root[data-theme="dark"] {
+    color-scheme: dark;
+    --acc-hover: #ffa552;
+    --acc-soft: #3a2a18;
+    --acc-ink: #f0a45c;
+    --acc-line: #5a4227;
+    --bg: #14130f;
+    --panel: #201e1a;
+    --ink: #f2efe8;
+    --line: #302d27;
+    --tint: #2b2823;
+    --tint-2: #35312a;
+    --tint-warm: #3a2c24;
+    --scroll: #3d3931;
+    --scroll-hover: #4e4941;
+    --danger: #e08a80;
+    --danger-soft: #3a2020;
+    --ok: #6fce73;
+    --shadow: 0 2px 5px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.35);
+    --shadow-slide: 0 10px 34px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.4);
+    --checker: repeating-conic-gradient(#3a352c 0% 25%, #211f1b 0% 50%) 0 / 8px
+        8px;
 }
 
 *,
@@ -241,7 +279,7 @@ button {
     top: calc(100% + 9px);
     transform: translateX(-50%) translateY(2px);
     background: var(--ink);
-    color: #fff;
+    color: var(--panel);
     font-size: 11px;
     font-weight: 500;
     white-space: nowrap;
@@ -448,11 +486,11 @@ body[data-platform="mac"] .top-bar__left {
 }
 
 .doc-meta__title--edit:hover {
-    background: var(--surface2, rgba(0, 0, 0, 0.05));
+    background: var(--tint);
 }
 
 .doc-meta__title--edit:focus {
-    background: var(--surface, #fff);
+    background: var(--panel);
     border-color: var(--acc);
 }
 
@@ -697,40 +735,42 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     width: 17px;
     height: 17px;
     border-radius: 5px;
-    background: var(--field);
-    color: var(--ink2);
     font-size: 9px;
     font-weight: 700;
     text-transform: uppercase;
+    /* Each element type carries one hue; the chip's ink and fill are both mixed
+       from it, so the dark theme needs a single pair of overrides rather than
+       fourteen restated colours. */
+    --badge: var(--ink2);
+    color: var(--badge);
+    background: color-mix(in srgb, var(--badge) 13%, var(--panel));
+}
+
+:root[data-theme="dark"] .objects__badge {
+    color: color-mix(in srgb, var(--badge) 55%, var(--ink));
+    background: color-mix(in srgb, var(--badge) 26%, var(--panel));
 }
 
 .objects__badge--text {
-    background: #eef1f4;
-    color: #4a6a86;
+    --badge: #4a6a86;
 }
 .objects__badge--shape {
-    background: #f0ecf6;
-    color: #6b5a8c;
+    --badge: #6b5a8c;
 }
 .objects__badge--group {
-    background: #ecf2ea;
-    color: #4f6b48;
+    --badge: #4f6b48;
 }
 .objects__badge--image {
-    background: #f6efe7;
-    color: #8c6a45;
+    --badge: #8c6a45;
 }
 .objects__badge--media {
-    background: #f6e9ee;
-    color: #8c4f6a;
+    --badge: #8c4f6a;
 }
 .objects__badge--table {
-    background: #f4f1e2;
-    color: #7a7240;
+    --badge: #7a7240;
 }
 .objects__badge--embed {
-    background: #e6f2f2;
-    color: #3f7272;
+    --badge: #3f7272;
 }
 
 .objects__label {
@@ -1035,8 +1075,8 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 }
 
 .agent__message--error {
-    background: #fde8e8;
-    color: #c1584d;
+    background: var(--danger-soft);
+    color: var(--danger);
 }
 
 @keyframes agent_spin {
@@ -1177,7 +1217,7 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     justify-content: center;
     width: 14px;
     height: 14px;
-    color: #4caf50;
+    color: var(--ok);
     font-weight: 600;
     font-size: 12px;
     flex: 0 0 auto;
@@ -1190,7 +1230,7 @@ body[data-mode="layout"] .mode-toggle__label--layout {
     justify-content: center;
     width: 14px;
     height: 14px;
-    color: #c1584d;
+    color: var(--danger);
     font-weight: 600;
     font-size: 12px;
     flex: 0 0 auto;
@@ -1495,7 +1535,7 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 }
 
 .inspector__input:hover {
-    background: #efebe3;
+    background: var(--tint);
 }
 
 .inspector__input:focus {
@@ -1525,7 +1565,7 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 }
 
 .inspector__unitchip:hover {
-    background: #e7e2d9;
+    background: var(--tint-2);
     color: var(--ink2);
 }
 
@@ -1557,7 +1597,7 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 }
 
 .inspector__unitfield:hover {
-    background: #efebe3;
+    background: var(--tint);
 }
 
 .inspector__unitfield:focus-within {
@@ -1686,7 +1726,7 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 }
 
 .inspector__decl-remove:hover {
-    background: #e7dad3;
+    background: var(--tint-warm);
     color: var(--acc-ink);
 }
 
@@ -1763,7 +1803,7 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 }
 
 .inspector__segment-btn:hover {
-    background: #e7e2d9;
+    background: var(--tint-2);
 }
 
 .inspector__segment-btn[aria-pressed="true"] {
@@ -1806,7 +1846,7 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 }
 
 .inspector__tstyle-btn:hover {
-    background: #e7e2d9;
+    background: var(--tint-2);
 }
 
 .inspector__tstyle-btn[aria-pressed="true"] {
@@ -1841,7 +1881,7 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 }
 
 .inspector__color:hover {
-    background: #efebe3;
+    background: var(--tint);
 }
 
 :root {
@@ -1927,7 +1967,7 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 }
 
 .colorpop__none:hover {
-    background: #efebe3;
+    background: var(--tint);
 }
 
 .colorpop--alpha {
@@ -2092,7 +2132,7 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 }
 
 .inspector__fillimage:hover {
-    background: #efebe3;
+    background: var(--tint);
 }
 
 .inspector__fillimage-name {
@@ -2126,7 +2166,7 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 }
 
 .inspector__fillimage-clear:hover {
-    background: #e7dad3;
+    background: var(--tint-warm);
     color: var(--acc-ink);
 }
 
@@ -2274,7 +2314,7 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 }
 
 .inspector__cluster-cell:hover {
-    background: #efebe3;
+    background: var(--tint);
 }
 .inspector__cluster-cell:focus-within {
     background: var(--field-on);
@@ -2341,7 +2381,7 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 }
 
 .inspector__shadow-cell .inspector__cluster-input:hover {
-    background: #efebe3;
+    background: var(--tint);
 }
 .inspector__shadow-cell .inspector__cluster-input:focus {
     background: var(--field-on);
@@ -2366,7 +2406,7 @@ body[data-mode="layout"] .mode-toggle__label--layout {
 }
 
 .inspector__sizerow-cell:hover {
-    background: #efebe3;
+    background: var(--tint);
 }
 .inspector__sizerow-cell:focus-within {
     background: var(--field-on);
@@ -3883,7 +3923,7 @@ body[data-mode="layout"] .theme-actions {
 }
 
 .inspector__dropdown:hover {
-    background: #efebe3;
+    background: var(--tint);
 }
 
 .inspector__dropdown-label {
@@ -4032,13 +4072,13 @@ body[data-mode="layout"] .theme-actions {
 }
 
 ::-webkit-scrollbar-thumb {
-    background: #d9d4ca;
+    background: var(--scroll);
     border-radius: 9px;
     border: 2px solid transparent;
     background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: #c7c1b5;
+    background: var(--scroll-hover);
     background-clip: padding-box;
 }

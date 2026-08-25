@@ -244,6 +244,18 @@
         if (open) {
             open.addEventListener("click", onOpen);
         }
+        document.addEventListener("keydown", function (e) {
+            if (
+                (e.metaKey || e.ctrlKey) &&
+                e.shiftKey &&
+                !e.altKey &&
+                typeof e.key === "string" &&
+                e.key.toLowerCase() === "d"
+            ) {
+                e.preventDefault();
+                post("SetAppearance", { mode: window.__appearance.rotate() });
+            }
+        });
         post("Ready");
     });
 }());
